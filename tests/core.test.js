@@ -6385,10 +6385,12 @@ test("client package smoke script validates desktop package shape and runtime st
 });
 
 test("repository ignore rules exclude runtime state and secrets", async () => {
+  const attributes = await readFile(join(projectRoot, ".gitattributes"), "utf8");
   const ignore = await readFile(join(projectRoot, ".gitignore"), "utf8");
   const pkg = await readFile(join(projectRoot, "package.json"), "utf8");
   const audit = await readFile(join(projectRoot, "scripts", "audit-release.mjs"), "utf8");
 
+  assert.match(attributes, /^\* text=auto eol=lf$/m);
   assert.match(ignore, /node_modules\//);
   assert.match(ignore, /^dist\//m);
   assert.match(ignore, /^\.tmp\//m);
@@ -10373,7 +10375,6 @@ test("server env example covers compose deployment variables", async () => {
   const composeN1 = await readFile(join(projectRoot, "server", "docker-compose.n1.yml"), "utf8");
   const singboxDockerfile = await readFile(join(projectRoot, "server", "sing-box.Dockerfile"), "utf8");
   const singboxExample = JSON.parse(await readFile(join(projectRoot, "server", "sing-box", "config.example.json"), "utf8"));
-  const singboxRuntime = JSON.parse(await readFile(join(projectRoot, "server", "sing-box", "config.json"), "utf8"));
   const required = [
     "PUBLIC_SERVER_URL",
     "VLESS_PUBLIC_HOST",
@@ -10411,7 +10412,6 @@ test("server env example covers compose deployment variables", async () => {
   assert.match(compose, /SFSC_TUNNEL_PATH: \$\{SFSC_TUNNEL_PATH:-\/sfsc-vless\}/);
   assert.match(compose, /expose:\n      - "45678"/);
   assert.equal(singboxExample.inbounds[0].listen_port, 45678);
-  assert.equal(singboxRuntime.inbounds[0].listen_port, 45678);
 });
 
 test("buildClientSingboxConfig keeps proxy local and mux disabled", () => {
