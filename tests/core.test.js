@@ -6527,6 +6527,31 @@ test("repository ignore rules exclude runtime state and secrets", async () => {
   assert.match(audit, /looks like a real private\/storage secret/);
 });
 
+test("source fingerprint hashing does not require Get-FileHash", async () => {
+  const helperPath = join(projectRoot, "scripts", "lib", "build-fingerprint.ps1").replaceAll("'", "''");
+  const repoPath = projectRoot.replaceAll("'", "''");
+  const command = [
+    `. '${helperPath}'`,
+    "Set-Item Function:\\Get-FileHash -Value { throw 'Get-FileHash disabled by portability test' } -Force",
+    `$fingerprint = Get-SourceTreeFingerprint -RepoRoot '${repoPath}'`,
+    "if ($fingerprint.hash -notmatch '^[a-f0-9]{64}$') { throw 'invalid source fingerprint hash' }"
+  ].join("; ");
+
+  const result = await new Promise((resolve) => {
+    execFile("powershell", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      command
+    ], { cwd: projectRoot }, (error, stdout, stderr) => {
+      resolve({ code: error?.code ?? 0, stdout, stderr });
+    });
+  });
+
+  assert.equal(result.code, 0, result.stderr || result.stdout);
+});
+
 test("compose config audit enforces fixed image tags", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-compose-audit-"));
   try {

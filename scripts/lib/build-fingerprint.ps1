@@ -8,12 +8,12 @@ function Get-SourceTreeFingerprint {
   $entries = @()
   foreach ($path in Get-SourceFingerprintFiles $repoRootFull) {
     $relative = Get-FingerprintRelativePath $repoRootFull $path
-    $hash = Get-FileHash -LiteralPath $path -Algorithm SHA256
+    $hash = Get-Sha256HexFromFile $path
     $item = Get-Item -LiteralPath $path
     $entries += [pscustomobject]@{
       path = $relative
       size = [int64]$item.Length
-      sha256 = $hash.Hash.ToLowerInvariant()
+      sha256 = $hash
     }
   }
 
@@ -110,6 +110,26 @@ function Get-Sha256HexFromText($text) {
     $bytes = [System.Text.Encoding]::UTF8.GetBytes("$text")
     $hashBytes = $sha256.ComputeHash($bytes)
     return (($hashBytes | ForEach-Object { $_.ToString("x2") }) -join "")
+  } finally {
+    $sha256.Dispose()
+  }
+}
+
+function Get-Sha256HexFromFile($path) {
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $stream = [System.IO.File]::Open(
+      $path,
+      [System.IO.FileMode]::Open,
+      [System.IO.FileAccess]::Read,
+      [System.IO.FileShare]::Read
+    )
+    try {
+      $hashBytes = $sha256.ComputeHash($stream)
+      return (($hashBytes | ForEach-Object { $_.ToString("x2") }) -join "")
+    } finally {
+      $stream.Dispose()
+    }
   } finally {
     $sha256.Dispose()
   }
