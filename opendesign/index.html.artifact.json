@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "opendesign/index.html",
+  "entry": "opendesign/index.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-07-13T15:44:20.762Z",
+  "updatedAt": "2026-07-13T15:44:20.762Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

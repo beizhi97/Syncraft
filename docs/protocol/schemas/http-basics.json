@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "kind": "sfsc-http-basics",
+  "writeMethod": "POST",
+  "requestMediaType": "application/json",
+  "mediaTypeParametersAllowed": true,
+  "emptyBodyValue": {},
+  "maxJsonBodyBytes": 2097152,
+  "responseMediaType": "application/json; charset=utf-8",
+  "responseCacheControl": "no-store",
+  "errorEnvelopeKeys": ["error", "errorCode", "message", "ok"],
+  "transportErrorCodes": {
+    "invalidJson": { "code": "invalid_json", "status": 400 },
+    "localWriteForbidden": { "code": "local_write_forbidden", "status": 403 },
+    "requestBodyTooLarge": { "code": "request_body_too_large", "status": 413 },
+    "unsupportedMediaType": { "code": "unsupported_media_type", "status": 415 }
+  },
+  "serverWriteGuardOrder": ["contentType", "adminAuthorization", "requestSchema", "handler"],
+  "clientWriteGuardOrder": ["browserOrigin", "contentType", "requestSchema", "handler"],
+  "clientAllowedOriginHosts": ["localhost", "127.0.0.1", "::1"],
+  "clientAllowedOriginSchemes": ["http:"],
+  "clientOriginPortMustMatch": true,
+  "missingOriginAllowed": true,
+  "emptyBodyRequiresNoTransferEncoding": true,
+  "fallbackMessages": {
+    "client_error": "Client request failed",
+    "server_error": "Internal server error"
+  }
+}

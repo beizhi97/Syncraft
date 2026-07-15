@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "opendesign/client-settings.html",
+  "entry": "opendesign/client-settings.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-07-13T16:31:55.700Z",
+  "updatedAt": "2026-07-13T16:31:55.700Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

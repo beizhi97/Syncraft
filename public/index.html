@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Syncraft 服务端控制台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="state-normal">
+<!-- ═══ Auth Gate ═══════════════════════════════════════ -->
+<div id="authGate" class="auth-gate" data-component="auth-gate" hidden>
+  <div class="auth-card">
+    <h2>管理登录</h2>
+    <p>请输入管理 Token 以访问控制台。</p>
+    <form id="loginForm">
+      <input id="adminTokenInput" type="password" placeholder="Admin Token" autofocus>
+      <div id="authMessage" class="auth-msg"></div>
+      <button type="submit">登录</button>
+    </form>
+  </div>
+</div>
+
+<div class="app">
+
+<!-- ═══ Top Bar ═════════════════════════════════════════ -->
+<header class="topbar" data-component="topbar">
+  <div class="topbar-left">
+    <div class="health-indicator">
+      <div id="healthDot" class="health-dot warn"></div>
+      <span id="healthText">检测中</span>
+    </div>
+    <div class="topbar-divider"></div>
+    <span id="diagnosticsStatus" class="topbar-info">v1.0.0 · 协议 v1</span>
+    <div class="topbar-divider"></div>
+    <span id="authStatus" class="topbar-info">已登录</span>
+  </div>
+  <div class="topbar-spacer"></div>
+  <div class="topbar-actions">
+    <button id="logoutBtn">退出登录</button>
+  </div>
+</header>
+
+<!-- ═══ Stat Strip ══════════════════════════════════════ -->
+<div class="stat-strip" data-component="stat-strip">
+  <div class="stat-tile">
+    <span class="stat-label">隧道</span>
+    <span class="stat-value" id="statTunnelValue">未加载</span>
+    <span class="stat-sub" id="statTunnelSub">等待服务端状态</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-label">在线设备</span>
+    <span class="stat-value" id="statOnlineDevicesValue">-</span>
+    <span class="stat-sub" id="statOnlineDevicesSub">暂无设备状态</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-label">同步中</span>
+    <span class="stat-value" id="statSyncingValue">-</span>
+    <span class="stat-sub" id="statSyncingSub">暂无同步任务</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-label">存储用量</span>
+    <span class="stat-value" id="statStorageUsageValue">-</span>
+    <span class="stat-sub" id="statStorageUsageSub">暂无仓库状态</span>
+  </div>
+</div>
+
+<!-- ═══ Action Message ══════════════════════════════════ -->
+<div id="actionMessage"></div>
+
+<!-- ═══ App Body: Sidebar + Main ════════════════════════ -->
+<div class="app-body">
+
+<!-- ── Sidebar ───────────────────────────────────── -->
+<aside class="sidebar" data-component="sidebar">
+  <div class="sidebar-group">
+    <div class="sidebar-group-label">配置</div>
+    <button class="sidebar-item active" type="button" data-tab-target="tab-vless">VLESS 服务</button>
+    <button class="sidebar-item" type="button" data-tab-target="tab-storage">同步仓库</button>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-label">管理</div>
+    <button class="sidebar-item" type="button" data-tab-target="tab-tkey">设备 SyncKey</button>
+    <button class="sidebar-item" type="button" data-tab-target="tab-devices">在线设备</button>
+  </div>
+</aside>
+<!-- ── Main Content ──────────────────────────────── -->
+<main class="main-wrap">
+
+  <!-- ═══ VLESS Service Panel ═════════════════════ -->
+  <div id="tab-vless" class="tab-panel active" data-component="vless-panel">
+    <div class="card">
+      <h3>VLESS 服务配置</h3>
+
+      <div id="applyNotice" class="apply-notice">
+        ⚠ 配置已更改，需要重启 sing-box 服务才能生效。
+      </div>
+
+      <div class="section-label">基础配置</div>
+      <div class="form-grid-2">
+        <div class="form-row">
+          <label>协议</label>
+          <select id="protocol">
+            <option value="vless-tcp-none">VLESS TCP</option>
+            <option value="vless-reality-tcp" selected>VLESS REALITY TCP</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>备注</label>
+          <input id="remark" type="text" value="sfsc-default">
+        </div>
+      </div>
+      <div class="form-grid-2">
+        <div class="form-row">
+          <label>公网地址</label>
+          <input id="publicHost" type="text" value="pass.971223.xyz">
+        </div>
+        <div class="form-row">
+          <label>公网端口</label>
+          <input id="publicPort" type="number" value="2025">
+        </div>
+      </div>
+      <div class="form-grid-2">
+        <div class="form-row">
+          <label>监听端口</label>
+          <input id="listenPort" type="number" value="5177">
+        </div>
+        <div class="form-row">
+          <label>SyncKey 服务地址</label>
+          <input id="claimServer" type="text" class="mono" value="https://pass.971223.xyz:2025">
+        </div>
+      </div>
+
+      <div class="section-label">REALITY 参数</div>
+      <div id="realitySettings">
+        <div class="form-grid-2">
+          <div class="form-row">
+            <label>SNI</label>
+            <input id="realityServerName" type="text" value="www.apple.com">
+          </div>
+          <div class="form-row">
+            <label>Fingerprint</label>
+            <select id="realityFingerprint">
+              <option value="chrome" selected>Chrome</option>
+              <option value="firefox">Firefox</option>
+              <option value="safari">Safari</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-row">
+            <label>Public Key</label>
+            <input id="realityPublicKey" type="text" class="mono" value="xV-B7Oj8UE3zV3M2-_Q">
+          </div>
+          <div class="form-row">
+            <label>Private Key</label>
+            <input id="realityPrivateKey" type="password" class="mono" placeholder="留空保持不变">
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Short ID</label>
+          <input id="realityShortId" type="text" class="mono" value="7a8b9c">
+        </div>
+      </div>
+
+      <div class="section-label">操作 & 输出</div>
+      <div class="btn-row">
+        <button id="autoFillVlessBtn" class="btn-secondary">自动补全</button>
+        <button id="generateTunnelBtn" class="btn-primary">生成配置</button>
+        <button id="refreshSingboxConfigBtn" class="btn-secondary">刷新配置预览</button>
+        <button id="applySingboxBtn" class="btn-secondary">重启并应用</button>
+      </div>
+      <div id="tunnelOut" class="output-area">
+{
+  "inbounds": [{
+    "type": "vless",
+    "listen": "0.0.0.0",
+    "listen_port": 5177,
+    "users": [...],
+    "tls": {
+      "enabled": true,
+      "server_name": "www.apple.com",
+      "reality": { ... }
+    }
+  }]
+}
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Sync Storage Panel ══════════════════════ -->
+  <div id="tab-storage" class="tab-panel" data-component="storage-panel">
+    <div class="card">
+      <h3>S3 存储参数</h3>
+
+      <div class="section-label">连接</div>
+      <div class="form-grid-2">
+        <div class="form-row">
+          <label>rclone Remote</label>
+          <input id="remoteName" type="text" value="home-minio">
+        </div>
+        <div class="form-row">
+          <label>默认 Bucket</label>
+          <input id="bucket" type="text" value="home-sync">
+        </div>
+      </div>
+      <div class="form-grid-2">
+        <div class="form-row">
+          <label>客户端 Endpoint</label>
+          <input id="endpoint" type="text" class="mono" value="https://pass.971223.xyz:9000">
+        </div>
+        <div class="form-row">
+          <label>内部 Endpoint</label>
+          <input id="internalEndpoint" type="text" class="mono" value="http://minio:9000" readonly>
+        </div>
+      </div>
+      <div class="form-grid-2">
+        <div class="form-row">
+          <label>Access Key</label>
+          <input id="accessKeyId" type="text" class="mono" value="admin">
+        </div>
+        <div class="form-row">
+          <label>Secret Key</label>
+          <input id="secretAccessKey" type="password" class="mono" placeholder="留空保持不变">
+        </div>
+      </div>
+
+      <div class="section-label">路径前缀</div>
+      <div class="form-grid-2">
+        <div class="form-row">
+          <label>设备前缀</label>
+          <input id="prefixRoot" type="text" class="mono" value="devices">
+        </div>
+        <div class="form-row">
+          <label>共享前缀</label>
+          <input id="sharedPrefix" type="text" class="mono" value="shared">
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-top:16px">
+        <button id="saveStorageBtn" class="btn-primary">保存参数</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>仓库管理</h3>
+      <div class="filter-bar device-filters">
+        <input id="newBucketName" type="text" placeholder="新仓库名称…" style="flex:0 1 200px">
+        <button id="createBucketBtn" class="btn-sm">新建</button>
+        <span style="flex:1"></span>
+        <button id="refreshBucketsBtn" class="btn-sm">刷新</button>
+      </div>
+      <div id="bucketList">
+        <div class="empty">正在加载仓库...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ SyncKey Management Panel ═════════════════ -->
+  <div id="tab-tkey" class="tab-panel" data-component="tkey-panel">
+    <div class="card-grid cols-2">
+      <div class="card">
+        <h3>生成 SyncKey</h3>
+
+        <div class="section-label">设备信息</div>
+        <div class="form-row">
+          <label>设备名</label>
+          <input id="deviceName" type="text" placeholder="例如 laptop-01">
+        </div>
+        <div class="section-label">同步空间</div>
+        <div class="form-grid-2">
+          <div class="form-row">
+            <label>同步 ID</label>
+            <input id="newSyncId" type="text" placeholder="例如 team-documents">
+          </div>
+          <div class="form-row">
+            <label>Owner 设备</label>
+            <select id="syncSpaceOwnerSelect"><option value="">先创建设备</option></select>
+          </div>
+        </div>
+        <div class="btn-row" style="margin-top:0">
+          <button id="createSyncSpaceBtn" class="btn-secondary">创建同步空间</button>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-row">
+            <label>目标同步空间</label>
+            <select id="syncSpaceSelect"><option value="">设备私有空间</option></select>
+          </div>
+          <div class="form-row">
+            <label>设备角色</label>
+            <select id="syncSpaceRole">
+              <option value="writer" selected>可写</option>
+              <option value="reader">只读</option>
+              <option value="owner">Owner</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>选择仓库</label>
+          <select id="bucketSelect">
+            <option value="">等待仓库列表...</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>有效小时</label>
+          <input id="expiresInHours" type="number" value="24" min="1" max="168">
+        </div>
+
+        <div class="section-label">默认同步策略</div>
+        <div class="form-grid-2">
+          <div class="form-row">
+            <label>并行文件</label>
+            <input id="transfers" type="number" value="4">
+          </div>
+          <div class="form-row">
+            <label>单文件线程</label>
+            <input id="streams" type="number" value="8">
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-row">
+            <label>Checkers</label>
+            <input id="checkers" type="number" value="8">
+          </div>
+          <div class="form-row">
+            <label>Chunk Size</label>
+            <select id="chunkSize">
+              <option value="8M">8 MB</option>
+              <option value="16M" selected>16 MB</option>
+              <option value="32M">32 MB</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>计划模式</label>
+          <select id="scheduleMode">
+            <option value="manual" selected>手动</option>
+            <option value="interval">每隔 N 分钟</option>
+            <option value="daily">每天定时</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>间隔/时间</label>
+          <input id="scheduleValue" type="text" value="30" placeholder="30 或 02:00">
+        </div>
+
+        <div class="btn-row" style="margin-top:16px">
+          <button id="createClaimBtn" class="btn-primary">生成 SyncKey</button>
+          <button id="redeemPreviewBtn" class="btn-secondary">测试兑换</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>SyncKey 结果</h3>
+        <div id="claimResult" class="claim-result" hidden>
+          <div id="claimShortCode" class="short-code">-</div>
+          <div class="meta">
+            <div><span>设备：</span><span id="claimDevice">-</span></div>
+            <div><span>仓库：</span><span id="claimBucket">-</span></div>
+            <div><span>有效期：</span><span id="claimExpiry">-</span></div>
+          </div>
+          <div class="actions">
+            <button id="copyClaimBtn" class="btn-primary" style="font-size:12px;padding:6px 14px">复制完整 SyncKey</button>
+            <button id="copyClaimUriBtn" class="btn-secondary" style="font-size:12px;padding:6px 14px">复制导入 URI</button>
+          </div>
+          <div class="claim-detail">
+            <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">完整 SyncKey（折叠）</div>
+            <textarea id="claimOut" class="output-area" readonly style="margin-top:0;width:100%;min-height:60px;resize:vertical"></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Online Devices Panel ════════════════════ -->
+  <div id="tab-devices" class="tab-panel" data-component="devices-panel">
+    <div class="card">
+      <h3>在线设备</h3>
+      <div class="filter-bar">
+        <select id="deviceStatusFilter">
+          <option value="">全部状态</option>
+          <option value="online">在线</option>
+          <option value="offline">离线</option>
+          <option value="disabled">已停用</option>
+        </select>
+        <select id="deviceSyncFilter">
+          <option value="">全部同步</option>
+          <option value="syncing">同步中</option>
+          <option value="idle">空闲</option>
+          <option value="error">出错</option>
+        </select>
+        <select id="deviceCompatFilter">
+          <option value="">全部兼容</option>
+          <option value="compatible">兼容</option>
+          <option value="mismatch">不兼容</option>
+        </select>
+        <input id="deviceSearch" type="text" placeholder="搜索设备名…">
+        <button id="refreshBtn" class="btn-sm">刷新</button>
+      </div>
+      <div id="deviceFilterSummary" class="filter-summary">等待设备状态...</div>
+
+      <div id="deviceList" class="device-grid">
+        <div class="empty">正在加载设备...</div>
+      </div>
+    </div>
+  </div>
+
+</main>
+</div><!-- /app-body -->
+
+</div><!-- /app -->
+
+<!-- ═══ Config Preview ══════════════════════════════════ -->
+<div class="config-preview">
+  <div class="head">
+    <h3>配置预览</h3>
+    <span class="toggle">▾</span>
+  </div>
+  <div class="body">
+    <div id="profileOut" class="output-area" style="margin-top:0">
+等待操作结果...
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Confirm Modal ═══════════════════════════════════ -->
+<div id="confirmGate" class="modal-overlay" data-component="confirm-modal" hidden>
+  <div id="confirmForm" class="modal-card">
+    <div id="confirmEyebrow" class="eyebrow">危险操作</div>
+    <h3 id="confirmTitle">确认操作</h3>
+    <p id="confirmBody">请确认当前操作。</p>
+    <label id="confirmTextLabel">请输入确认文本：</label>
+    <input id="confirmTextInput" type="text" placeholder="输入确认文本">
+    <div id="confirmMessage"></div>
+    <div class="btns">
+      <button id="confirmCancelBtn" class="btn-secondary">取消</button>
+      <button id="confirmSubmitBtn" class="btn-danger">确认清空</button>
+    </div>
+  </div>
+</div>
+  <script src="/app.js"></script>
+</body>
+</html>

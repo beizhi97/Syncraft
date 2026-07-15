@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "opendesign/client-history.html",
+  "entry": "opendesign/client-history.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-07-14T07:44:14.918Z",
+  "updatedAt": "2026-07-14T07:44:14.918Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

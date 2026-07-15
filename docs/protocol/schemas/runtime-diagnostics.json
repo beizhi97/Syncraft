@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "kind": "sfsc-runtime-diagnostics",
+  "appId": "singbox-folder-sync",
+  "diagnosticsKeys": ["app", "buildId", "buildTime", "protocols", "role", "version"],
+  "protocolFields": ["claim", "profile", "adminState", "clientStatus", "heartbeat"],
+  "protocolVersions": {
+    "claim": 1,
+    "profile": 1,
+    "adminState": 1,
+    "clientStatus": 1,
+    "heartbeat": 1
+  },
+  "compatibilityKeys": ["action", "issues", "localRole", "ok", "policy", "remoteRole", "severity", "status"],
+  "compatibilityPolicyKeys": ["adminActions", "heartbeat", "profileIssue", "reason", "syncRun"],
+  "compatibilityIssueKeys": ["field", "local", "message", "remote", "type"],
+  "compatibilityIssueFields": ["claim", "profile", "adminState", "clientStatus", "heartbeat"],
+  "compatibilityStatuses": ["compatible", "mismatch"],
+  "compatibilityActions": ["diagnostics_missing", "manual_check", "none", "upgrade_local", "upgrade_remote"],
+  "compatibilitySeverities": ["ok", "warning"],
+  "compatibilityPolicyValues": ["allow", "warn"],
+  "compatibilityIssueTypes": ["local_missing", "remote_missing", "remote_newer", "remote_older"],
+  "compatiblePolicy": {
+    "adminActions": "allow",
+    "heartbeat": "allow",
+    "profileIssue": "allow",
+    "syncRun": "allow"
+  },
+  "mismatchPolicy": {
+    "adminActions": "allow",
+    "heartbeat": "allow",
+    "profileIssue": "warn",
+    "syncRun": "warn"
+  },
+  "strictDiagnosticsKeys": true,
+  "compatibilityDerivedFromDiagnostics": true
+}

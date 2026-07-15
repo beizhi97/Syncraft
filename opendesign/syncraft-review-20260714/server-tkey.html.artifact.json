@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "opendesign/server-tkey.html",
+  "entry": "opendesign/server-tkey.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-07-13T10:11:46.772Z",
+  "updatedAt": "2026-07-13T10:11:46.772Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "kind": "sfsc-heartbeat-device-sync",
+  "implementationSource": "scripts/lib/runtimeContracts.mjs",
+  "serverHeartbeatResponseKeys": ["device", "diagnostics", "ok"],
+  "compatibilityKeys": ["action", "issues", "localRole", "ok", "policy", "remoteRole", "severity", "status"],
+  "compatibilityPolicyKeys": ["adminActions", "heartbeat", "profileIssue", "reason", "syncRun"],
+  "compatibilityIssueKeys": ["field", "local", "message", "remote", "type"],
+  "syncRequiredKeys": ["conflicts", "currentFile", "currentJob", "lastRun", "progressPercent", "scheduler", "speedMbps", "state"],
+  "syncStates": ["idle", "syncing", "error", "stopping", "offline"],
+  "syncRunKeys": [
+    "conflicts",
+    "currentFile",
+    "error",
+    "errorCode",
+    "exitCode",
+    "finishedAt",
+    "id",
+    "job",
+    "localPath",
+    "progressPercent",
+    "rawSpeed",
+    "speedMbps",
+    "startedAt",
+    "status",
+    "transferredSizeText",
+    "trigger"
+  ],
+  "syncRunTriggers": ["manual", "scheduler"],
+  "schedulerKeys": ["enabled", "intervalMs", "jobs", "lastError", "lastTriggeredAt", "nextRun"],
+  "schedulerOptionalKeys": ["updatedAt"],
+  "schedulerJobKeys": ["id", "lastError", "lastTriggeredAt", "name", "nextRun", "schedule", "scheduleText"]
+}

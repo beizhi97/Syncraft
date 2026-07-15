@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "kind": "sfsc-protocol-baseline",
+  "protocolBaseline": "SFSC Protocol v1",
+  "status": "frozen",
+  "canonicalContract": "docs/INTERFACE_CONTRACT.md",
+  "apiMatrix": "docs/API_MATRIX.md",
+  "protocols": {
+    "claim": 1,
+    "profile": 1,
+    "adminState": 1,
+    "clientStatus": 1,
+    "heartbeat": 1
+  },
+  "compatibility": {
+    "onMismatch": "warn_and_confirm",
+    "heartbeat": "allow",
+    "profileIssue": "warn",
+    "syncRun": "warn",
+    "silentAllow": false
+  },
+  "breakingChangePolicy": "increment_protocol_version",
+  "requiredEvidence": [
+    "full-contract-tests",
+    "release-audit",
+    "strict-preflight-without-skips",
+    "desktop-and-portable-package-smoke",
+    "release-bundle-sha256",
+    "n1-claim-lifecycle-smoke",
+    "n1-final-restart-clear",
+    "source-fingerprint-alignment"
+  ]
+}

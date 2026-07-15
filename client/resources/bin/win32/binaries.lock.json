@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "platform": "win32-x64",
+  "tools": {
+    "sing-box": {
+      "repo": "SagerNet/sing-box",
+      "version": "1.13.14",
+      "tag": "v1.13.14",
+      "assetPattern": "windows-amd64.*\\.zip$",
+      "assetRejectPattern": "legacy",
+      "exe": "sing-box.exe",
+      "sha256": "db0d779948214cf761011d154c3a5da36df20394fa01a9fc798f1dc39fe9d183"
+    },
+    "rclone": {
+      "repo": "rclone/rclone",
+      "version": "1.74.3",
+      "tag": "v1.74.3",
+      "assetPattern": "windows-amd64.*\\.zip$",
+      "exe": "rclone.exe",
+      "sha256": "3ac0dba3a883555f0c0daabc8a87c8f78e531f339780335e07beadf77734b5bc"
+    }
+  }
+}

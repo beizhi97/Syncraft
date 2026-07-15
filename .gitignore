@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*.zip
+
+# Downloaded Windows runtime binaries (reproducibly restored from the lock file)
+client/resources/bin/win32/*.exe
+
+# Generated verification evidence
+reports/
+
+# Local scratch and deployment archives
+.tmp/
+*.tgz
+
+# Local environment and runtime secrets
+.env
+*.env.local
+server/.env
+server/.env.*
+!server/.env.example
+
+# Server runtime state
+server/data/
+server/sing-box/config.json
+server/sing-box/*.key
+server/sing-box/*.pem
+
+# Client portable runtime data
+client/data/
+dist/*/data/
+dist/**/data/
+
+# Logs and transient diagnostics
+*.log
+logs/
+data/logs/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

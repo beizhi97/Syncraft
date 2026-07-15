@@ -1,0 +1,11 @@
+{
+  "kind": "critique-panel",
+  "score": 4.7,
+  "axes": {
+    "clarity": { "score": 5, "notes": "任务、状态与风险入口保持直接，未引入说明型内容。" },
+    "hierarchy": { "score": 5, "notes": "首页主区已收敛为一个待处理任务，运行状态与路径列表保持次级，层级不再依赖卡片堆叠。" },
+    "typography": { "score": 4, "notes": "Segoe UI 中文桌面体系、14px 正文与等宽数值保持可扫描性。" },
+    "motion": { "score": 5, "notes": "状态反馈短促且保留 prefers-reduced-motion 兜底。" },
+    "brand": { "score": 5, "notes": "青蓝主操作、深海军蓝侧栏、青绿/琥珀/玫红状态色统一；文件传递轨迹标识已在入口和共享品牌区落地，未使用渐变或光晕。" }
+  }
+}

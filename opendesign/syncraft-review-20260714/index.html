@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Syncraft 工作区</title>
+  <link rel="stylesheet" href="prototype.css">
+</head>
+<body>
+  <main class="launcher workspace-home" data-od-id="workspace-home">
+    <header class="launcher-head workspace-head" data-od-id="workspace-header">
+      <div>
+        <div class="brand workspace-brand" aria-label="Syncraft">
+          <span class="brand-mark" aria-hidden="true">SF</span><strong>Syncraft</strong>
+        </div>
+        <h1 data-od-id="launcher-title">同步工作区</h1>
+      </div>
+      <div class="workspace-health" aria-label="当前服务状态">
+        <span class="status success" data-od-id="health-service">服务可用</span>
+        <span class="status" data-od-id="health-client">等待客户端状态</span>
+      </div>
+    </header>
+
+    <section class="workspace-overview" aria-label="当前状态" data-od-id="workspace-overview">
+      <article class="workspace-primary task-focus" data-od-id="client-primary-status">
+        <div class="workspace-panel-head">
+          <div>
+            <h2>Windows 客户端</h2>
+            <p>有一个同步任务等待继续处理。</p>
+          </div>
+          <span class="badge warning">待预览</span>
+        </div>
+        <div class="task-next" aria-label="当前客户端任务">
+          <div>
+            <span class="task-eyebrow">下一步</span>
+            <strong>预览本地文件夹的同步差异</strong>
+            <span class="task-context">Profile 和本地文件夹已准备就绪</span>
+          </div>
+          <span class="task-ready">已完成 2 项</span>
+        </div>
+        <div class="workspace-actions">
+          <a class="btn primary" href="client-sync.html" data-od-id="primary-open-client">预览差异</a>
+          <a class="btn" href="client-onboarding.html" data-od-id="secondary-open-onboarding">重新导入 SyncKey</a>
+        </div>
+      </article>
+
+      <aside class="workspace-side" data-od-id="server-alert-summary">
+        <div class="workspace-panel-head compact">
+          <h2>服务端管理控制台</h2>
+          <span class="badge success">在线</span>
+        </div>
+        <div class="summary-list">
+          <div class="summary-row">
+            <span class="k">隧道状态</span>
+            <span><span class="status success">运行中</span></span>
+          </div>
+          <div class="summary-row">
+            <span class="k">同步仓库</span>
+            <span>等待服务状态接口</span>
+          </div>
+          <div class="summary-row">
+            <span class="k">设备</span>
+            <span>3 在线 · 1 离线</span>
+          </div>
+        </div>
+        <a class="btn" href="server-overview.html" data-od-id="open-server-overview">查看运行概览</a>
+      </aside>
+    </section>
+
+    <section class="workspace-alerts" aria-label="待处理状态" data-od-id="workspace-state-strip">
+      <div class="workspace-alert-row warning" data-od-id="state-warning">
+        <strong>等待容量状态</strong>
+        <span>管理员需要在基础设置中检查 MinIO/S3 配额。</span>
+      </div>
+      <div class="workspace-status-row" data-od-id="state-success">
+        <span class="status">等待最近同步记录</span>
+        <span>刷新后从真实状态接口加载。</span>
+      </div>
+      <div class="workspace-status-row" data-od-id="state-empty">
+        <span class="status">暂无失败任务</span>
+        <span>失败列表为空；新异常会显示在历史和运行概览中。</span>
+      </div>
+    </section>
+
+    <div class="route-columns">
+      <section class="route-list" data-od-id="client-surfaces">
+        <div class="route-list-head">
+          <h2>Windows 客户端</h2>
+          <span class="launch-meta">普通用户</span>
+        </div>
+        <a class="route-link" href="client-onboarding.html" data-od-id="launch-client-onboarding">
+          <span>
+            <span class="launch-name">首次导入与连接检查</span>
+            <span class="launch-desc">粘贴 SyncKey 导入码，确认连接可用。</span>
+          </span>
+          <span class="launch-meta">首次使用</span>
+        </a>
+        <a class="route-link is-current" href="client-sync.html" data-od-id="launch-client-sync">
+          <span>
+            <span class="launch-name">同步工作台</span>
+            <span class="launch-desc">选择文件夹、预览差异、开始或停止同步。</span>
+          </span>
+          <span class="badge warning">待处理</span>
+        </a>
+        <a class="route-link" href="client-history.html" data-od-id="launch-client-history">
+          <span>
+            <span class="launch-name">同步历史</span>
+            <span class="launch-desc">查看成功、失败、停止和冲突记录。</span>
+          </span>
+          <span class="launch-meta">结果</span>
+        </a>
+        <a class="route-link" href="client-settings.html" data-od-id="launch-client-settings">
+          <span>
+            <span class="launch-name">设置与诊断</span>
+            <span class="launch-desc">处理高级参数、日志、诊断和危险操作。</span>
+          </span>
+          <span class="launch-meta">高级区域</span>
+        </a>
+      </section>
+
+      <section class="route-list" data-od-id="server-surfaces">
+        <div class="route-list-head">
+          <h2>服务端管理控制台</h2>
+          <span class="launch-meta">管理员</span>
+        </div>
+        <a class="route-link" href="server-login.html" data-od-id="launch-server-login">
+          <span>
+            <span class="launch-name">管理登录</span>
+            <span class="launch-desc">输入管理 Token 后进入控制台。</span>
+          </span>
+          <span class="launch-meta">鉴权</span>
+        </a>
+        <a class="route-link" href="server-overview.html" data-od-id="launch-server-overview">
+          <span>
+            <span class="launch-name">运行概览</span>
+            <span class="launch-desc">检查服务状态、异常、设备和最近事件。</span>
+          </span>
+          <span class="launch-meta">状态</span>
+        </a>
+        <a class="route-link" href="server-tkey.html" data-od-id="launch-server-tkey">
+          <span>
+            <span class="launch-name">SyncKey 管理</span>
+            <span class="launch-desc">创建一次性 SyncKey，并测试导入结果。</span>
+          </span>
+          <span class="launch-meta">生成</span>
+        </a>
+        <a class="route-link" href="server-devices.html" data-od-id="launch-server-devices">
+          <span>
+            <span class="launch-name">设备监控</span>
+            <span class="launch-desc">筛选在线、离线和协议不兼容设备。</span>
+          </span>
+          <span class="launch-meta">诊断</span>
+        </a>
+        <a class="route-link" href="server-infrastructure.html" data-od-id="launch-server-infrastructure">
+          <span>
+            <span class="launch-name">基础设置</span>
+            <span class="launch-desc">维护 VLESS、存储连接和同步仓库。</span>
+          </span>
+          <span class="launch-meta">配置</span>
+        </a>
+      </section>
+    </div>
+  </main>
+  <script src="prototype.js"></script>
+</body>
+</html>

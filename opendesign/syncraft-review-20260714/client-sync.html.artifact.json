@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "opendesign/client-sync.html",
+  "entry": "opendesign/client-sync.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-07-14T07:42:33.397Z",
+  "updatedAt": "2026-07-14T07:42:33.397Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

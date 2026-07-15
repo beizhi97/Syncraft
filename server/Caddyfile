@@ -1,0 +1,10 @@
+{$SFSC_PUBLIC_HOST} {
+  encode zstd gzip
+  @sfsc_tunnel path {$SFSC_TUNNEL_PATH}
+  handle @sfsc_tunnel {
+    reverse_proxy sing-box:45678
+  }
+  handle {
+    reverse_proxy sync-server:5177
+  }
+}

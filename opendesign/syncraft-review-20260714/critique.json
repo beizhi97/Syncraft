@@ -1,0 +1,11 @@
+{
+  "kind": "critique-panel",
+  "score": 4,
+  "axes": {
+    "clarity": { "score": 5, "notes": "默认状态均指向数据来源或空态。" },
+    "hierarchy": { "score": 4, "notes": "保留现有桌面工作台结构，未引入新面板层级。" },
+    "typography": { "score": 4, "notes": "沿用既有 token 和密度。" },
+    "motion": { "score": 4, "notes": "刷新提供真实管理端请求或明确的既有接口绑定事件。" },
+    "brand": { "score": 5, "notes": "SyncKey、Sync ID 和客户端授权边界已统一。" }
+  }
+}

@@ -1,0 +1,116 @@
+function Get-SourceTreeFingerprint {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$RepoRoot
+  )
+
+  $repoRootFull = [System.IO.Path]::GetFullPath($RepoRoot)
+  $entries = @()
+  foreach ($path in Get-SourceFingerprintFiles $repoRootFull) {
+    $relative = Get-FingerprintRelativePath $repoRootFull $path
+    $hash = Get-FileHash -LiteralPath $path -Algorithm SHA256
+    $item = Get-Item -LiteralPath $path
+    $entries += [pscustomobject]@{
+      path = $relative
+      size = [int64]$item.Length
+      sha256 = $hash.Hash.ToLowerInvariant()
+    }
+  }
+
+  $hashInput = ($entries | ForEach-Object { "$($_.path)`t$($_.size)`t$($_.sha256)" }) -join "`n"
+  $sourceTreeHash = Get-Sha256HexFromText $hashInput
+  return [ordered]@{
+    algorithm = "sfsc-source-tree-sha256-v1"
+    hash = $sourceTreeHash
+    buildId = "sfsc-$($sourceTreeHash.Substring(0, 12))"
+    fileCount = @($entries).Count
+    inputs = $entries
+  }
+}
+
+function Get-SourceFingerprintFiles($repoRootFull) {
+  $roots = @(
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "README.md",
+    "src",
+    "public",
+    "server\Dockerfile",
+    "server\sing-box.Dockerfile",
+    "server\sing-box-supervisor.sh",
+    "server\.env.example",
+    "server\docker-compose.yml",
+    "server\docker-compose.n1.yml",
+    "server\sing-box\config.example.json",
+    "client\src",
+    "client\public",
+    "client\electron",
+    "client\scripts",
+    "docs",
+    "scripts",
+    "tests"
+  )
+  $files = @()
+  foreach ($root in $roots) {
+    $path = Join-Path $repoRootFull $root
+    if (!(Test-Path -LiteralPath $path)) {
+      continue
+    }
+    $item = Get-Item -LiteralPath $path
+    if ($item.PSIsContainer) {
+      $files += Get-ChildItem -LiteralPath $path -Recurse -File -Force | ForEach-Object { $_.FullName }
+    } else {
+      $files += $item.FullName
+    }
+  }
+  return @($files |
+    Where-Object { -not (Test-FingerprintBlockedPath (Get-FingerprintRelativePath $repoRootFull $_)) } |
+    Sort-Object -Unique { $_.ToLowerInvariant() })
+}
+
+function Test-FingerprintBlockedPath($relativePath) {
+  $normalized = "$relativePath".Replace("\", "/")
+  foreach ($pattern in @(
+    '(^|/)\.git(/|$)',
+    '(^|/)node_modules(/|$)',
+    '(^|/)\.tmp(/|$)',
+    '(^|/)dist(/|$)',
+    '(^|/)reports(/|$)',
+    '(^|/)\.env$',
+    '(^|/)[^/]+\.env\.local$',
+    '^server/\.env$',
+    '^server/data(/|$)',
+    '^server/sing-box/config\.json$',
+    '^server/sing-box/.*\.(key|pem)$',
+    '^client/data(/|$)',
+    '^client/resources/bin(/|$)'
+  )) {
+    if ($normalized -match $pattern) {
+      return $true
+    }
+  }
+  return $false
+}
+
+function Get-FingerprintRelativePath($basePath, $childPath) {
+  $baseFullPath = [System.IO.Path]::GetFullPath($basePath)
+  if (!$baseFullPath.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+    $baseFullPath = "$baseFullPath$([System.IO.Path]::DirectorySeparatorChar)"
+  }
+  $childFullPath = [System.IO.Path]::GetFullPath($childPath)
+  $baseUri = [System.Uri]::new($baseFullPath)
+  $childUri = [System.Uri]::new($childFullPath)
+  return [System.Uri]::UnescapeDataString($baseUri.MakeRelativeUri($childUri).ToString()).Replace("/", "\").Replace("\", "/")
+}
+
+function Get-Sha256HexFromText($text) {
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes("$text")
+    $hashBytes = $sha256.ComputeHash($bytes)
+    return (($hashBytes | ForEach-Object { $_.ToString("x2") }) -join "")
+  } finally {
+    $sha256.Dispose()
+  }
+}

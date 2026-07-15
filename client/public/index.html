@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Syncraft</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="state-normal">
+<div class="app">
+
+<!-- ═══ Top Status Bar ═══════════════════════════════════ -->
+<header class="topbar" data-component="topbar">
+  <div class="badges">
+    <span id="binStatus" class="badge neutral"><span class="dot"></span>组件检测中</span>
+    <span id="profileStatus" class="badge warn"><span class="dot"></span>等待导入</span>
+    <span id="tunnelStatus" class="badge neutral"><span class="dot"></span>隧道未启动</span>
+    <span id="heartbeatStatus" class="badge neutral"><span class="dot"></span>心跳未配置</span>
+    <span id="syncStatus" class="badge neutral"><span class="dot"></span>未同步</span>
+  </div>
+  <div class="topbar-spacer"></div>
+  <div class="topbar-actions">
+    <button id="settingsBtn">设置</button>
+    <button id="shutdownBtn">退出</button>
+  </div>
+</header>
+
+<!-- ═══ Action Message ═══════════════════════════════════ -->
+<div id="actionMessage">
+  <!-- state-error: <div class="action-msg bad">⚠ 同步失败，请查看诊断日志。错误码：rclone_sync_failed</div> -->
+</div>
+
+<!-- ═══ Main Content ═════════════════════════════════════ -->
+<main class="main-wrap">
+
+  <!-- ── Empty State Hero ─────────────────────────────── -->
+  <div class="empty-hero" data-component="empty-state">
+    <div class="icon"></div>
+    <h2>尚未导入配置</h2>
+    <p>请从服务端控制台获取 SyncKey，在设置中导入后开始同步。</p>
+    <button id="emptyImportBtn">导入 SyncKey</button>
+    <div class="first-use-checklist" aria-label="首次使用清单">
+      <ol>
+        <li>校验 ZIP 旁边的 .sha256 文件</li>
+        <li>解压到桌面或文档等用户可写目录</li>
+        <li>启动 Syncraft.exe</li>
+        <li>粘贴管理员给的一次性 SyncKey</li>
+      </ol>
+      <p class="first-use-safe-note">联系支持时不要发送完整 SyncKey、sfsc:// 导入 URI 或 VLESS URI。</p>
+    </div>
+  </div>
+
+  <!-- ── Device Recovery Notice ───────────────────────── -->
+  <div id="deviceRecoveryNotice" class="show" hidden>
+    ⚠ 当前客户端已在服务端停用，请联系管理员重新启用。
+  </div>
+
+  <!-- ── Task Panel ───────────────────────────────────── -->
+  <div class="task-panel" data-component="task-panel">
+
+    <!-- Left: Task Form -->
+    <div class="card">
+      <div class="section-heading"><div><p class="eyebrow">本机任务</p><h3>同步任务</h3></div><span id="authorizedContentState" class="badge neutral" aria-live="polite">等待 SyncKey 授权</span></div>
+      <section class="authorization-summary" aria-live="polite" aria-labelledby="authorizedContentHeading">
+        <strong id="authorizedContentHeading">已授权同步内容</strong>
+        <span id="authorizedContentValue">导入 SyncKey 后显示。客户端不提供手工输入、搜索或加入同步 ID 的入口。</span>
+      </section>
+
+      <div class="form-row">
+        <label for="localPath">本地文件夹</label>
+        <input id="localPath" type="text" placeholder="选择要同步的本地文件夹">
+        <button id="chooseFolderBtn" class="btn-sm">浏览…</button>
+        <input id="folderPicker" type="file" webkitdirectory directory multiple style="display:none">
+      </div>
+
+      <div class="form-grid-2">
+        <div class="form-row">
+            <label for="direction">同步方向</label>
+          <select id="direction">
+            <option value="upload">上传（本地 → 远端）</option>
+            <option value="download">下载（远端 → 本地）</option>
+            <option value="bidirectional">双向同步</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="serverSpace">同步空间</label>
+          <select id="serverSpace">
+            <option value="device">设备空间</option>
+            <option value="shared">共享空间</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label for="remoteFolder">远端子目录</label>
+        <input id="remoteFolder" type="text" placeholder="设备空间可留空；共享空间必须填写">
+      </div>
+      <div class="form-grid-2">
+        <div class="form-row">
+          <label for="scheduleMode">计划任务</label>
+          <select id="scheduleMode">
+            <option value="manual">手动</option>
+            <option value="interval">每隔</option>
+            <option value="daily">每天定时</option>
+            <option value="startup">启动时</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-row" id="scheduleIntervalRow" hidden>
+        <label for="scheduleInterval">间隔分钟</label>
+        <input id="scheduleInterval" class="schedule-param" type="number" min="1" max="1440" value="30">
+      </div>
+      <div class="form-row" id="scheduleTimeRow" hidden>
+        <label for="scheduleTime">执行时间</label>
+        <input id="scheduleTime" class="schedule-param" type="time" value="02:00">
+      </div>
+
+      <div class="form-grid-2">
+        <div class="form-row">
+          <label for="transfers">并行文件</label>
+          <input id="transfers" type="number" value="4" min="1" max="32">
+        </div>
+        <div class="form-row">
+          <label for="streams">单文件线程</label>
+          <input id="streams" type="number" value="8" min="1" max="32">
+        </div>
+      </div>
+
+      <div class="checkbox-row">
+        <input id="destructiveSync" type="checkbox">
+        <label for="destructiveSync">镜像同步，删除目标端多余文件</label>
+      </div>
+      <div class="form-row" id="bisyncInitialModeRow" hidden>
+        <label for="bisyncInitialMode">双向首次基准</label>
+        <select id="bisyncInitialMode">
+          <option value="newer">保留较新文件</option>
+          <option value="local">以本地为准</option>
+          <option value="remote">以远端为准</option>
+        </select>
+      </div>
+      <div id="destructiveSyncHint" class="hint">
+        开启后使用 rclone sync，目标端存在但本地不存在的文件将被删除。需二次确认。
+      </div>
+
+      <div class="target-summary">
+        <div class="target-summary-title">授权与执行范围</div>
+        <div id="remoteTargetSummary" class="summary-list">
+          <div class="summary-row"><span>状态</span><code>导入 SyncKey 后显示授权内容</code></div>
+        </div>
+      </div>
+
+      <!-- Advanced: Bandwidth -->
+      <div class="advanced-section">
+        <button id="advancedSettingsToggle" class="advanced-toggle" type="button" aria-expanded="false" aria-controls="advancedSettingsContent">
+          高级参数
+        </button>
+        <div id="advancedSettingsContent" class="advanced-content">
+          <div class="checkbox-row">
+            <input id="bandwidthLimitEnabled" type="checkbox">
+            <label for="bandwidthLimitEnabled">启用带宽限制</label>
+          </div>
+          <div class="bandwidth-row" style="margin-left:24px;margin-bottom:12px">
+            <select id="bandwidthLimitMode">
+              <option value="fixed">固定限速</option>
+              <option value="schedule">时段限速</option>
+            </select>
+            <input id="bandwidthLimitValue" type="number" min="1" value="10" style="width:70px">
+            <select id="bandwidthLimitUnit">
+              <option value="k">KB/s</option>
+              <option value="M" selected>MB/s</option>
+              <option value="G">GB/s</option>
+            </select>
+          </div>
+          <div class="bandwidth-row" id="bandwidthScheduleRow" style="margin-left:24px;margin-bottom:12px" hidden>
+            <span style="font-size:12px;color:var(--text-3)">时段</span>
+            <input id="bandwidthLimitStart" type="time" value="08:00">
+            <span style="font-size:12px;color:var(--text-3)">→</span>
+            <input id="bandwidthLimitEnd" type="time" value="18:00">
+          </div>
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-top:16px">
+        <button id="saveJobBtn" class="btn-secondary">保存任务</button>
+        <button id="runSyncBtn" class="btn-primary">▶ 开始同步</button>
+        <button id="stopSyncBtn" class="btn-danger">■ 停止同步</button>
+      </div>
+    </div>
+
+    <!-- Right: Progress -->
+    <div class="card progress-card" data-component="progress">
+      <div class="progress-head">
+        <h3>同步进度</h3>
+        <span id="progressValue">0%</span>
+      </div>
+      <div class="progress-bar">
+        <div id="progressFill" style="width:0%"></div>
+      </div>
+      <div class="progress-stats">
+        <div class="progress-stat">
+          <span class="label">速度</span>
+          <span id="speedValue" class="value mono">— Mbps</span>
+        </div>
+        <div class="progress-stat">
+          <span class="label">已传输</span>
+          <span id="transferredValue" class="value mono">— / —</span>
+        </div>
+        <div class="progress-stat">
+          <span class="label">当前文件</span>
+          <span id="currentFileValue" class="value">—</span>
+        </div>
+        <div class="progress-stat row">
+          <div class="pair"><span class="label">最近同步</span><span id="lastSyncValue" class="value">—</span></div>
+          <div class="pair"><span class="label">计划</span><span id="schedulerValue" class="value">手动</span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</main>
+</div>
+
+<!-- ═══ Settings Drawer ══════════════════════════════════ -->
+<div id="settingsScrim" class="scrim" hidden></div>
+<aside id="settingsPanel" class="drawer" data-component="settings-drawer" hidden>
+  <div class="drawer-head">
+    <h2>设置</h2>
+    <button id="closeSettingsBtn">✕</button>
+  </div>
+  <div class="drawer-body">
+
+    <!-- ── SyncKey Import ────────────────────────────── -->
+    <div class="drawer-section">
+      <h3>服务端配置</h3>
+      <textarea id="claimCode" placeholder="粘贴 SyncKey：SFSC1-... 或 sfsc://import/v1#..."></textarea>
+      <div class="btn-row" style="margin-top:8px">
+        <button id="saveProfileBtn" class="btn-primary" style="font-size:12px;padding:6px 16px">导入</button>
+      </div>
+      <div id="profileSummary" class="info-list" style="margin-top:10px">
+        <div class="info-item"><span class="k">状态</span><span class="v">等待导入 SyncKey</span></div>
+      </div>
+    </div>
+
+    <!-- ── Component Detection ──────────────────────── -->
+    <div class="drawer-section">
+      <h3>组件检测</h3>
+      <div class="health-grid">
+        <div id="singboxHealth" class="health-card">
+          <div class="name">sing-box</div>
+          <div class="status">待检测</div>
+        </div>
+        <div id="rcloneHealth" class="health-card">
+          <div class="name">rclone</div>
+          <div class="status">待检测</div>
+        </div>
+        <div id="heartbeatHealth" class="health-card">
+          <div class="name">心跳</div>
+          <div class="status">未配置</div>
+        </div>
+      </div>
+      <button id="checkBinsBtn" class="btn-secondary" style="margin-top:8px;font-size:12px;padding:5px 14px">重新检测</button>
+      <div id="binOutput" class="log-area" style="margin-top:8px"></div>
+      <div class="info-list" style="margin-top:8px">
+        <div class="info-item"><span class="k">sing-box 路径</span><span id="singboxPath" class="v">resources/bin/win32/sing-box.exe</span></div>
+        <div class="info-item"><span class="k">rclone 路径</span><span id="rclonePath" class="v">resources/bin/win32/rclone.exe</span></div>
+        <div class="info-item"><span class="k">数据目录</span><span id="dataRoot" class="v">data/</span></div>
+      </div>
+    </div>
+
+    <!-- ── Protocol Compatibility ───────────────────── -->
+    <div class="drawer-section">
+      <h3>协议兼容性</h3>
+      <div class="info-list">
+        <div class="info-item"><span class="k">客户端版本</span><span id="clientVersion" class="v">检测中</span></div>
+        <div class="info-item"><span class="k">客户端协议</span><span id="clientProtocols" class="v">检测中</span></div>
+        <div class="info-item"><span class="k">服务端协议</span><span id="serverProtocols" class="v">未连接</span></div>
+      </div>
+      <div id="protocolCompatibility" class="compat-box" style="margin-top:8px">
+        等待服务端心跳后确认协议兼容性。
+      </div>
+      <div id="compatibilityPolicy" class="info-item" style="margin-top:6px">
+        <span class="k">兼容策略</span><span class="v">未验证</span>
+      </div>
+      <div class="info-list" style="margin-top:8px">
+        <div class="info-item"><span class="k">构建标识</span><span id="clientBuildId" class="v">检测中</span></div>
+        <div class="info-item"><span class="k">构建时间</span><span id="clientBuildTime" class="v">检测中</span></div>
+        <div class="info-item"><span class="k">包状态</span><span id="releaseManifestStatus" class="v">检测中</span></div>
+        <div class="info-item"><span class="k">包构建时间</span><span id="releaseManifestBuiltAt" class="v">检测中</span></div>
+      </div>
+    </div>
+
+    <!-- ── Local State Health ───────────────────────── -->
+    <div class="drawer-section">
+      <h3>本地状态</h3>
+      <div class="info-list">
+        <div class="info-item"><span class="k">JSON 状态</span><span id="localStateStatus" class="v">检测中</span></div>
+        <div class="info-item"><span class="k">Secret Vault</span><span id="secretVaultStatus" class="v">检测中</span></div>
+      </div>
+    </div>
+
+    <!-- ── Tunnel Control ───────────────────────────── -->
+    <div class="drawer-section">
+      <h3>隧道控制</h3>
+      <div class="btn-row">
+        <button id="startTunnelBtn" class="btn-primary" style="font-size:12px;padding:6px 16px">启动隧道</button>
+        <button id="stopTunnelBtn" class="btn-secondary" style="font-size:12px;padding:6px 16px">停止隧道</button>
+      </div>
+    </div>
+
+    <!-- ── Diagnostics ──────────────────────────────── -->
+    <div class="drawer-section">
+      <h3>高级诊断</h3>
+      <button id="previewBtn" class="btn-secondary" style="font-size:12px;padding:5px 14px">生成 rclone 命令预览</button>
+      <div id="previewOutput" class="log-area" style="margin-top:8px">
+导入 SyncKey 并选择本地文件夹后，可在这里预览将要执行的 rclone 命令。
+      </div>
+    </div>
+
+    <!-- ── Sync History ─────────────────────────────── -->
+    <div class="drawer-section">
+      <h3>同步历史</h3>
+      <div class="filter-row">
+        <select id="historyStatusFilter">
+          <option value="">全部状态</option>
+          <option value="running">运行中</option>
+          <option value="success">成功</option>
+          <option value="error">失败</option>
+          <option value="conflict">有冲突</option>
+          <option value="stopped">已停止</option>
+          <option value="unknown">未知</option>
+        </select>
+        <input id="historySearch" type="text" placeholder="搜索…">
+        <button id="refreshHistoryBtn" class="btn-sm" style="font-size:11px">刷新</button>
+      </div>
+      <div id="historySummary" class="history-summary" style="margin-bottom:8px">
+        <span class="k">最近 20 次</span><span class="v">暂无同步历史</span>
+      </div>
+      <div id="syncHistoryList" class="history-list">
+        <div class="history-empty">暂无同步历史</div>
+      </div>
+    </div>
+
+    <!-- ── Logs ─────────────────────────────────────── -->
+    <div class="drawer-section">
+      <h3>日志</h3>
+      <div class="btn-row" style="margin-bottom:8px">
+        <button id="refreshLogsBtn" class="btn-sm" style="font-size:11px">刷新</button>
+        <button id="copyLogsBtn" class="btn-sm" style="font-size:11px">复制</button>
+        <button id="copySupportSummaryBtn" class="btn-sm" style="font-size:11px">复制支持摘要</button>
+        <button id="exportDiagnosticsBtn" class="btn-sm" style="font-size:11px">导出诊断包</button>
+      </div>
+      <p class="support-safe-note">诊断包默认脱敏设备名、服务地址、仓库和本地路径。</p>
+      <div id="logOutput" class="log-area">
+暂无日志。启动隧道或同步后这里会显示最近日志。
+      </div>
+    </div>
+
+  </div>
+</aside>
+
+<!-- ═══ Confirm Modal ════════════════════════════════════ -->
+<div id="confirmGate" class="modal-overlay" data-component="confirm-modal" hidden>
+  <form id="confirmForm" class="modal-card">
+    <h3 id="confirmTitle">确认镜像同步</h3>
+    <p id="confirmBody">开启镜像同步后，目标端存在但本地不存在的文件将被删除。此操作不可撤销。</p>
+    <label id="confirmTextLabel">请输入 DELETE 以确认：</label>
+    <input id="confirmTextInput" type="text" placeholder="DELETE">
+    <div id="confirmMessage"></div>
+    <div class="btns">
+      <button id="confirmCancelBtn" type="button" class="btn-secondary">取消</button>
+      <button id="confirmSubmitBtn" type="submit" class="btn-danger">确认</button>
+    </div>
+  </form>
+</div>
+  <script src="/app.js"></script>
+</body>
+</html>

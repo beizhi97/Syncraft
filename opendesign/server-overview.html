@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SFSC 管理控制台 · 概览</title>
+  <link rel="stylesheet" href="prototype.css">
+  <script>document.documentElement.classList.add('motion-enabled');</script>
+  <style>
+    /* 页面级动效：快速、克制，仅用于层级建立与刷新反馈。 */
+    .motion-enabled [data-reveal] {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+
+    .motion-enabled.motion-ready [data-reveal] {
+      opacity: 1;
+      transform: translateY(0);
+      transition:
+        opacity 220ms cubic-bezier(.2, 0, 0, 1),
+        transform 260ms cubic-bezier(.2, 0, 0, 1);
+      transition-delay: var(--reveal-delay, 0ms);
+    }
+
+    .refresh-control {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .refresh-state {
+      min-width: 52px;
+      color: var(--muted);
+      font-size: 12px;
+      opacity: 0;
+      transform: translateY(2px);
+      transition:
+        opacity 150ms cubic-bezier(.2, 0, 0, 1),
+        transform 180ms cubic-bezier(.2, 0, 0, 1);
+    }
+
+    .refresh-state.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .refresh-surface {
+      transition:
+        opacity 140ms cubic-bezier(.2, 0, 0, 1),
+        transform 180ms cubic-bezier(.2, 0, 0, 1);
+    }
+
+    #overviewContent.is-refreshing .refresh-surface {
+      opacity: .55;
+      transform: translateY(2px);
+    }
+
+    #refreshBtn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-width: 88px;
+    }
+
+    #refreshBtn.is-loading::before {
+      content: "";
+      width: 12px;
+      height: 12px;
+      border: 1.5px solid var(--border-2);
+      border-top-color: var(--fg);
+      border-radius: 50%;
+      animation: refresh-spin 600ms linear infinite;
+    }
+
+    #refreshBtn:active:not(:disabled) {
+      transform: translateY(1px);
+      transition: transform 80ms cubic-bezier(.2, 0, 0, 1);
+    }
+
+    @keyframes refresh-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .motion-enabled [data-reveal],
+      .motion-enabled.motion-ready [data-reveal],
+      .refresh-state,
+      .refresh-state.visible,
+      .refresh-surface,
+      #overviewContent.is-refreshing .refresh-surface,
+      #refreshBtn:active:not(:disabled) {
+        opacity: 1;
+        transform: none;
+        transition: none;
+      }
+
+      #refreshBtn.is-loading::before {
+        animation: none;
+        border-color: var(--border-2);
+        border-top-color: var(--fg);
+      }
+
+      .server-overview-page .status.syncing::before {
+        animation: none;
+      }
+    }
+  </style>
+</head>
+<body class="server-overview-page">
+  <div class="app-shell">
+    <aside class="sidebar" data-od-id="server-sidebar">
+      <div class="brand">
+        <span class="brand-mark">SF</span>
+        <strong>SFSC 管理</strong>
+      </div>
+      <div class="nav-label">运行</div>
+      <a class="nav-item active" href="server-overview.html"><span class="nav-dot"></span>概览</a>
+      <a class="nav-item" href="server-tkey.html"><span class="nav-dot"></span>T-key</a>
+      <a class="nav-item" href="server-devices.html"><span class="nav-dot"></span>设备</a>
+      <div class="nav-label">配置</div>
+      <a class="nav-item" href="server-infrastructure.html"><span class="nav-dot"></span>基础设置</a>
+      <div class="sidebar-foot">
+        <div class="status success">服务端在线</div>
+        <div style="margin-top:7px">协议 v1</div>
+      </div>
+    </aside>
+
+    <main class="main" data-od-id="server-overview-main">
+      <header class="topbar" data-od-id="server-topbar">
+        <span class="crumb">运行概览</span>
+        <div class="top-actions">
+          <span class="status success">已登录</span>
+          <a class="btn small" href="server-login.html">退出</a>
+        </div>
+      </header>
+
+      <div class="content" id="overviewContent" aria-busy="false">
+        <div class="page-head" data-reveal style="--reveal-delay:0ms">
+          <div>
+            <h1 data-od-id="server-overview-title">服务状态</h1>
+          </div>
+          <div class="refresh-control">
+            <span id="refreshState" class="refresh-state" role="status" aria-live="polite"></span>
+            <button id="refreshBtn" class="btn" type="button" data-od-id="refresh-server-status">刷新状态</button>
+          </div>
+        </div>
+
+        <div class="metric-row refresh-surface" data-reveal style="--reveal-delay:40ms;margin-bottom:16px" data-od-id="server-metrics">
+          <div class="metric"><span class="label">隧道</span><span class="value" style="font-family:var(--font);font-size:16px">运行中</span></div>
+          <div class="metric"><span class="label">在线设备</span><span class="value">3</span></div>
+          <div class="metric"><span class="label">正在同步</span><span class="value">1</span></div>
+        </div>
+
+        <div class="split refresh-surface" data-reveal style="--reveal-delay:80ms">
+          <section class="panel" data-od-id="server-attention-panel">
+            <div class="panel-head"><h2>需要处理</h2><span class="badge warning">2 项</span></div>
+            <div class="panel-body stack">
+              <div class="notice warning">
+                <strong>1 台设备存在兼容性警告</strong>
+                <span>客户端协议可运行，但需要用户确认后才能启动同步。</span>
+                <div><a class="btn small" href="server-devices.html">查看设备</a></div>
+              </div>
+              <div class="notice">
+                <strong>配置修改尚未应用</strong>
+                <span>新的 VLESS 参数已保存；当前运行实例仍使用上一次配置。</span>
+                <div><a class="btn small" href="server-infrastructure.html">检查并应用</a></div>
+              </div>
+            </div>
+          </section>
+
+          <aside class="panel" data-od-id="server-readiness-panel">
+            <div class="panel-head"><h2>配置就绪度</h2></div>
+            <div class="panel-body summary-list">
+              <div class="summary-row"><span class="k">服务健康</span><span class="status success">正常</span></div>
+              <div class="summary-row"><span class="k">VLESS</span><span class="status warning">待应用</span></div>
+              <div class="summary-row"><span class="k">存储</span><span class="status success">可用</span></div>
+              <div class="summary-row"><span class="k">同步仓库</span><span>2 个启用</span></div>
+              <div class="summary-row"><span class="k">协议</span><span class="status success">服务端 v1</span></div>
+            </div>
+          </aside>
+        </div>
+
+        <section class="panel refresh-surface" data-reveal style="--reveal-delay:120ms;margin-top:16px" data-od-id="server-recent-devices">
+          <div class="panel-head"><h2>近期设备</h2><a class="btn small" href="server-devices.html">查看全部</a></div>
+          <table>
+            <thead><tr><th>设备</th><th>在线</th><th>同步</th><th>兼容性</th><th>仓库</th><th>最近心跳</th></tr></thead>
+            <tbody>
+              <tr><td>工作站 A</td><td><span class="status success">在线</span></td><td><span class="status syncing">同步中</span></td><td><span class="status success">兼容</span></td><td>主仓库</td><td class="mono">刚刚</td></tr>
+              <tr><td>笔记本 B</td><td><span class="status success">在线</span></td><td>空闲</td><td><span class="status warning">需确认</span></td><td>共享仓库</td><td class="mono">2 分钟前</td></tr>
+              <tr><td>旧电脑 C</td><td><span class="status offline">离线</span></td><td>—</td><td><span class="status danger">不兼容</span></td><td>主仓库</td><td class="mono">3 天前</td></tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="prototype.js"></script>
+  <script>
+    (function () {
+      var root = document.documentElement;
+      var content = document.getElementById('overviewContent');
+      var button = document.getElementById('refreshBtn');
+      var state = document.getElementById('refreshState');
+      var refreshTimer = 0;
+      var clearTimer = 0;
+
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          root.classList.add('motion-ready');
+        });
+      });
+
+      button.addEventListener('click', function () {
+        if (button.disabled) return;
+        window.clearTimeout(refreshTimer);
+        window.clearTimeout(clearTimer);
+        button.disabled = true;
+        button.classList.add('is-loading');
+        button.textContent = '刷新中…';
+        content.classList.add('is-refreshing');
+        content.setAttribute('aria-busy', 'true');
+        state.classList.remove('visible');
+        state.textContent = '';
+
+        refreshTimer = window.setTimeout(function () {
+          content.classList.remove('is-refreshing');
+          content.setAttribute('aria-busy', 'false');
+          button.disabled = false;
+          button.classList.remove('is-loading');
+          button.textContent = '刷新状态';
+          state.textContent = '刚刚更新';
+          state.classList.add('visible');
+
+          clearTimer = window.setTimeout(function () {
+            state.classList.remove('visible');
+          }, 2400);
+        }, 420);
+      });
+
+      window.addEventListener('pagehide', function () {
+        window.clearTimeout(refreshTimer);
+        window.clearTimeout(clearTimer);
+      }, { once: true });
+    })();
+  </script>
+</body>
+</html>

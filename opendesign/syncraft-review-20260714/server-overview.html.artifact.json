@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "opendesign/server-overview.html",
+  "entry": "opendesign/server-overview.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-07-13T08:41:32.791Z",
+  "updatedAt": "2026-07-13T08:41:32.791Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

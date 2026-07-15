@@ -1,0 +1,1401 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SFSC UI Prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #151922;
+      --muted: #5d6675;
+      --quiet: #eef2f6;
+      --line: #d9e0ea;
+      --panel: #ffffff;
+      --blue: #1b66d2;
+      --teal: #0f766e;
+      --green: #16734a;
+      --amber: #a45d00;
+      --red: #b42318;
+      --violet: #6d3fbf;
+      --shadow: 0 16px 34px rgba(31, 42, 68, 0.09);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: #f5f7fa;
+      color: var(--ink);
+      font: 14px/1.45 "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      padding: 0 12px;
+      cursor: pointer;
+    }
+
+    button.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #fff;
+    }
+
+    button.danger {
+      border-color: #f3b5af;
+      color: var(--red);
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      padding: 7px 9px;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: clamp(24px, 4vw, 36px);
+      line-height: 1.05;
+    }
+
+    h2 {
+      font-size: 18px;
+    }
+
+    h3 {
+      font-size: 14px;
+    }
+
+    code,
+    pre {
+      font-family: "Cascadia Mono", Consolas, monospace;
+    }
+
+    .prototype-shell {
+      min-height: 100vh;
+      padding: 22px;
+    }
+
+    .prototype-note {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      max-width: 1320px;
+      margin: 0 auto 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .prototype-note strong {
+      color: var(--ink);
+    }
+
+    .surface-tabs {
+      display: inline-flex;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .surface-tabs button {
+      min-height: 30px;
+      border: 0;
+      background: transparent;
+    }
+
+    .surface-tabs button.active {
+      background: var(--ink);
+      color: #fff;
+    }
+
+    .page {
+      max-width: 1320px;
+      margin: 0 auto;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .band {
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .eyebrow {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: var(--green);
+      flex: 0 0 auto;
+    }
+
+    .status-dot.warn {
+      background: var(--amber);
+    }
+
+    .status-dot.bad {
+      background: var(--red);
+    }
+
+    .pill {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      min-height: 28px;
+      max-width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      padding: 4px 10px;
+      white-space: nowrap;
+    }
+
+    .pill.good {
+      border-color: rgba(22, 115, 74, 0.25);
+      color: var(--green);
+    }
+
+    .pill.warn {
+      border-color: rgba(164, 93, 0, 0.3);
+      color: var(--amber);
+    }
+
+    .pill.bad {
+      border-color: rgba(180, 35, 24, 0.3);
+      color: var(--red);
+    }
+
+    .metric {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .metric strong {
+      overflow-wrap: anywhere;
+      font-size: 20px;
+      line-height: 1.12;
+    }
+
+    .progress-track {
+      height: 10px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #e8edf4;
+    }
+
+    .progress-fill {
+      width: 68%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--teal), var(--blue));
+    }
+
+    .command-box {
+      overflow: auto;
+      max-height: 210px;
+      border: 1px solid #cfd7e3;
+      border-radius: 8px;
+      background: #121720;
+      color: #d9e5f5;
+      padding: 12px;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+
+    .variant-switcher {
+      position: fixed;
+      z-index: 20;
+      left: 50%;
+      bottom: 18px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transform: translateX(-50%);
+      border: 1px solid rgba(21, 25, 34, 0.18);
+      border-radius: 999px;
+      background: rgba(21, 25, 34, 0.94);
+      color: #fff;
+      padding: 7px;
+      box-shadow: 0 14px 40px rgba(0, 0, 0, 0.22);
+    }
+
+    .variant-switcher button {
+      width: 36px;
+      min-height: 32px;
+      border-color: rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+      padding: 0;
+    }
+
+    .variant-label {
+      min-width: min(360px, 52vw);
+      text-align: center;
+      font-size: 13px;
+    }
+
+    /* Variant A */
+    .ops-frame {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr) 320px;
+      min-height: calc(100vh - 92px);
+      overflow: hidden;
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+
+    .ops-rail {
+      display: grid;
+      align-content: start;
+      gap: 16px;
+      border-right: 1px solid var(--line);
+      background: #fbfcfe;
+      padding: 18px;
+    }
+
+    .ops-brand {
+      display: grid;
+      gap: 7px;
+    }
+
+    .ops-nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .ops-nav button {
+      justify-content: start;
+      border: 0;
+      background: transparent;
+      text-align: left;
+    }
+
+    .ops-nav button.active {
+      background: #e8f0ff;
+      color: var(--blue);
+    }
+
+    .ops-main {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      min-width: 0;
+    }
+
+    .ops-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: start;
+      padding: 20px 22px 18px;
+    }
+
+    .ops-header p {
+      max-width: 690px;
+      margin-top: 8px;
+      color: var(--muted);
+    }
+
+    .ops-status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .ops-command {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: end;
+      padding: 0 22px 18px;
+    }
+
+    .ops-command label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .ops-sync-card {
+      display: grid;
+      gap: 18px;
+      margin: 0 22px 22px;
+      padding: 18px;
+    }
+
+    .ops-metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .ops-current-file {
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
+      align-items: center;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 12px;
+    }
+
+    .ops-current-file code {
+      overflow-wrap: anywhere;
+    }
+
+    .ops-side {
+      display: grid;
+      align-content: start;
+      gap: 14px;
+      border-left: 1px solid var(--line);
+      background: #fbfcfe;
+      padding: 18px;
+    }
+
+    .ops-side-section {
+      display: grid;
+      gap: 10px;
+    }
+
+    .ops-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .ops-list-item {
+      display: grid;
+      gap: 3px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+    }
+
+    .ops-list-item small {
+      color: var(--muted);
+    }
+
+    /* Variant B */
+    .guide-page {
+      display: grid;
+      gap: 18px;
+    }
+
+    .guide-hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+      gap: 24px;
+      align-items: stretch;
+      padding: 24px;
+      border-radius: 12px;
+      background: #ffffff;
+      box-shadow: var(--shadow);
+    }
+
+    .guide-title {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .guide-title p {
+      max-width: 720px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .guide-state {
+      display: grid;
+      gap: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 14px;
+    }
+
+    .guide-steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .step {
+      display: grid;
+      gap: 8px;
+      min-height: 126px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      padding: 14px;
+    }
+
+    .step.active {
+      border-color: rgba(27, 102, 210, 0.4);
+      background: #f4f8ff;
+    }
+
+    .step-index {
+      display: inline-grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      background: var(--quiet);
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .step.active .step-index {
+      background: var(--blue);
+      color: #fff;
+    }
+
+    .guide-work {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 18px;
+    }
+
+    .guide-form {
+      display: grid;
+      gap: 14px;
+      padding: 18px;
+    }
+
+    .guide-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .guide-form label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .guide-review {
+      display: grid;
+      gap: 12px;
+      padding: 18px;
+    }
+
+    .review-row {
+      display: grid;
+      grid-template-columns: minmax(96px, 0.4fr) minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 9px;
+    }
+
+    .review-row span {
+      color: var(--muted);
+    }
+
+    .review-row strong,
+    .review-row code {
+      overflow-wrap: anywhere;
+    }
+
+    /* Variant C */
+    .signal-page {
+      display: grid;
+      gap: 16px;
+    }
+
+    .signal-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: center;
+      padding: 22px;
+      border-radius: 12px;
+      background: #ffffff;
+      box-shadow: var(--shadow);
+    }
+
+    .signal-kpis {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .signal-kpi {
+      display: grid;
+      gap: 4px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+    }
+
+    .signal-kpi strong {
+      font-size: 22px;
+      line-height: 1;
+    }
+
+    .signal-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+      gap: 16px;
+    }
+
+    .signal-stack {
+      display: grid;
+      gap: 16px;
+    }
+
+    .signal-panel {
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 0;
+    }
+
+    .timeline-row {
+      display: grid;
+      grid-template-columns: 110px minmax(0, 1fr);
+      gap: 12px;
+      border-left: 2px solid var(--line);
+      margin-left: 8px;
+      padding: 0 0 16px 16px;
+      position: relative;
+    }
+
+    .timeline-row::before {
+      content: "";
+      position: absolute;
+      left: -7px;
+      top: 3px;
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: var(--blue);
+    }
+
+    .timeline-row.warn::before {
+      background: var(--amber);
+    }
+
+    .timeline-row.bad::before {
+      background: var(--red);
+    }
+
+    .matrix {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .matrix-cell {
+      min-height: 112px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+    }
+
+    .matrix-cell strong {
+      display: block;
+      margin-bottom: 8px;
+    }
+
+    .matrix-cell p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 1100px) {
+      .ops-frame,
+      .guide-work,
+      .signal-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .ops-side {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .ops-rail {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .guide-hero {
+        grid-template-columns: 1fr;
+      }
+
+      .signal-kpis,
+      .ops-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 760px) {
+      .prototype-shell {
+        padding: 12px;
+      }
+
+      .prototype-note,
+      .ops-header,
+      .signal-header {
+        align-items: stretch;
+        flex-direction: column;
+        grid-template-columns: 1fr;
+      }
+
+      .surface-tabs {
+        width: 100%;
+      }
+
+      .surface-tabs button {
+        flex: 1;
+      }
+
+      .ops-frame {
+        border-radius: 8px;
+      }
+
+      .ops-command,
+      .guide-grid,
+      .guide-steps,
+      .signal-kpis,
+      .matrix {
+        grid-template-columns: 1fr;
+      }
+
+      .ops-metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .variant-label {
+        min-width: 0;
+        max-width: 48vw;
+      }
+    }
+    /* Pixel skin inspired by Streamline Pixel's 32 px grid language.
+       No Streamline assets are copied here; these are local CSS sprites/placeholders. */
+    :root {
+      --pixel-ink: #111827;
+      --pixel-paper: #fffdf4;
+      --pixel-blue: #2457ff;
+      --pixel-cyan: #1aa7a1;
+      --pixel-lime: #48a23f;
+      --pixel-yellow: #f1b23b;
+      --pixel-red: #d33b2f;
+      --pixel-shadow: #1f2937;
+    }
+
+    body {
+      background:
+        linear-gradient(90deg, rgba(17, 24, 39, 0.06) 1px, transparent 1px),
+        linear-gradient(rgba(17, 24, 39, 0.06) 1px, transparent 1px),
+        #f5f0df;
+      background-size: 16px 16px;
+      font-family: "MS Gothic", "Cascadia Mono", "Courier New", "Microsoft YaHei", monospace;
+      image-rendering: pixelated;
+    }
+
+    h1 {
+      font-size: clamp(24px, 4vw, 34px);
+      text-shadow: 3px 3px 0 #d9e1ff;
+    }
+
+    button,
+    input,
+    select,
+    textarea,
+    .panel,
+    .pill,
+    .surface-tabs,
+    .command-box,
+    .ops-frame,
+    .guide-hero,
+    .signal-header,
+    .ops-list-item,
+    .step,
+    .matrix-cell,
+    .signal-kpi,
+    .guide-state,
+    .ops-current-file {
+      border: 3px solid var(--pixel-ink);
+      border-radius: 0;
+    }
+
+    button,
+    .panel,
+    .surface-tabs,
+    .ops-frame,
+    .guide-hero,
+    .signal-header,
+    .ops-list-item,
+    .step,
+    .matrix-cell,
+    .signal-kpi,
+    .guide-state,
+    .ops-current-file {
+      box-shadow: 4px 4px 0 rgba(17, 24, 39, 0.22);
+    }
+
+    button {
+      background: var(--pixel-paper);
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    button.primary {
+      border-color: var(--pixel-ink);
+      background: var(--pixel-blue);
+      color: #fff;
+    }
+
+    button.danger {
+      border-color: var(--pixel-ink);
+      background: #ffe2dc;
+      color: var(--pixel-red);
+    }
+
+    input,
+    select,
+    textarea,
+    .panel,
+    .pill,
+    .signal-kpi,
+    .matrix-cell,
+    .step,
+    .ops-list-item {
+      background: var(--pixel-paper);
+    }
+
+    .prototype-note {
+      border: 3px solid var(--pixel-ink);
+      background: var(--pixel-paper);
+      padding: 8px 10px;
+      box-shadow: 4px 4px 0 var(--pixel-shadow);
+    }
+
+    .prototype-note strong::before {
+      content: "";
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 6px;
+      background: var(--pixel-blue);
+      box-shadow:
+        8px 0 0 var(--pixel-cyan),
+        16px 0 0 var(--pixel-yellow),
+        0 8px 0 var(--pixel-lime),
+        8px 8px 0 var(--pixel-ink),
+        16px 8px 0 var(--pixel-red);
+      vertical-align: -1px;
+    }
+
+    .surface-tabs button {
+      border: 0;
+      box-shadow: none;
+    }
+
+    .surface-tabs button.active {
+      background: var(--pixel-ink);
+      color: #fff;
+    }
+
+    .status-dot,
+    .step-index,
+    .timeline-row::before,
+    .progress-track,
+    .progress-fill,
+    .variant-switcher {
+      border-radius: 0;
+    }
+
+    .status-dot {
+      box-shadow: 2px 2px 0 var(--pixel-ink);
+    }
+
+    .pill {
+      box-shadow: 3px 3px 0 rgba(17, 24, 39, 0.14);
+    }
+
+    .progress-track {
+      border: 3px solid var(--pixel-ink);
+      background: #fff;
+      height: 16px;
+    }
+
+    .progress-fill {
+      background:
+        repeating-linear-gradient(90deg, var(--pixel-cyan) 0 14px, var(--pixel-blue) 14px 28px);
+    }
+
+    .ops-frame,
+    .guide-hero,
+    .signal-header {
+      border-width: 4px;
+      background: var(--pixel-paper);
+      box-shadow: 10px 10px 0 var(--pixel-shadow);
+      position: relative;
+    }
+
+    .ops-rail {
+      background:
+        linear-gradient(90deg, rgba(36, 87, 255, 0.08) 1px, transparent 1px),
+        linear-gradient(rgba(36, 87, 255, 0.08) 1px, transparent 1px),
+        #fff7d8;
+      background-size: 8px 8px;
+    }
+
+    .ops-side {
+      background:
+        linear-gradient(90deg, rgba(26, 167, 161, 0.08) 1px, transparent 1px),
+        linear-gradient(rgba(26, 167, 161, 0.08) 1px, transparent 1px),
+        #effff6;
+      background-size: 8px 8px;
+    }
+
+    .ops-nav button {
+      border: 0;
+      box-shadow: none;
+    }
+
+    .ops-nav button.active {
+      border: 3px solid var(--pixel-ink);
+      background: #dbe8ff;
+      box-shadow: 3px 3px 0 var(--pixel-shadow);
+    }
+
+    .guide-state,
+    .ops-current-file {
+      background: #fff7d8;
+    }
+
+    .step.active {
+      border-color: var(--pixel-ink);
+      background: #dbe8ff;
+    }
+
+    .step-index {
+      border: 3px solid var(--pixel-ink);
+      background: #fff;
+    }
+
+    .step.active .step-index {
+      background: var(--pixel-blue);
+      color: #fff;
+    }
+
+    .variant-switcher {
+      border: 3px solid var(--pixel-ink);
+      background: rgba(17, 24, 39, 0.98);
+      box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.45);
+    }
+
+    .variant-switcher button {
+      border: 2px solid rgba(255, 255, 255, 0.32);
+      background: rgba(255, 255, 255, 0.08);
+      box-shadow: none;
+    }
+
+    .ops-brand::before,
+    .guide-title::before,
+    .signal-header::before {
+      content: "";
+      display: block;
+      width: 32px;
+      height: 32px;
+      margin-bottom: 8px;
+      background:
+        linear-gradient(var(--pixel-ink), var(--pixel-ink)) 8px 4px / 16px 4px no-repeat,
+        linear-gradient(var(--pixel-ink), var(--pixel-ink)) 4px 8px / 24px 4px no-repeat,
+        linear-gradient(var(--pixel-blue), var(--pixel-blue)) 4px 12px / 24px 12px no-repeat,
+        linear-gradient(var(--pixel-cyan), var(--pixel-cyan)) 8px 16px / 16px 8px no-repeat,
+        linear-gradient(var(--pixel-ink), var(--pixel-ink)) 4px 24px / 24px 4px no-repeat;
+      image-rendering: pixelated;
+    }
+
+    .guide-title::before {
+      background:
+        linear-gradient(var(--pixel-ink), var(--pixel-ink)) 4px 4px / 24px 4px no-repeat,
+        linear-gradient(var(--pixel-yellow), var(--pixel-yellow)) 8px 8px / 16px 8px no-repeat,
+        linear-gradient(var(--pixel-ink), var(--pixel-ink)) 4px 16px / 24px 4px no-repeat,
+        linear-gradient(var(--pixel-lime), var(--pixel-lime)) 12px 20px / 8px 8px no-repeat,
+        linear-gradient(var(--pixel-ink), var(--pixel-ink)) 8px 28px / 16px 4px no-repeat;
+    }
+
+    .signal-header::before {
+      background:
+        linear-gradient(var(--pixel-ink), var(--pixel-ink)) 4px 24px / 24px 4px no-repeat,
+        linear-gradient(var(--pixel-red), var(--pixel-red)) 4px 16px / 6px 8px no-repeat,
+        linear-gradient(var(--pixel-yellow), var(--pixel-yellow)) 13px 10px / 6px 14px no-repeat,
+        linear-gradient(var(--pixel-lime), var(--pixel-lime)) 22px 4px / 6px 20px no-repeat,
+        linear-gradient(var(--pixel-ink), var(--pixel-ink)) 2px 2px / 4px 4px no-repeat,
+        linear-gradient(var(--pixel-ink), var(--pixel-ink)) 26px 2px / 4px 4px no-repeat;
+    }
+
+    .ops-frame::after,
+    .guide-hero::after,
+    .signal-header::after {
+      content: "32PX GRID / PIXEL ELEMENTS";
+      position: absolute;
+      right: 12px;
+      bottom: 10px;
+      color: rgba(17, 24, 39, 0.38);
+      font-size: 10px;
+      font-weight: 900;
+      pointer-events: none;
+    }
+
+    .ops-metrics .metric,
+    .review-row {
+      border-left: 4px solid var(--pixel-ink);
+      padding-left: 10px;
+    }
+
+    .timeline-row {
+      border-left: 4px solid var(--pixel-ink);
+    }
+
+    .timeline-row::before {
+      left: -10px;
+      width: 12px;
+      height: 12px;
+      border: 3px solid var(--pixel-ink);
+    }
+
+    @media (max-width: 760px) {
+      .prototype-note {
+        display: grid;
+      }
+
+      .ops-frame,
+      .guide-hero,
+      .signal-header {
+        box-shadow: 6px 6px 0 var(--pixel-shadow);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="prototype-shell">
+    <div class="prototype-note">
+      <div><strong>PROTOTYPE</strong> - SFSC UI exploration, mock data only. Use arrow keys to switch variants.</div>
+      <div class="surface-tabs" aria-label="surface switch">
+        <button id="clientSurfaceBtn" type="button">Windows Client</button>
+        <button id="serverSurfaceBtn" type="button">Server Console</button>
+      </div>
+    </div>
+    <main id="prototypeRoot" class="page"></main>
+  </div>
+
+  <nav class="variant-switcher" aria-label="prototype variant switcher">
+    <button id="prevVariant" type="button" aria-label="previous variant">&lt;</button>
+    <div id="variantLabel" class="variant-label">A</div>
+    <button id="nextVariant" type="button" aria-label="next variant">&gt;</button>
+  </nav>
+
+  <script>
+    const variants = [
+      { key: "A", name: "Operations workspace" },
+      { key: "B", name: "Guided flow" },
+      { key: "C", name: "Signal board" }
+    ];
+
+    const data = {
+      client: {
+        title: "Syncraft",
+        subtitle: "同步只作用于 rclone 进程。本机代理、路由、DNS、TUN 均保持不变。",
+        status: [
+          ["组件正常", "good"],
+          ["Profile 已导入", "good"],
+          ["隧道运行中", "good"],
+          ["心跳 12 秒前", "good"],
+          ["同步中", "warn"]
+        ],
+        metrics: [
+          ["当前速度", "67.1 Mbps"],
+          ["整体进度", "68%"],
+          ["已传输", "512 MiB / 752 MiB"],
+          ["下次计划", "今天 18:00"]
+        ],
+        file: "projects/video-pack/launch-demo.iso",
+        actions: ["保存任务", "开始同步", "停止同步"],
+        form: {
+          localPath: "D:\\Work\\Projects",
+          direction: "上传",
+          schedule: "每 30 分钟",
+          transfers: "4",
+          streams: "8"
+        },
+        side: [
+          ["协议兼容", "本机/服务端协议一致，syncRun allow"],
+          ["发布包", "0.1.0 · manifest 完整 · 合同文档已登记"],
+          ["密钥库", "4 个引用，0 个缺失"],
+          ["最近同步", "成功 2 次，停止 1 次，冲突 0 项"]
+        ],
+        history: [
+          ["17:42", "上传 projects/video.iso", "67.1 Mbps · 68%"],
+          ["17:20", "保存任务", "计划每 30 分钟"],
+          ["17:18", "导入 SyncKey", "company-pc1 · home-sync"]
+        ]
+      },
+      server: {
+        title: "同步服务端控制台",
+        subtitle: "管理 VLESS、同步仓库、设备 SyncKey、在线设备和双端协议兼容性。",
+        status: [
+          ["服务在线", "good"],
+          ["管理 token 已启用", "good"],
+          ["配置待重启", "warn"],
+          ["2 台在线", "good"],
+          ["1 个警告", "warn"]
+        ],
+        metrics: [
+          ["在线设备", "2 / 4"],
+          ["默认仓库", "home-sync"],
+          ["SyncKey", "3 未使用"],
+          ["协议", "v1 aligned"]
+        ],
+        file: "company-pc1 · devices/company-pc1/projects/current.iso",
+        actions: ["生成配置", "生成 SyncKey", "刷新设备"],
+        form: {
+          localPath: "pass.971223.xyz:45678",
+          direction: "VLESS REALITY TCP",
+          schedule: "SyncKey 24 小时",
+          transfers: "home-sync",
+          streams: "company-pc1"
+        },
+        side: [
+          ["VLESS", "REALITY TCP · publicHost pass.971223.xyz"],
+          ["仓库", "home-sync 启用，archive 已停用"],
+          ["设备", "company-pc1 在线，office-pc 离线"],
+          ["安全", "private key 已遮罩，危险操作需确认"]
+        ],
+        history: [
+          ["17:43", "company-pc1 心跳", "67.1 Mbps · syncing"],
+          ["17:32", "生成 SyncKey", "office-pc · 24 小时有效"],
+          ["17:11", "写入 sing-box 配置", "等待重启生效"]
+        ]
+      }
+    };
+
+    const root = document.getElementById("prototypeRoot");
+    const label = document.getElementById("variantLabel");
+    const clientSurfaceBtn = document.getElementById("clientSurfaceBtn");
+    const serverSurfaceBtn = document.getElementById("serverSurfaceBtn");
+
+    function stateFromUrl() {
+      const params = new URLSearchParams(location.search);
+      const variant = variants.some((item) => item.key === params.get("variant")) ? params.get("variant") : "A";
+      const surface = params.get("surface") === "server" ? "server" : "client";
+      return { variant, surface };
+    }
+
+    function writeUrl(next) {
+      const params = new URLSearchParams(location.search);
+      params.set("variant", next.variant);
+      params.set("surface", next.surface);
+      history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
+      render();
+    }
+
+    function cycle(delta) {
+      const current = stateFromUrl();
+      const index = variants.findIndex((item) => item.key === current.variant);
+      const nextIndex = (index + delta + variants.length) % variants.length;
+      writeUrl({ ...current, variant: variants[nextIndex].key });
+    }
+
+    document.getElementById("prevVariant").addEventListener("click", () => cycle(-1));
+    document.getElementById("nextVariant").addEventListener("click", () => cycle(1));
+    clientSurfaceBtn.addEventListener("click", () => writeUrl({ ...stateFromUrl(), surface: "client" }));
+    serverSurfaceBtn.addEventListener("click", () => writeUrl({ ...stateFromUrl(), surface: "server" }));
+    window.addEventListener("keydown", (event) => {
+      const target = event.target;
+      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+      if (event.key === "ArrowLeft") cycle(-1);
+      if (event.key === "ArrowRight") cycle(1);
+    });
+
+    function render() {
+      const current = stateFromUrl();
+      const model = data[current.surface];
+      const variant = variants.find((item) => item.key === current.variant);
+      label.textContent = `${variant.key} — ${variant.name}`;
+      clientSurfaceBtn.classList.toggle("active", current.surface === "client");
+      serverSurfaceBtn.classList.toggle("active", current.surface === "server");
+      root.innerHTML = current.variant === "A"
+        ? renderOps(model, current.surface)
+        : current.variant === "B"
+          ? renderGuide(model, current.surface)
+          : renderSignal(model, current.surface);
+    }
+
+    function renderPills(items) {
+      return items.map(([text, tone]) => `<span class="pill ${tone || ""}"><i class="status-dot ${tone === "bad" ? "bad" : tone === "warn" ? "warn" : ""}"></i>${escapeHtml(text)}</span>`).join("");
+    }
+
+    function renderMetrics(items) {
+      return items.map(([labelText, value]) => `
+        <div class="metric">
+          <span>${escapeHtml(labelText)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </div>
+      `).join("");
+    }
+
+    function renderOps(model, surface) {
+      const nouns = surface === "client"
+        ? ["同步任务", "设置", "诊断", "同步历史"]
+        : ["总览", "VLESS", "仓库", "设备"];
+      return `
+        <section class="ops-frame" data-variant="A">
+          <aside class="ops-rail">
+            <div class="ops-brand">
+              <div class="eyebrow">${surface === "client" ? "WINDOWS CLIENT" : "SFSC SERVER"}</div>
+              <h2>${escapeHtml(model.title)}</h2>
+              <p class="muted">${escapeHtml(model.subtitle)}</p>
+            </div>
+            <nav class="ops-nav">
+              ${nouns.map((item, index) => `<button class="${index === 0 ? "active" : ""}" type="button">${item}</button>`).join("")}
+            </nav>
+            <div class="ops-list">
+              ${model.side.slice(0, 2).map(([title, body]) => `<div class="ops-list-item"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(body)}</small></div>`).join("")}
+            </div>
+          </aside>
+          <section class="ops-main">
+            <header class="ops-header">
+              <div>
+                <div class="eyebrow">OPERATIONS WORKSPACE</div>
+                <h1>${surface === "client" ? "同步任务正在运行" : "服务端需要一次重启确认"}</h1>
+                <p>${escapeHtml(model.subtitle)}</p>
+              </div>
+              <div class="ops-status">${renderPills(model.status)}</div>
+            </header>
+            <div class="ops-command">
+              <label>${surface === "client" ? "本地文件夹" : "公网入口"}<input value="${escapeAttr(model.form.localPath)}"></label>
+              <div class="ops-status">${model.actions.map((item, index) => `<button class="${index === 1 ? "primary" : ""}" type="button">${escapeHtml(item)}</button>`).join("")}</div>
+            </div>
+            <section class="ops-sync-card panel">
+              <div class="ops-metrics">${renderMetrics(model.metrics)}</div>
+              <div class="progress-track"><div class="progress-fill"></div></div>
+              <div class="ops-current-file">
+                <div>
+                  <span class="muted">${surface === "client" ? "当前文件" : "当前设备摘要"}</span><br>
+                  <code>${escapeHtml(model.file)}</code>
+                </div>
+                <span class="pill warn">${surface === "client" ? "ETA 3m 20s" : "restartRequired true"}</span>
+              </div>
+            </section>
+          </section>
+          <aside class="ops-side">
+            <section class="ops-side-section">
+              <h3>现场状态</h3>
+              <div class="ops-list">
+                ${model.side.map(([title, body]) => `<div class="ops-list-item"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(body)}</small></div>`).join("")}
+              </div>
+            </section>
+            <section class="ops-side-section">
+              <h3>最近事件</h3>
+              <div class="ops-list">
+                ${model.history.map(([time, title, body]) => `<div class="ops-list-item"><small>${time}</small><strong>${escapeHtml(title)}</strong><small>${escapeHtml(body)}</small></div>`).join("")}
+              </div>
+            </section>
+          </aside>
+        </section>
+      `;
+    }
+
+    function renderGuide(model, surface) {
+      const steps = surface === "client"
+        ? [["导入", "粘贴一次性 SyncKey"], ["选择", "确认本地文件夹"], ["同步", "设置方向和线程"], ["诊断", "查看历史和日志"]]
+        : [["入口", "确认公网和协议"], ["仓库", "选择 bucket"], ["设备", "生成一次性 SyncKey"], ["观察", "查看心跳和兼容性"]];
+      return `
+        <section class="guide-page" data-variant="B">
+          <header class="guide-hero">
+            <div class="guide-title">
+              <div class="eyebrow">GUIDED FLOW</div>
+              <h1>${surface === "client" ? "把同步做成四步向导" : "把管理台做成发码流程"}</h1>
+              <p>${surface === "client" ? "适合普通 Windows 用户，主界面只保留下一步动作，高级诊断收进右侧复核区。" : "适合管理员第一次配置时使用：从服务入口一路走到设备 SyncKey，再回到在线设备观察。"}</p>
+              <div class="ops-status">${renderPills(model.status.slice(0, 4))}</div>
+            </div>
+            <aside class="guide-state">
+              <h2>${surface === "client" ? "当前任务复核" : "本次 SyncKey 复核"}</h2>
+              ${Object.entries(model.form).map(([key, value]) => `<div class="review-row"><span>${labelFor(key)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}
+            </aside>
+          </header>
+          <section class="guide-steps">
+            ${steps.map(([title, body], index) => `
+              <div class="step ${index === 2 ? "active" : ""}">
+                <span class="step-index">${index + 1}</span>
+                <h2>${escapeHtml(title)}</h2>
+                <p class="muted">${escapeHtml(body)}</p>
+              </div>
+            `).join("")}
+          </section>
+          <section class="guide-work">
+            <form class="guide-form panel">
+              <div>
+                <div class="eyebrow">${surface === "client" ? "SYNC SETUP" : "CLAIM SETUP"}</div>
+                <h2>${surface === "client" ? "同步参数" : "生成 SyncKey"}</h2>
+              </div>
+              <div class="guide-grid">
+                <label>${surface === "client" ? "文件夹" : "设备名"}<input value="${surface === "client" ? "D:\\Work\\Projects" : "company-pc1"}"></label>
+                <label>${surface === "client" ? "方向" : "仓库"}<select><option>${surface === "client" ? "上传" : "home-sync"}</option></select></label>
+                <label>${surface === "client" ? "计划" : "有效期"}<select><option>${surface === "client" ? "每 30 分钟" : "24 小时"}</option></select></label>
+                <label>并行文件<input value="4"></label>
+                <label>单文件线程<input value="8"></label>
+                <label>${surface === "client" ? "带宽限制" : "默认策略"}<select><option>${surface === "client" ? "不限速" : "手动"}</option></select></label>
+              </div>
+              <div class="ops-status">
+                <button type="button">保存</button>
+                <button class="primary" type="button">${surface === "client" ? "开始同步" : "生成 SyncKey"}</button>
+                <button type="button">${surface === "client" ? "生成预览" : "测试兑换"}</button>
+              </div>
+            </form>
+            <aside class="guide-review panel">
+              <div>
+                <div class="eyebrow">REVIEW</div>
+                <h2>${surface === "client" ? "运行前检查" : "发布前检查"}</h2>
+              </div>
+              ${model.side.map(([title, body]) => `<div class="review-row"><span>${escapeHtml(title)}</span><strong>${escapeHtml(body)}</strong></div>`).join("")}
+              <pre class="command-box">${surface === "client" ? "$env:ALL_PROXY=\"socks5://127.0.0.1:18081\"\nrclone copy D:\\Work\\Projects home-minio:home-sync/devices/company-pc1 -P --transfers 4" : "SyncKey: SFSC1-eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY2xhaW0i...\nURI: sfsc://import/v1#eyJ2ZXJzaW9uIjox..."}</pre>
+            </aside>
+          </section>
+        </section>
+      `;
+    }
+
+    function renderSignal(model, surface) {
+      return `
+        <section class="signal-page" data-variant="C">
+          <header class="signal-header">
+            <div>
+              <div class="eyebrow">SIGNAL BOARD</div>
+              <h1>${surface === "client" ? "一屏判断同步是否健康" : "一屏判断服务是否可发码"}</h1>
+              <p class="muted">${escapeHtml(model.subtitle)}</p>
+            </div>
+            <div class="ops-status">${model.actions.map((item, index) => `<button class="${index === 1 ? "primary" : ""}" type="button">${escapeHtml(item)}</button>`).join("")}</div>
+          </header>
+          <section class="signal-kpis">
+            ${model.metrics.concat([["风险", surface === "client" ? "0 blocking" : "1 restart"]]).map(([labelText, value]) => `<div class="signal-kpi"><span class="muted">${escapeHtml(labelText)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}
+          </section>
+          <section class="signal-grid">
+            <div class="signal-stack">
+              <section class="signal-panel panel">
+                <h2>${surface === "client" ? "同步时间线" : "设备时间线"}</h2>
+                <div class="timeline">
+                  ${model.history.map(([time, title, body], index) => `<div class="timeline-row ${index === 1 ? "warn" : ""}"><span class="muted">${time}</span><div><strong>${escapeHtml(title)}</strong><p class="muted">${escapeHtml(body)}</p></div></div>`).join("")}
+                </div>
+              </section>
+              <section class="signal-panel panel">
+                <h2>当前流量路径</h2>
+                <div class="matrix">
+                  <div class="matrix-cell"><strong>${surface === "client" ? "本地文件夹" : "公网入口"}</strong><p>${escapeHtml(model.form.localPath)}</p></div>
+                  <div class="matrix-cell"><strong>${surface === "client" ? "进程代理" : "VLESS 入站"}</strong><p>${surface === "client" ? "Only rclone uses SOCKS 127.0.0.1:18081" : "sing-box inbound, mux disabled"}</p></div>
+                  <div class="matrix-cell"><strong>MinIO/S3</strong><p>home-minio:home-sync/devices/company-pc1</p></div>
+                </div>
+              </section>
+            </div>
+            <section class="signal-panel panel">
+              <h2>${surface === "client" ? "状态矩阵" : "运维矩阵"}</h2>
+              <div class="matrix">
+                ${model.side.concat(model.status.map(([text, tone]) => [text, tone === "good" ? "正常" : tone === "warn" ? "需要确认" : "异常"])).map(([title, body]) => `<div class="matrix-cell"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(body)}</p></div>`).join("")}
+              </div>
+            </section>
+          </section>
+        </section>
+      `;
+    }
+
+    function labelFor(key) {
+      return {
+        localPath: "入口",
+        direction: "模式",
+        schedule: "计划",
+        transfers: "仓库",
+        streams: "设备"
+      }[key] || key;
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#39;"
+      }[char]));
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value).replace(/`/g, "&#96;");
+    }
+
+    render();
+  </script>
+</body>
+</html>

@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows-client-release:
+    name: Build Windows client release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Ensure bundled client binaries
+        shell: pwsh
+        run: pnpm run client:download-binaries
+
+      - name: Build Electron desktop package
+        shell: pwsh
+        run: pnpm run client:desktop-package
+
+      - name: Build portable Node client package
+        shell: pwsh
+        run: pnpm run client:package
+
+      - name: Strict release preflight
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/preflight-release.ps1 -ReportPath reports/release/preflight.txt -JsonReportPath reports/release/preflight.json
+
+      - name: Assert release preflight JSON
+        shell: pwsh
+        run: |
+          $report = Get-Content -LiteralPath reports/release/preflight.json -Raw | ConvertFrom-Json
+          if ($report.releaseOk -ne $true) {
+            throw "Release preflight did not set releaseOk=true."
+          }
+          if ($report.summary.failed -ne 0 -or $report.summary.skipped -ne 0) {
+            throw "Release preflight must have failed=0 and skipped=0."
+          }
+          $smokeReports = @($report.clientPackageSmokeReports)
+          if ($smokeReports.Count -ne 2) {
+            throw "Release preflight must include desktop and portable client package smoke reports."
+          }
+          foreach ($item in $smokeReports) {
+            if ($item.exists -ne $true -or $item.ok -ne $true) {
+              throw "Client package smoke report was missing or failed: $($item.path)"
+            }
+          }
+
+      - name: Build release bundle
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release-bundle.ps1 -SkipPreflight -PreflightReportPath reports/release/preflight.txt -PreflightJsonReportPath reports/release/preflight.json
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sfsc-windows-client-release
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist/SyncraftDesktop.zip
+            dist/SyncraftDesktop.zip.sha256
+            dist/SyncraftDesktop/release-manifest.json
+            dist/SyncraftClient.zip
+            dist/SyncraftClient.zip.sha256
+            dist/SyncraftClient/release-manifest.json
+            dist/release-bundles/**
+            reports/release/**

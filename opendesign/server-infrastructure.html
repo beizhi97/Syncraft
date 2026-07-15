@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SFSC 管理控制台 · 基础设置</title>
+  <link rel="stylesheet" href="prototype.css">
+  <style>
+    .settings-tab {
+      border: 0;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      cursor: pointer;
+      font: inherit;
+    }
+    .settings-tab.active { border-bottom-color: var(--accent); }
+    .settings-view[hidden] { display: none; }
+    .settings-form-actions { margin-top: 2px; }
+    .repository-name { font-weight: 550; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" data-od-id="server-settings-sidebar">
+      <div class="brand"><span class="brand-mark">SF</span><strong>SFSC 管理</strong></div>
+      <div class="nav-label">运行</div>
+      <a class="nav-item" href="server-overview.html"><span class="nav-dot"></span>概览</a>
+      <a class="nav-item" href="server-tkey.html"><span class="nav-dot"></span>T-key</a>
+      <a class="nav-item" href="server-devices.html"><span class="nav-dot"></span>设备</a>
+      <div class="nav-label">配置</div>
+      <a class="nav-item active" href="server-infrastructure.html"><span class="nav-dot"></span>基础设置</a>
+      <div class="sidebar-foot"><div class="status success">服务端在线</div></div>
+    </aside>
+
+    <main class="main" data-od-id="server-settings-main">
+      <header class="topbar" data-od-id="server-settings-topbar">
+        <span class="crumb">基础设置</span>
+        <div class="top-actions"><span class="status success">服务端在线</span></div>
+      </header>
+
+      <div class="content">
+        <div class="page-head">
+          <div><h1 data-od-id="server-settings-title">基础设置</h1></div>
+        </div>
+
+        <div class="tabs" role="tablist" aria-label="基础设置分类" data-od-id="settings-tabs">
+          <button id="tab-vless" class="tab settings-tab active" type="button" role="tab" aria-selected="true" aria-controls="settings-vless" tabindex="0">VLESS</button>
+          <button id="tab-storage" class="tab settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-storage" tabindex="-1">存储连接</button>
+          <button id="tab-repositories" class="tab settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-repositories" tabindex="-1">同步仓库</button>
+        </div>
+
+        <section id="settings-vless" class="settings-view" role="tabpanel" aria-labelledby="tab-vless">
+        <div class="split" style="margin-top:16px">
+          <section class="panel" data-od-id="vless-config-panel">
+            <div class="panel-head">
+              <h2>VLESS 服务配置</h2>
+              <span class="status warning">已修改，待应用</span>
+            </div>
+            <div class="panel-body stack">
+              <div class="grid-3">
+                <div class="field"><label>协议</label><select><option>VLESS + REALITY</option></select></div>
+                <div class="field"><label>公网端口</label><input class="input" value="443"></div>
+                <div class="field"><label>监听端口</label><input class="input" value="8443"></div>
+              </div>
+              <div class="grid-2">
+                <div class="field"><label>公网地址</label><input class="input" value="sync.example.invalid"></div>
+                <div class="field"><label>SNI</label><input class="input" value="example.invalid"></div>
+              </div>
+              <div class="grid-2">
+                <div class="field">
+                  <label>Public Key</label>
+                  <div class="input-row">
+                    <div id="publicKey" class="input secret" data-hidden="true" data-value="示例公钥内容">••••••••••••</div>
+                    <button class="btn" data-secret-toggle="publicKey">显示</button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Private Key</label>
+                  <div class="input-row">
+                    <div id="privateKey" class="input secret" data-hidden="true" data-value="示例私钥内容">••••••••••••</div>
+                    <button class="btn" data-secret-toggle="privateKey">显示</button>
+                  </div>
+                </div>
+              </div>
+              <div class="btn-row">
+                <button class="btn" data-toast="字段已自动补全">自动补全</button>
+                <button class="btn" data-toast="已生成脱敏配置预览">生成配置预览</button>
+                <span class="spacer"></span>
+                <button class="btn primary" data-open-modal="applyModal">检查并应用…</button>
+              </div>
+            </div>
+          </section>
+
+          <aside class="stack" data-od-id="storage-settings-column">
+            <section class="panel" data-od-id="storage-connection-panel">
+              <div class="panel-head"><h2>存储连接</h2><span class="status success">可用</span></div>
+              <div class="panel-body summary-list">
+                <div class="summary-row"><span class="k">Endpoint</span><span class="truncate">https://storage.example.invalid</span></div>
+                <div class="summary-row"><span class="k">Access Key</span><span class="secret">••••••••</span></div>
+                <div class="summary-row"><span class="k">Secret Key</span><span class="secret">••••••••</span></div>
+                <div class="summary-row"><span class="k">连接检查</span><span class="status success">通过</span></div>
+                <div style="padding-top:12px"><button class="btn small" type="button" data-switch-tab="tab-storage">编辑连接</button></div>
+              </div>
+            </section>
+
+            <section class="panel" data-od-id="repository-settings-panel">
+              <div class="panel-head"><h2>同步仓库</h2><span>2 个启用</span></div>
+              <div class="panel-body summary-list">
+                <div class="summary-row"><span class="k">主仓库</span><span class="status success">启用</span></div>
+                <div class="summary-row"><span class="k">共享仓库</span><span class="status success">启用</span></div>
+                <div style="padding-top:12px"><button class="btn small" type="button" data-switch-tab="tab-repositories">管理仓库</button></div>
+              </div>
+            </section>
+          </aside>
+        </div>
+        </section>
+
+        <section id="settings-storage" class="settings-view" role="tabpanel" aria-labelledby="tab-storage" hidden>
+          <div class="split" style="margin-top:16px">
+            <section class="panel" data-od-id="storage-edit-panel">
+              <div class="panel-head">
+                <h2>存储连接</h2>
+                <span class="status success">连接正常</span>
+              </div>
+              <div class="panel-body stack">
+                <div class="field">
+                  <label for="storageEndpoint">Endpoint</label>
+                  <input id="storageEndpoint" class="input" type="url" value="https://storage.example.invalid">
+                </div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label for="storageAccessKey">Access Key</label>
+                    <input id="storageAccessKey" class="input secret" type="password" placeholder="保留当前值" autocomplete="off">
+                  </div>
+                  <div class="field">
+                    <label for="storageSecretKey">Secret Key</label>
+                    <input id="storageSecretKey" class="input secret" type="password" placeholder="保留当前值" autocomplete="new-password">
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label for="storageBucket">默认仓库</label>
+                    <select id="storageBucket"><option>主仓库</option><option>共享仓库</option></select>
+                  </div>
+                  <div class="field">
+                    <label for="storageInternalEndpoint">内部 Endpoint</label>
+                    <input id="storageInternalEndpoint" class="input" type="url" placeholder="未配置">
+                  </div>
+                </div>
+                <div class="btn-row settings-form-actions">
+                  <button class="btn" type="button" data-toast="存储连接检查通过">测试连接</button>
+                  <span class="spacer"></span>
+                  <button class="btn primary" type="button" data-toast="存储连接设置已保存">保存连接</button>
+                </div>
+              </div>
+            </section>
+
+            <aside class="panel" data-od-id="storage-health-panel">
+              <div class="panel-head"><h2>连接状态</h2></div>
+              <div class="panel-body summary-list">
+                <div class="summary-row"><span class="k">服务</span><span class="status success">可访问</span></div>
+                <div class="summary-row"><span class="k">默认仓库</span><span>主仓库</span></div>
+                <div class="summary-row"><span class="k">密钥</span><span class="status success">已保存</span></div>
+                <div class="summary-row"><span class="k">最近检查</span><span>刚刚</span></div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="settings-repositories" class="settings-view" role="tabpanel" aria-labelledby="tab-repositories" hidden>
+          <section class="panel" style="margin-top:16px" data-od-id="repository-management-panel">
+            <div class="panel-head">
+              <h2>同步仓库</h2>
+              <div class="btn-row">
+                <button class="btn small" type="button" data-toast="仓库列表已刷新">刷新</button>
+                <button class="btn primary small" type="button" data-toast="已打开新建仓库表单">新建仓库</button>
+              </div>
+            </div>
+            <table>
+              <thead><tr><th>仓库</th><th>状态</th><th>用途</th><th>连接</th><th style="width:180px">操作</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td class="repository-name">主仓库</td>
+                  <td><span class="status success">启用</span></td>
+                  <td>设备空间</td>
+                  <td><span class="status success">正常</span></td>
+                  <td><div class="btn-row"><button class="btn small" type="button" data-toast="已打开主仓库设置">设置</button><button class="btn small" type="button" data-toast="主仓库已停用">停用</button></div></td>
+                </tr>
+                <tr>
+                  <td class="repository-name">共享仓库</td>
+                  <td><span class="status success">启用</span></td>
+                  <td>共享空间</td>
+                  <td><span class="status success">正常</span></td>
+                  <td><div class="btn-row"><button class="btn small" type="button" data-toast="已打开共享仓库设置">设置</button><button class="btn small" type="button" data-toast="共享仓库已停用">停用</button></div></td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="applyModal" class="modal">
+    <div class="dialog">
+      <div class="dialog-head"><h2>应用 VLESS 配置</h2></div>
+      <div class="dialog-body stack">
+        <div class="notice warning">
+          <strong>将短暂重启 sing-box</strong>
+          <span>在线设备可能短暂离线；正在同步的设备不建议此时应用。</span>
+        </div>
+        <div class="summary-list">
+          <div class="summary-row"><span class="k">受影响设备</span><span>3 台在线设备</span></div>
+          <div class="summary-row"><span class="k">正在同步</span><span class="status warning">1 台</span></div>
+        </div>
+      </div>
+      <div class="dialog-foot">
+        <button class="btn" data-close-modal>取消</button>
+        <button class="btn primary" data-close-modal data-toast="配置检查通过并已应用">仍要应用</button>
+      </div>
+    </div>
+  </div>
+  <script src="prototype.js"></script>
+  <script>
+    (function () {
+      var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+      var panels = Array.prototype.slice.call(document.querySelectorAll('[role="tabpanel"]'));
+
+      function activate(tab, moveFocus) {
+        tabs.forEach(function (item) {
+          var selected = item === tab;
+          item.classList.toggle('active', selected);
+          item.setAttribute('aria-selected', String(selected));
+          item.tabIndex = selected ? 0 : -1;
+        });
+        panels.forEach(function (panel) {
+          panel.hidden = panel.id !== tab.getAttribute('aria-controls');
+        });
+        if (moveFocus) tab.focus();
+      }
+
+      tabs.forEach(function (tab, index) {
+        tab.addEventListener('click', function () { activate(tab, false); });
+        tab.addEventListener('keydown', function (event) {
+          var nextIndex = index;
+          if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+          else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+          else if (event.key === 'Home') nextIndex = 0;
+          else if (event.key === 'End') nextIndex = tabs.length - 1;
+          else return;
+          event.preventDefault();
+          activate(tabs[nextIndex], true);
+        });
+      });
+
+      document.querySelectorAll('[data-switch-tab]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          var target = document.getElementById(button.getAttribute('data-switch-tab'));
+          if (target) activate(target, true);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

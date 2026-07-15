@@ -1,0 +1,91 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+COMPOSE_FILE=${SFSC_COMPOSE_FILE:-docker-compose.yml}
+BACKUP_DIR=${SFSC_BACKUP_DIR:-$ROOT/backups}
+HEALTH_URL=${SFSC_HEALTH_URL:-}
+
+usage() {
+  echo "Usage: ./sfscctl {health|upgrade|backup|restore <archive>}" >&2
+  exit 64
+}
+
+require_tool() {
+  command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 69; }
+}
+
+compose() {
+  docker compose -f "$COMPOSE_FILE" "$@"
+}
+
+timestamp() {
+  date -u +%Y%m%dT%H%M%SZ
+}
+
+backup() {
+  require_tool tar
+  require_tool sha256sum
+  mkdir -p "$BACKUP_DIR"
+  archive="$BACKUP_DIR/sfsc-backup-$(timestamp).tgz"
+  umask 077
+  tar -C "$ROOT" -czf "$archive" .env data sing-box
+  sha256sum "$archive" > "$archive.sha256"
+  echo "$archive"
+}
+
+verify_archive() {
+  archive=$1
+  [ -f "$archive" ] || { echo "Backup archive does not exist: $archive" >&2; exit 66; }
+  if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+    echo "Refusing unsafe backup archive path" >&2
+    exit 65
+  fi
+  if tar -tzf "$archive" | grep -Ev '^(.env|data/?|data/.*|sing-box/?|sing-box/.*)$' | grep -q .; then
+    echo "Refusing unexpected backup archive entry" >&2
+    exit 65
+  fi
+}
+
+restore() {
+  archive=$1
+  require_tool tar
+  require_tool docker
+  verify_archive "$archive"
+  before=$(backup)
+  stage=$(mktemp -d "$ROOT/.restore.XXXXXX")
+  trap 'rm -rf "$stage"' EXIT INT TERM
+  tar -xzf "$archive" -C "$stage"
+  compose down
+  rm -rf "$ROOT/data" "$ROOT/sing-box"
+  [ ! -e "$stage/.env" ] || cp -p "$stage/.env" "$ROOT/.env"
+  [ ! -d "$stage/data" ] || cp -a "$stage/data" "$ROOT/data"
+  [ ! -d "$stage/sing-box" ] || cp -a "$stage/sing-box" "$ROOT/sing-box"
+  compose up -d --build
+  echo "restore-prebackup=$before"
+}
+
+health() {
+  require_tool docker
+  compose ps
+  if [ -n "$HEALTH_URL" ]; then
+    require_tool curl
+    curl --fail --silent --show-error "$HEALTH_URL/api/health"
+    echo
+  fi
+}
+
+upgrade() {
+  require_tool docker
+  before=$(backup)
+  compose up -d --build
+  echo "upgrade-prebackup=$before"
+}
+
+case ${1:-} in
+  health) health ;;
+  backup) backup ;;
+  upgrade) upgrade ;;
+  restore) [ $# -eq 2 ] || usage; restore "$2" ;;
+  *) usage ;;
+esac

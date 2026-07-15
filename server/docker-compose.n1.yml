@@ -1,0 +1,95 @@
+services:
+  sync-server:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    container_name: singbox-folder-sync-server
+    environment:
+      HOST: 0.0.0.0
+      PORT: 5177
+      SERVER_DATA_ROOT: /app-data
+      SINGBOX_CONFIG_PATH: /server-singbox/config.json
+      SINGBOX_CONTROL_DIR: /singbox-control
+      SFSC_REQUIRE_ADMIN_TOKEN: "1"
+      SFSC_ADMIN_TOKEN: ${SFSC_ADMIN_TOKEN:?set SFSC_ADMIN_TOKEN before starting the server}
+      SFSC_BUILD_ID: ${SFSC_BUILD_ID:-}
+      SFSC_BUILD_TIME: ${SFSC_BUILD_TIME:-}
+      SFSC_TRUST_PROXY: ${SFSC_TRUST_PROXY:-0}
+      SFSC_TRUSTED_PROXY_IPS: ${SFSC_TRUSTED_PROXY_IPS:-}
+      PUBLIC_SERVER_URL: ${PUBLIC_SERVER_URL:-https://pass.971223.xyz:2025}
+      VLESS_PUBLIC_HOST: ${VLESS_PUBLIC_HOST:-pass.971223.xyz}
+      VLESS_PUBLIC_PORT: ${VLESS_PUBLIC_PORT:-}
+      VLESS_PORT: ${VLESS_PORT:-45679}
+      S3_ENDPOINT: http://minio:9000
+      S3_CLIENT_ENDPOINT: http://n1-minio.sfsc:9000
+      S3_BUCKET: ${S3_BUCKET:-home-sync}
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-syncadmin}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-change-this-minio-root-password}
+    ports:
+      - "${SYNC_SERVER_PORT:-5177}:5177"
+    volumes:
+      - ./data/app:/app-data
+      - ./sing-box:/server-singbox
+      - ./data/control:/singbox-control
+    depends_on:
+      - minio
+      - sing-box
+    restart: unless-stopped
+
+  sing-box:
+    build:
+      context: ..
+      dockerfile: server/sing-box.Dockerfile
+      args:
+        SING_BOX_IMAGE_TAG: ${SING_BOX_IMAGE_TAG:-v1.13.14}
+    image: sfsc-sing-box:${SING_BOX_IMAGE_TAG:-v1.13.14}
+    container_name: singbox-folder-sync-tunnel
+    environment:
+      SINGBOX_LISTEN_PORT: ${VLESS_PORT:-45679}
+    network_mode: host
+    extra_hosts:
+      - "n1-minio.sfsc:127.0.0.1"
+    volumes:
+      - ./sing-box:/etc/sing-box:ro
+      - ./data/control:/sfsc-control
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 $$SINGBOX_LISTEN_PORT"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  minio:
+    image: quay.io/minio/minio:${MINIO_IMAGE_TAG:-RELEASE.2025-09-07T16-13-09Z}
+    container_name: singbox-folder-sync-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-syncadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-this-minio-root-password}
+    expose:
+      - "9000"
+      - "9001"
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - /ssd/sfsc-test/minio:/data
+    restart: unless-stopped
+
+  minio-init:
+    image: quay.io/minio/mc:${MINIO_MC_IMAGE_TAG:-RELEASE.2025-08-13T08-35-41Z}
+    container_name: singbox-folder-sync-minio-init
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-syncadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-this-minio-root-password}
+      S3_BUCKET: ${S3_BUCKET:-home-sync}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 1; done
+        mc mb -p "local/$$S3_BUCKET" || true
+        mc anonymous set none "local/$$S3_BUCKET" || true

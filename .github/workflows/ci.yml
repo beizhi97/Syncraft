@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      run_strict_preflight:
+        description: "Run strict release preflight after package artifacts have been prepared"
+        required: false
+        default: "false"
+
+jobs:
+  verify:
+    name: Release audit and tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify contracts and tests
+        shell: pwsh
+        run: pnpm run ci:verify
+
+      - name: Strict release preflight
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_strict_preflight == 'true' }}
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/ci-verify.ps1 -RunStrictPreflight

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "opendesign/client-onboarding.html",
+  "entry": "opendesign/client-onboarding.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-07-13T16:31:11.597Z",
+  "updatedAt": "2026-07-13T16:31:11.597Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}

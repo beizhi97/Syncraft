@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "sfsc-claim-lifecycle",
+  "claimVersion": 1,
+  "claimCodePrefix": "SFSC1-",
+  "claimUriPrefix": "sfsc://import/v1#",
+  "claimCodeAlphabet": "ABCDEFGHJKLMNPQRSTUVWXYZ23456789",
+  "claimPayloadKeys": ["version", "type", "server", "code"],
+  "claimPayloadType": "claim",
+  "claimCreateResponseKeys": ["claim", "claimCode", "code", "compatibility", "profile", "state", "tKey", "tKeyUri", "uri"],
+  "claimRedeemResponseKind": "server-issued-profile",
+  "terminalRecoveryClearCodes": ["claim_not_found", "claim_already_used", "claim_expired", "validation_failed"],
+  "retryableRecoveryKeepCodes": ["claim_redeem_rate_limited", "server_state_write_failed", "claim_redeem_failed"]
+}
