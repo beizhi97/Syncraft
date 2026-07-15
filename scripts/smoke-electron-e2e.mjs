@@ -23,10 +23,11 @@ async function main() {
   const clientPort = await getRandomPort();
   const debugPort = await getRandomPort();
   const dataRoot = await mkdtemp(join(tmpdir(), `sfsc-electron-e2e-data-${clientPort}-`));
+  const localRoot = await mkdtemp(join(tmpdir(), `sfsc-electron-e2e-local-${clientPort}-`));
   const userDataRoot = await mkdtemp(join(tmpdir(), `sfsc-electron-e2e-user-${debugPort}-`));
   const packageTempRoot = await mkdtemp(join(tmpdir(), "sfsc-electron-e2e-package-"));
   const packageRoot = join(packageTempRoot, "SyncraftDesktop");
-  const localFolder = join(dataRoot, "SFSC 测试 A");
+  const localFolder = join(localRoot, "SFSC 测试 A");
   const fakeToolLog = join(dataRoot, "fake-tools.jsonl");
   await runCheck("prepare-temporary-package", () => prepareTemporaryPackage(sourcePackageRoot, packageRoot));
   await mkdir(localFolder, { recursive: true });
@@ -45,6 +46,7 @@ async function main() {
     clientPort,
     debugPort,
     dataRoot,
+    localRoot,
     fakeToolLog
   };
 
@@ -98,6 +100,7 @@ async function main() {
       child.kill();
     }
     await rm(dataRoot, { recursive: true, force: true }).catch(() => {});
+    await rm(localRoot, { recursive: true, force: true }).catch(() => {});
     await rm(userDataRoot, { recursive: true, force: true }).catch(() => {});
     await rm(packageTempRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => {});
   }
@@ -377,10 +380,21 @@ async function previewThroughUi(cdp, fixture) {
 
 async function runStopSyncThroughUi(cdp, clientPort, fakeToolLog, fixture) {
   await cdp.evaluate(`document.getElementById("runSyncBtn").click()`);
-  await waitForFetchJson(clientPort, "/api/client/status", (value) => {
-    return value.processes?.sync?.running === true
-      || value.processes?.sync?.metrics?.syncState === "syncing";
-  }, 20000);
+  await acceptPreviewConfirmationIfVisible(cdp);
+  try {
+    await waitForFetchJson(clientPort, "/api/client/status", (value) => {
+      return value.processes?.sync?.running === true
+        || value.processes?.sync?.metrics?.syncState === "syncing";
+    }, 20000);
+  } catch (error) {
+    const ui = await cdp.evaluate(`(() => ({
+      action: document.getElementById("actionMessage")?.textContent?.trim() || "",
+      runDisabled: Boolean(document.getElementById("runSyncBtn")?.disabled),
+      confirmationVisible: document.getElementById("confirmGate")?.hidden === false,
+      confirmationTitle: document.getElementById("confirmTitle")?.textContent?.trim() || ""
+    }))()`);
+    throw new Error(`${error.message}\nUI state: ${JSON.stringify(ui)}`);
+  }
   const syncEvents = await waitForFakeToolEvent(fakeToolLog, "rclone-sync", 10000);
   if (!syncEvents.some((event) => event.tool === "singbox-run")) {
     throw new Error("Fake sing-box was not started before rclone sync.");
@@ -419,6 +433,21 @@ async function runStopSyncThroughUi(cdp, clientPort, fakeToolLog, fixture) {
     checks.push(`sync run UI text was still settling before stop: action=${runningUi.action || "(empty)"}`);
   }
   checks.push(`sync run/stop/history verified through UI with fake rclone: ${history.history[0].id}`);
+}
+
+async function acceptPreviewConfirmationIfVisible(cdp) {
+  await delay(100);
+  const confirmation = await cdp.evaluate(`(() => ({
+    visible: document.getElementById("confirmGate")?.hidden === false,
+    title: document.getElementById("confirmTitle")?.textContent?.trim() || "",
+    requiredText: document.getElementById("confirmTextInput")?.placeholder || ""
+  }))()`);
+  if (!confirmation.visible) return;
+  if (confirmation.requiredText) {
+    throw new Error(`Unexpected required-text confirmation before fake sync: ${confirmation.title || "unknown"}.`);
+  }
+  await cdp.evaluate(`document.getElementById("confirmSubmitBtn").click()`);
+  checks.push(`accepted optional sync confirmation: ${confirmation.title || "unknown"}`);
 }
 
 async function verifyDiagnosticExportJson(cdp, fixture) {
