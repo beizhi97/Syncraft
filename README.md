@@ -4,7 +4,7 @@
 
 Syncraft 將 `sing-box`、`rclone` 與 MinIO/S3 串成一套可管理的同步服務：伺服器負責建立裝置與一次性 SyncKey；Windows 用戶端匯入 SyncKey 後，即可在不修改系統代理、路由、DNS、TUN 或防火牆的前提下執行多執行緒資料夾同步。
 
-目前是 **0.2.0-beta.2 產品化基線**。交付型態為 Windows 可攜 ZIP／桌面包與 Docker 伺服器部署包，尚非正式安裝程式。
+目前是 **0.2.0-beta.2 產品化基線（产品化基线）**。交付型態為 Windows 可攜 ZIP／桌面包與 Docker 伺服器部署包，尚非正式安裝程式。
 
 ## 主要能力
 
