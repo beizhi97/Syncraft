@@ -6,6 +6,15 @@ Syncraft 把 `sing-box`、`rclone` 和 MinIO/S3 组合成一套可管理的同�
 
 当前版本为 **0.3.0-rc.1 产品候选版**，以已验证的产品化基线为起点。它提供 Windows 桌面包、便携包和 Docker 服务端部署包；桌面 ZIP 是默认交付形态，便携 ZIP 用于兼容回退，目前不提供安装程序。
 
+## 用户交付入口
+
+本仓库是开发主仓库，统一维护客户端、服务端、共享协议和测试。普通使用者按目标选择独立交付仓库：
+
+- [Syncraft-server](https://github.com/beizhi97/Syncraft-server)：仅包含服务端部署所需的 Docker Compose、源码与运维说明；克隆后即可部署。
+- [Syncraft-client](https://github.com/beizhi97/Syncraft-client)：仅包含 Windows 下载与使用说明；从 Release 下载已打包的 `SyncraftDesktop.zip`，无需安装 Node.js。
+
+客户端可执行文件始终作为 GitHub Release 资产交付，不提交到任一 Git 仓库的提交历史。两个交付仓库都以本仓库的协议 v1 基线和版本标签为准。
+
 ## 适合谁使用
 
 - 想在自己的服务器、NAS 或 N1 上部署私有同步服务的个人或小团队。
