@@ -537,7 +537,7 @@ test("client support summary copies only safe operational fields", async () => {
   const copied = await context.copySupportSummary();
   assert.equal(copied, context.clipboardText);
   assert.match(copied, /SFSC support summary/);
-  assert.match(copied, /appVersion=0\.2\.0-beta\.2/);
+  assert.match(copied, /appVersion=0\.3\.0-rc\.1/);
   assert.match(copied, /buildId=sfsc-test-build/);
   assert.match(copied, /releaseManifest=ok/);
   assert.match(copied, /localState=ok/);

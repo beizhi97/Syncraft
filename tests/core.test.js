@@ -4897,7 +4897,7 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
     assert.match(printed.stdout, /Ok: True/);
     assert.match(printed.stdout, /Target: root@n1 \/opt\/sfsc-test http:\/\/n1:5177/);
     assert.match(printed.stdout, /ReleaseBundle: fixture-release/);
-    assert.match(printed.stdout, /ClientPackages: desktop=0\.2\.0-beta\.2, portable=0\.2\.0-beta\.2/);
+    assert.match(printed.stdout, /ClientPackages: desktop=0\.3\.0-rc\.1, portable=0\.3\.0-rc\.1/);
     assert.match(printed.stdout, /VersionAlignment: True/);
     assert.match(printed.stdout, /Images: sing-box=v1\.13\.14/);
     assert.match(printed.stdout, /SmokeState: restartRequired=False, users=1, devices=1, claims=2/);
