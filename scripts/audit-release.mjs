@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile as readFileRaw, stat } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
@@ -8,6 +8,11 @@ import { auditComposeConfig } from "./lib/composeAudit.mjs";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const issues = [];
 const nonProductLanguagePattern = /\bMVP\b|\bdemo\b|\bprototype\b|proof of concept|\bPOC\b|演示版|样例版|试用版/i;
+
+async function readFile(path, options) {
+  const value = await readFileRaw(path, options);
+  return typeof value === "string" ? value.replace(/\r\n?/g, "\n") : value;
+}
 
 const blockedPaths = [
   ".env",
