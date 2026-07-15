@@ -32,6 +32,7 @@ if ($ReleaseAcceptance -and $AllowUnverifiedReleaseBundle) {
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\report-secrets.ps1")
+. (Join-Path $PSScriptRoot "lib\build-fingerprint.ps1")
 if (!$RunId) {
   $RunId = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss")
 }
@@ -133,12 +134,12 @@ function Get-FileSummary($path, $label) {
     return $null
   }
   $item = Get-Item -LiteralPath $path
-  $hash = Get-FileHash -LiteralPath $path -Algorithm SHA256
+  $hash = Get-Sha256HexFromFile $path
   return [ordered]@{
     path = "$path"
     label = "$label"
     size = [int64]$item.Length
-    sha256 = $hash.Hash.ToLowerInvariant()
+    sha256 = $hash
   }
 }
 

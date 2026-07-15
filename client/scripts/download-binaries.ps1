@@ -9,6 +9,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $clientRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$projectRoot = Resolve-Path (Join-Path $clientRoot "..")
+. (Join-Path $projectRoot "scripts\lib\build-fingerprint.ps1")
 if (!$OutDir) {
   $OutDir = Join-Path $clientRoot "resources\bin\win32"
 }
@@ -55,7 +57,7 @@ function Test-ExistingBinary($path, $expectedHash) {
     Write-Host "$(Split-Path -Leaf $path) already exists; no lock hash is available, skipping."
     return $true
   }
-  $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+  $actual = Get-Sha256HexFromFile $path
   if ($actual -eq $expectedHash) {
     Write-Host "$(Split-Path -Leaf $path) already exists and matches binaries.lock.json."
     return $true
@@ -124,7 +126,7 @@ function Install-Tool($name, $tool, $overrideVersion, $tmp) {
   }
   Copy-Item -LiteralPath $exe.FullName -Destination $exePath -Force
 
-  $actualHash = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $actualHash = Get-Sha256HexFromFile $exePath
   if ($resolved.ExpectedHash -and $actualHash -ne $resolved.ExpectedHash) {
     throw "$($tool.exe) SHA256 mismatch after download. Expected $($resolved.ExpectedHash), got $actualHash."
   }

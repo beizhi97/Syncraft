@@ -1930,9 +1930,9 @@ test("client package scripts inject the root package version", async () => {
     assert.match(script, /resources\/app\/docs\/INTERFACE_CONTRACT\.md/);
     assert.match(script, /\$releaseManifest/);
     assert.match(script, /release-manifest\.json/);
-    assert.match(script, /Get-FileHash -LiteralPath \$_.path -Algorithm SHA256/);
+    assert.match(script, /Get-Sha256HexFromFile \$_.path/);
     assert.match(script, /Compress-Archive/);
-    assert.match(script, /Get-FileHash -LiteralPath \$zipPathFull -Algorithm SHA256/);
+    assert.match(script, /Get-Sha256HexFromFile \$zipPathFull/);
     assert.match(script, /Set-Content -LiteralPath \$checksumPathFull -Encoding ASCII/);
     assert.match(script, /Remove-Item -LiteralPath \$zipPathFull -Force/);
     assert.match(script, /Remove-Item -LiteralPath \$checksumPathFull -Force/);

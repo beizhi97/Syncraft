@@ -151,7 +151,7 @@ function Test-ZipChecksum($zip, $checksum) {
   if ($expected -notmatch '^[a-f0-9]{64}$') {
     throw "Invalid SHA256 sidecar format: $checksum"
   }
-  $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+  $actual = Get-Sha256HexFromFile $zip
   if ($expected -ne $actual) {
     throw "SHA256 sidecar does not match ZIP: $zip"
   }
@@ -170,11 +170,11 @@ function Get-RelativePath($basePath, $childPath) {
 
 function Get-FileSummary($path, $relativePath) {
   $item = Get-Item -LiteralPath $path
-  $hash = Get-FileHash -LiteralPath $path -Algorithm SHA256
+  $hash = Get-Sha256HexFromFile $path
   return [ordered]@{
     path = $relativePath.Replace("\", "/")
     size = $item.Length
-    sha256 = $hash.Hash.ToLowerInvariant()
+    sha256 = $hash
   }
 }
 
@@ -442,8 +442,8 @@ Write-SafeJsonReport $bundleManifestPath $bundleManifest "release bundle manifes
 
 Assert-StagedReportsSafe
 Compress-Archive -LiteralPath $stageRoot -DestinationPath $zipPath -Force
-$bundleHash = Get-FileHash -LiteralPath $zipPath -Algorithm SHA256
-"$($bundleHash.Hash.ToLowerInvariant())  $BundleName.zip" | Set-Content -LiteralPath $checksumPath -Encoding ASCII
+$bundleHash = Get-Sha256HexFromFile $zipPath
+"$bundleHash  $BundleName.zip" | Set-Content -LiteralPath $checksumPath -Encoding ASCII
 
 Info "Release bundle directory: $stageRoot"
 Info "Release bundle ZIP: $zipPath"

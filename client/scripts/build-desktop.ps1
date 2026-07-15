@@ -126,11 +126,11 @@ $manifestFiles = @(
 ) | ForEach-Object {
   if (Test-Path -LiteralPath $_.path) {
     $item = Get-Item -LiteralPath $_.path
-    $hash = Get-FileHash -LiteralPath $_.path -Algorithm SHA256
+    $hash = Get-Sha256HexFromFile $_.path
     [ordered]@{
       name = $_.name
       size = $item.Length
-      sha256 = $hash.Hash.ToLowerInvariant()
+      sha256 = $hash
     }
   } else {
     [ordered]@{
@@ -176,7 +176,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Compress-Archive -LiteralPath $distRootFull -DestinationPath $zipPathFull -Force
-$zipHash = Get-FileHash -LiteralPath $zipPathFull -Algorithm SHA256
-"$($zipHash.Hash.ToLowerInvariant())  SyncraftDesktop.zip" | Set-Content -LiteralPath $checksumPathFull -Encoding ASCII
+$zipHash = Get-Sha256HexFromFile $zipPathFull
+"$zipHash  SyncraftDesktop.zip" | Set-Content -LiteralPath $checksumPathFull -Encoding ASCII
 Get-Item -LiteralPath $zipPathFull | Select-Object FullName, Length, LastWriteTime
 Get-Item -LiteralPath $checksumPathFull | Select-Object FullName, Length, LastWriteTime

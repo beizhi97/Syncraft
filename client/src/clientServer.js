@@ -1528,8 +1528,9 @@ async function runSyncExclusive(runPlan, options = {}) {
       env: preview.env,
       errorCode: "rclone_sync_failed",
       onStarted: async () => {
-        const run = await recordSyncRunStarted(createSyncRunStart(normalizedJob, options), paths);
+        const run = createSyncRunStart(normalizedJob, options);
         markSyncStarting(normalizedJob, run);
+        await recordSyncRunStarted(run, paths);
       },
       onOutput: updateSyncMetricsFromOutput,
       onExit: async (exit) => {

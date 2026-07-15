@@ -3499,8 +3499,12 @@ async function auditLocalStateCorruptionContract() {
     "return await syncProcess.start(paths.rcloneExe, preview.args,"
   ], "sync startup must validate state and binaries, normalize the job, write rclone config, then start sing-box before rclone sync");
   requireText(clientServerSource, "client/src/clientServer.js", "const detail = redactRcloneConfigFailureDetail(remoteConfig, normalizedJob, preview);");
-  requireText(clientServerSource, "client/src/clientServer.js", "onStarted: async () => {\n        const run = await recordSyncRunStarted(createSyncRunStart(normalizedJob, options), paths);");
-  requireText(clientServerSource, "client/src/clientServer.js", "markSyncStarting(normalizedJob, run);");
+  requireTextOrder(clientServerSource, "client/src/clientServer.js", [
+    "onStarted: async () => {",
+    "const run = createSyncRunStart(normalizedJob, options);",
+    "markSyncStarting(normalizedJob, run);",
+    "await recordSyncRunStarted(run, paths);"
+  ], "sync startup must initialize runtime metrics before awaiting history persistence");
   if (clientServerSource.includes("job.localProxyPort || 18081")) {
     issues.push("client/src/clientServer.js must not start sing-box from raw job.localProxyPort || 18081 during sync runs");
   }

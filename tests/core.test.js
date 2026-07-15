@@ -451,7 +451,7 @@ test("server console UI API wraps non-JSON responses in stable request errors", 
   );
 });
 
-test("client local API is loopback-only and release manifest paths exist in the repo", async () => {
+test("client local API is loopback-only and tracked manifest source paths exist in the repo", async () => {
   const contract = await readFile(join(projectRoot, "docs", "INTERFACE_CONTRACT.md"), "utf8");
   const clientServerSource = await readFile(join(projectRoot, "client", "src", "clientServer.js"), "utf8");
 
@@ -463,6 +463,8 @@ test("client local API is loopback-only and release manifest paths exist in the 
     .map((match) => match[1]);
   assert.ok(manifestPaths.length > 0);
   assert.doesNotMatch(manifestPaths.join("\n"), /syncRunner\.js/);
+  assert.equal(manifestPaths.includes("resources/bin/win32/sing-box.exe"), true);
+  assert.equal(manifestPaths.includes("resources/bin/win32/rclone.exe"), true);
 
   function sourcePathForManifestPath(manifestPath) {
     if (manifestPath === "Syncraft.exe") {
@@ -478,6 +480,9 @@ test("client local API is loopback-only and release manifest paths exist in the 
       return manifestPath.slice("resources/app/".length);
     }
     if (manifestPath.startsWith("resources/bin/")) {
+      if (manifestPath.endsWith(".exe")) {
+        return "";
+      }
       return `client/resources/bin/${manifestPath.slice("resources/bin/".length)}`;
     }
     return "";
@@ -5645,7 +5650,7 @@ test("preflight writes a report file on successful quick checks", async () => {
       "-JsonReportPath",
       jsonReportPath
     ]);
-    assert.equal(result.code, 0);
+    assert.equal(result.code, 0, result.stderr || result.stdout);
     assert.match(result.stdout, /Preflight report written/);
     assert.match(result.stdout, /Preflight JSON report written/);
     const report = await readFile(join(tempRoot, "reports", "preflight.txt"), "utf8");
@@ -5845,7 +5850,7 @@ test("preflight passes a derived JSON report path to client package smoke", asyn
       "-JsonReportPath",
       "reports/preflight.json"
     ]);
-    assert.equal(result.code, 0);
+    assert.equal(result.code, 0, result.stderr || result.stdout);
     assert.match(result.stdout, /Client package smoke/);
     assert.match(result.stdout, /client package fixture report written/);
     const preflightReport = JSON.parse(await readFile(join(tempRoot, "reports", "preflight.json"), "utf8"));
@@ -6011,7 +6016,7 @@ test("preflight restores client package environment before running later steps",
     ], {
       SFSC_CLIENT_PACKAGE_DIR: "original-client-package-dir"
     });
-    assert.equal(result.code, 0);
+    assert.equal(result.code, 0, result.stderr || result.stdout);
     assert.match(result.stdout, /client package fixture report written/);
     const preflightReport = JSON.parse(await readFile(join(tempRoot, "reports", "preflight.json"), "utf8"));
     assert.equal(preflightReport.ok, true);
@@ -6065,7 +6070,11 @@ test("preflight runs client package smoke for desktop and portable packages when
       "-JsonReportPath",
       "reports/preflight.json"
     ]);
-    assert.equal(result.code, 0);
+    assert.equal(
+      result.code,
+      0,
+      `two-package preflight failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`
+    );
     assert.match(result.stdout, /Client package smoke \(desktop\)/);
     assert.match(result.stdout, /Client package smoke \(portable\)/);
     const preflightReport = JSON.parse(await readFile(join(tempRoot, "reports", "preflight.json"), "utf8"));
@@ -6341,7 +6350,7 @@ test("client package smoke script validates desktop package shape and runtime st
     assert.match(buildDesktop, /SyncraftDesktop\.zip/);
     assert.match(buildDesktop, /Compress-Archive/);
     assert.match(buildDesktop, /SyncraftDesktop\.zip\.sha256/);
-    assert.match(buildDesktop, /Get-FileHash -LiteralPath \$zipPathFull -Algorithm SHA256/);
+    assert.match(buildDesktop, /Get-Sha256HexFromFile \$zipPathFull/);
     assert.match(buildDesktop, /Set-Content -LiteralPath \$checksumPathFull -Encoding ASCII/);
     assert.match(buildDesktop, /Remove-Item -LiteralPath \$zipPathFull -Force/);
     assert.match(buildClient, /smoke-client-package\.mjs/);
@@ -6378,7 +6387,7 @@ test("client package smoke script validates desktop package shape and runtime st
     assert.match(buildClient, /resources\/app\/docs\/PILOT_SUPPORT_GUIDE\.md/);
     assert.match(buildClient, /resources\/bin\/win32\/binaries\.lock\.json/);
     assert.match(buildClient, /package = "SyncraftClient"/);
-    assert.match(buildClient, /Get-FileHash -LiteralPath \$_.path -Algorithm SHA256/);
+    assert.match(buildClient, /Get-Sha256HexFromFile \$_.path/);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
@@ -6550,6 +6559,22 @@ test("source fingerprint hashing does not require Get-FileHash", async () => {
   });
 
   assert.equal(result.code, 0, result.stderr || result.stdout);
+});
+
+test("release PowerShell scripts use the portable SHA-256 helper", async () => {
+  const runtimeScripts = [
+    "scripts/build-release-bundle.ps1",
+    "scripts/post-deploy-n1.ps1",
+    "client/scripts/build-client.ps1",
+    "client/scripts/build-desktop.ps1",
+    "client/scripts/download-binaries.ps1"
+  ];
+
+  for (const relativePath of runtimeScripts) {
+    const source = await readFile(join(projectRoot, ...relativePath.split("/")), "utf8");
+    assert.doesNotMatch(source, /\bGet-FileHash\b/, `${relativePath} must not depend on Get-FileHash`);
+    assert.match(source, /Get-Sha256HexFromFile/, `${relativePath} must use the portable SHA-256 helper`);
+  }
 });
 
 test("compose config audit enforces fixed image tags", async () => {
