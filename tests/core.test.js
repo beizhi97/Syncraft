@@ -815,7 +815,7 @@ test("runtime contracts forbid VLESS URI on client heartbeat device snapshots", 
       server: "http://server.example",
       sentAt: "2026-07-04T12:00:00.000Z",
       status: 200,
-      serverDiagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.2.0-beta.2" }),
+      serverDiagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.3.0-rc.1" }),
       compatibility: {
         ok: true,
         status: "compatible",
@@ -1012,8 +1012,8 @@ test("runtime contracts enforce admin state summary shape", () => {
   assert.doesNotThrow(() => assertServerHealthResponseContract({
     ok: true,
     app: "singbox-folder-sync",
-    version: "0.2.0-beta.2",
-    diagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.2.0-beta.2" }),
+    version: "0.3.0-rc.1",
+    diagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.3.0-rc.1" }),
     mode: "server-admin",
     pathsConfigured: {
       serverDataRoot: true,
@@ -1343,8 +1343,8 @@ test("runtime contracts enforce admin state summary shape", () => {
     () => assertServerHealthResponseContract({
       ok: true,
       app: "singbox-folder-sync",
-      version: "0.2.0-beta.2",
-      diagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.2.0-beta.2" }),
+      version: "0.3.0-rc.1",
+      diagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.3.0-rc.1" }),
       mode: "server-admin",
       pathsConfigured: {
         serverDataRoot: true,
@@ -1380,8 +1380,8 @@ test("runtime contracts enforce admin state summary shape", () => {
     () => assertServerHealthResponseContract({
       ok: true,
       app: "singbox-folder-sync",
-      version: "0.2.0-beta.2",
-      diagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.2.0-beta.2" }),
+      version: "0.3.0-rc.1",
+      diagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.3.0-rc.1" }),
       mode: "server-admin",
       serverDataRoot: "C:\\sfsc\\data",
       singboxConfigPath: "C:\\sfsc\\sing-box\\config.json",
@@ -1852,7 +1852,7 @@ test("protocol request schemas normalize key client and server request envelopes
   const heartbeat = parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_DEVICE_HEARTBEAT, {
     clientName: " pc-1 ",
     profileId: "profile-pc-1",
-    clientVersion: "0.2.0-beta.2",
+    clientVersion: "0.3.0-rc.1",
     diagnostics: { role: "client" },
     storage: { bucket: "home-sync" },
     sync: { syncState: "idle" },
@@ -2205,14 +2205,14 @@ test("runtime contracts enforce claim redeem and server heartbeat responses", ()
   const heartbeatUser = recordDeviceHeartbeat(state, signHeartbeatForState(state, {
     clientName: redeemed.clientName,
     profileId: redeemed.profileId,
-    clientVersion: "0.2.0-beta.2",
-    diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.2.0-beta.2" }),
+    clientVersion: "0.3.0-rc.1",
+    diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.3.0-rc.1" }),
     sync: { syncState: "idle" }
   }));
   const device = summarizeDevice(state, heartbeatUser, { includeVlessUri: false });
   const heartbeat = {
     ok: true,
-    diagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.2.0-beta.2" }),
+    diagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.3.0-rc.1" }),
     device
   };
   assert.doesNotThrow(() => assertServerHeartbeatResponseContract(heartbeat, "serverHeartbeat"));
@@ -2393,9 +2393,9 @@ test("runtime contracts enforce display-safe client job summaries", () => {
   const health = {
     ok: true,
     mode: "client-exe-runtime",
-    version: "0.2.0-beta.2",
-    clientVersion: "0.2.0-beta.2",
-    diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.2.0-beta.2" })
+    version: "0.3.0-rc.1",
+    clientVersion: "0.3.0-rc.1",
+    diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.3.0-rc.1" })
   };
   assert.doesNotThrow(() => assertClientHealthContract(health, "clientHealth"));
   assert.doesNotThrow(() => assertClientShutdownResponseContract({ ok: true }, "clientShutdown"));
@@ -2966,14 +2966,14 @@ test("interface contract documents sing-box config write guards", async () => {
 test("runtime diagnostics expose app and protocol versions", () => {
   const diagnostics = buildRuntimeDiagnostics({
     role: "server",
-    version: "0.2.0-beta.2-test",
+    version: "0.3.0-rc.1-test",
     buildId: "build-123",
     buildTime: "2026-07-04T00:00:00.000Z"
   });
 
   assert.equal(diagnostics.app, "singbox-folder-sync");
   assert.equal(diagnostics.role, "server");
-  assert.equal(diagnostics.version, "0.2.0-beta.2-test");
+  assert.equal(diagnostics.version, "0.3.0-rc.1-test");
   assert.equal(diagnostics.buildId, "build-123");
   assert.equal(diagnostics.buildTime, "2026-07-04T00:00:00.000Z");
   assert.deepEqual(diagnostics.protocols, {
@@ -4632,7 +4632,7 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
       await readFile(join(projectRoot, "scripts", "post-deploy-n1.ps1"), "utf8"),
       "utf8"
     );
-    await writeFile(join(tempRoot, "package.json"), JSON.stringify({ version: "0.2.0-beta.2" }), "utf8");
+    await writeFile(join(tempRoot, "package.json"), JSON.stringify({ version: "0.3.0-rc.1" }), "utf8");
     await mkdir(join(tempRoot, "server"), { recursive: true });
     await writeFile(
       join(tempRoot, "server", ".env.example"),
@@ -4716,7 +4716,7 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
       summary: {
         passed: 6,
         failed: 0,
-        appVersion: "0.2.0-beta.2",
+        appVersion: "0.3.0-rc.1",
         buildId: evidenceBuildId,
         protocolsAligned: true,
         restartRequired: false,
@@ -4725,8 +4725,8 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
         claimCount: 2
       },
       checks: [
-        { name: "health", detail: "ok=true, version=0.2.0-beta.2, protocol=1, adminAuth=true, timeout=15000ms" },
-        { name: "admin-state", detail: "version=0.2.0-beta.2, protocols=aligned, users=1, devices=1, claims=2, restartRequired=false" },
+        { name: "health", detail: "ok=true, version=0.3.0-rc.1, protocol=1, adminAuth=true, timeout=15000ms" },
+        { name: "admin-state", detail: "version=0.3.0-rc.1, protocols=aligned, users=1, devices=1, claims=2, restartRequired=false" },
         { name: "singbox-config", detail: "inbounds=1" }
       ]
     }), "utf8");
@@ -4742,7 +4742,7 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
         clientPackage: {
           packageType: "desktop",
           package: "SyncraftDesktop",
-          version: "0.2.0-beta.2",
+          version: "0.3.0-rc.1",
           buildId: evidenceBuildId,
           sourceTreeHash: evidenceSourceTreeHash,
           executableSha256: desktopExecutableSha256,
@@ -4772,7 +4772,7 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
       type: "n1-test-data-cleanup-report",
       ok: true,
       buildId: evidenceBuildId,
-      version: "0.2.0-beta.2",
+      version: "0.3.0-rc.1",
       remainingTestUsers: 0,
       remainingTestClaims: 0,
       remainingTestObjectPrefixes: 0,
@@ -4816,9 +4816,9 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
     assert.equal(summary.acceptance.releaseAcceptance.ok, true);
     assert.equal(summary.acceptance.releaseAcceptance.releaseBundleProvided, true);
     assert.equal(summary.acceptance.releaseAcceptance.finalRestartClear, true);
-    assert.equal(summary.acceptance.delivery.appVersion, "0.2.0-beta.2");
+    assert.equal(summary.acceptance.delivery.appVersion, "0.3.0-rc.1");
     assert.equal(summary.acceptance.delivery.releaseBundle.name, "fixture-release");
-    assert.equal(summary.acceptance.delivery.releaseBundle.version, "0.2.0-beta.2");
+    assert.equal(summary.acceptance.delivery.releaseBundle.version, "0.3.0-rc.1");
     assert.equal(summary.acceptance.delivery.releaseBundle.preflightVerified, true);
     assert.equal(summary.acceptance.delivery.releaseBundle.preflightVerification.mode, "external");
     assert.equal(summary.acceptance.delivery.releaseBundle.sourceManifest.sha256, createHash("sha256").update(await readFile(join(tempRoot, "dist", "release-bundles", "fixture-release", "release-bundle-manifest.json"))).digest("hex"));
@@ -4827,18 +4827,18 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
     assert.match(summary.acceptance.delivery.releaseBundle.desktopZip.sha256, /^[a-f0-9]{64}$/);
     assert.match(summary.acceptance.delivery.releaseBundle.portableManifest.sha256, /^[a-f0-9]{64}$/);
     assert.equal(summary.acceptance.delivery.releaseBundle.clientPackages.desktop.package, "SyncraftDesktop");
-    assert.equal(summary.acceptance.delivery.releaseBundle.clientPackages.desktop.version, "0.2.0-beta.2");
+    assert.equal(summary.acceptance.delivery.releaseBundle.clientPackages.desktop.version, "0.3.0-rc.1");
     assert.equal(summary.acceptance.delivery.releaseBundle.clientPackages.desktop.fileCount, 1);
     assert.match(summary.acceptance.delivery.releaseBundle.clientPackages.desktop.zip.sha256, /^[a-f0-9]{64}$/);
     assert.match(summary.acceptance.delivery.releaseBundle.clientPackages.desktop.checksum.sha256, /^[a-f0-9]{64}$/);
     assert.match(summary.acceptance.delivery.releaseBundle.clientPackages.desktop.manifest.sha256, /^[a-f0-9]{64}$/);
     assert.equal(summary.acceptance.delivery.releaseBundle.clientPackages.portable.package, "SyncraftClient");
-    assert.equal(summary.acceptance.delivery.releaseBundle.clientPackages.portable.version, "0.2.0-beta.2");
+    assert.equal(summary.acceptance.delivery.releaseBundle.clientPackages.portable.version, "0.3.0-rc.1");
     assert.equal(summary.acceptance.delivery.versionAlignment.ok, true);
-    assert.equal(summary.acceptance.delivery.versionAlignment.appVersion, "0.2.0-beta.2");
-    assert.equal(summary.acceptance.delivery.versionAlignment.releaseBundleVersion, "0.2.0-beta.2");
-    assert.equal(summary.acceptance.delivery.versionAlignment.desktopVersion, "0.2.0-beta.2");
-    assert.equal(summary.acceptance.delivery.versionAlignment.portableVersion, "0.2.0-beta.2");
+    assert.equal(summary.acceptance.delivery.versionAlignment.appVersion, "0.3.0-rc.1");
+    assert.equal(summary.acceptance.delivery.versionAlignment.releaseBundleVersion, "0.3.0-rc.1");
+    assert.equal(summary.acceptance.delivery.versionAlignment.desktopVersion, "0.3.0-rc.1");
+    assert.equal(summary.acceptance.delivery.versionAlignment.portableVersion, "0.3.0-rc.1");
     assert.equal(summary.acceptance.delivery.sourceAlignment.n1BuildId, evidenceBuildId);
     assert.equal(summary.acceptance.delivery.sourceAlignment.n1BuildMatches, true);
     assert.equal(summary.acceptance.delivery.images.singBox.tag, "v1.13.14");
@@ -4856,7 +4856,7 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
     assert.equal(summary.acceptance.smoke.requestTimeoutMs, 15000);
     assert.equal(summary.acceptance.smoke.protocols.aligned, true);
     assert.match(summary.acceptance.smoke.protocols.adminStateDetail, /protocols=aligned/);
-    assert.equal(summary.acceptance.smoke.state.appVersion, "0.2.0-beta.2");
+    assert.equal(summary.acceptance.smoke.state.appVersion, "0.3.0-rc.1");
     assert.equal(summary.acceptance.smoke.state.restartRequired, false);
     assert.equal(summary.acceptance.smoke.state.userCount, 1);
     assert.equal(summary.acceptance.smoke.state.deviceCount, 1);
@@ -5038,7 +5038,7 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
       summary: {
         passed: 6,
         failed: 0,
-        appVersion: "0.2.0-beta.2",
+        appVersion: "0.3.0-rc.1",
         buildId: evidenceBuildId,
         protocolsAligned: true,
         restartRequired: true,
@@ -5047,8 +5047,8 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
         claimCount: 2
       },
       checks: [
-        { name: "health", detail: "ok=true, version=0.2.0-beta.2, protocol=1, adminAuth=true, timeout=15000ms" },
-        { name: "admin-state", detail: "version=0.2.0-beta.2, protocols=aligned, users=1, devices=1, claims=2, restartRequired=true" }
+        { name: "health", detail: "ok=true, version=0.3.0-rc.1, protocol=1, adminAuth=true, timeout=15000ms" },
+        { name: "admin-state", detail: "version=0.3.0-rc.1, protocols=aligned, users=1, devices=1, claims=2, restartRequired=true" }
       ]
     }), "utf8");
     await writeFile(join(tempRoot, "input", "server-smoke-final.json"), JSON.stringify({
@@ -5059,7 +5059,7 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
       summary: {
         passed: 10,
         failed: 0,
-        appVersion: "0.2.0-beta.2",
+        appVersion: "0.3.0-rc.1",
         buildId: evidenceBuildId,
         protocolsAligned: true,
         restartRequired: false,
@@ -5068,8 +5068,8 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
         claimCount: 2
       },
       checks: [
-        { name: "health", detail: "ok=true, version=0.2.0-beta.2, protocol=1, adminAuth=true, timeout=15000ms" },
-        { name: "admin-state", detail: "version=0.2.0-beta.2, protocols=aligned, users=1, devices=1, claims=2, restartRequired=false" },
+        { name: "health", detail: "ok=true, version=0.3.0-rc.1, protocol=1, adminAuth=true, timeout=15000ms" },
+        { name: "admin-state", detail: "version=0.3.0-rc.1, protocols=aligned, users=1, devices=1, claims=2, restartRequired=false" },
         { name: "singbox-config", detail: "inbounds=1" }
       ]
     }), "utf8");
@@ -5142,7 +5142,7 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
       context: { baseUrl: "http://n1:5177", adminAuthProvided: true, requestTimeoutMs: 15000 },
       summary: { passed: 6, failed: 0, restartRequired: true },
       checks: [
-        { name: "admin-state", detail: "version=0.2.0-beta.2, protocols=aligned, users=1, devices=1, claims=2, restartRequired=true" }
+        { name: "admin-state", detail: "version=0.3.0-rc.1, protocols=aligned, users=1, devices=1, claims=2, restartRequired=true" }
       ]
     }), "utf8");
     const restartRequired = await runPostDeploy(tempRoot, [
@@ -5224,9 +5224,9 @@ test("N1 post-deploy aggregator writes summary and latest pointer from existing 
     const mismatchedSummary = JSON.parse(await readFile(join(tempRoot, "reports", "n1", "fixture-version-mismatch", "post-deploy-summary.json"), "utf8"));
     assert.equal(mismatchedSummary.ok, false);
     assert.equal(mismatchedSummary.failure.versionAlignment.ok, false);
-    assert.equal(mismatchedSummary.failure.versionAlignment.appVersion, "0.2.0-beta.2");
-    assert.equal(mismatchedSummary.failure.versionAlignment.releaseBundleVersion, "0.2.0-beta.2");
-    assert.equal(mismatchedSummary.failure.versionAlignment.desktopVersion, "0.2.0-beta.2");
+    assert.equal(mismatchedSummary.failure.versionAlignment.appVersion, "0.3.0-rc.1");
+    assert.equal(mismatchedSummary.failure.versionAlignment.releaseBundleVersion, "0.3.0-rc.1");
+    assert.equal(mismatchedSummary.failure.versionAlignment.desktopVersion, "0.3.0-rc.1");
     assert.equal(mismatchedSummary.failure.versionAlignment.portableVersion, "9.9.9");
     await writeFile(portableManifestPath, originalPortableManifest, "utf8");
 
@@ -5269,7 +5269,7 @@ test("N1 post-deploy rejects unverified release bundle unless explicitly allowed
       await readFile(join(projectRoot, "scripts", "post-deploy-n1.ps1"), "utf8"),
       "utf8"
     );
-    await writeFile(join(tempRoot, "package.json"), JSON.stringify({ version: "0.2.0-beta.2" }), "utf8");
+    await writeFile(join(tempRoot, "package.json"), JSON.stringify({ version: "0.3.0-rc.1" }), "utf8");
     await mkdir(join(tempRoot, "server"), { recursive: true });
     await writeFile(
       join(tempRoot, "server", ".env.example"),
@@ -5420,7 +5420,7 @@ test("release bundle script packages delivery artifacts and excludes runtime sec
     const manifest = JSON.parse(await readFile(join(bundleRoot, "release-bundle-manifest.json"), "utf8"));
     assert.equal(manifest.schemaVersion, 1);
     assert.equal(manifest.type, "release-bundle-manifest");
-    assert.equal(manifest.version, "0.2.0-beta.2");
+    assert.equal(manifest.version, "0.3.0-rc.1");
     assert.equal(manifest.strictPreflight, false);
     assert.equal(manifest.preflightVerified, false);
     assert.equal(manifest.preflightVerification.verified, false);
@@ -6893,7 +6893,7 @@ test("client trial runner imports, saves, previews, and keeps SyncKey out of rep
   await writeFile(packageZipPath, "fixture package zip", "utf8");
   await writeFile(packageManifestPath, JSON.stringify({
     package: "SyncraftDesktop",
-    version: "0.2.0-beta.2",
+    version: "0.3.0-rc.1",
     buildId: "sfsc-aaaaaaaaaaaa",
     sourceTreeHash: "a".repeat(64)
   }), "utf8");
@@ -6904,7 +6904,7 @@ test("client trial runner imports, saves, previews, and keeps SyncKey out of rep
     res.setHeader("content-type", "application/json");
 
     if (req.method === "GET" && req.url === "/api/health") {
-      res.end(JSON.stringify({ ok: true, clientVersion: "0.2.0-beta.2" }));
+      res.end(JSON.stringify({ ok: true, clientVersion: "0.3.0-rc.1" }));
       return;
     }
     if (req.method === "GET" && req.url === "/api/client/status") {
@@ -7078,11 +7078,11 @@ test("release status summarizes preflight bundle and N1 evidence without secrets
   try {
     await mkdir(join(tempRoot, "reports", "release"), { recursive: true });
     await mkdir(join(tempRoot, "reports", "n1", "latest-run"), { recursive: true });
-    await mkdir(join(tempRoot, "dist", "release-bundles", "singbox-folder-sync-0.2.0-beta.2-release"), { recursive: true });
-    await writeFile(join(tempRoot, "dist", "release-bundles", "singbox-folder-sync-0.2.0-beta.2-release.zip"), "zip", "utf8");
+    await mkdir(join(tempRoot, "dist", "release-bundles", "singbox-folder-sync-0.3.0-rc.1-release"), { recursive: true });
+    await writeFile(join(tempRoot, "dist", "release-bundles", "singbox-folder-sync-0.3.0-rc.1-release.zip"), "zip", "utf8");
     await writeFile(
-      join(tempRoot, "dist", "release-bundles", "singbox-folder-sync-0.2.0-beta.2-release.zip.sha256"),
-      `${bundleSha}  singbox-folder-sync-0.2.0-beta.2-release.zip\n`,
+      join(tempRoot, "dist", "release-bundles", "singbox-folder-sync-0.3.0-rc.1-release.zip.sha256"),
+      `${bundleSha}  singbox-folder-sync-0.3.0-rc.1-release.zip\n`,
       "utf8"
     );
     await writeFile(join(tempRoot, "reports", "release", "preflight.json"), JSON.stringify({
@@ -7098,12 +7098,12 @@ test("release status summarizes preflight bundle and N1 evidence without secrets
       summary: { passed: 6, failed: 0, skipped: 0 }
     }, null, 2), "utf8");
     await writeFile(
-      join(tempRoot, "dist", "release-bundles", "singbox-folder-sync-0.2.0-beta.2-release", "release-bundle-manifest.json"),
+      join(tempRoot, "dist", "release-bundles", "singbox-folder-sync-0.3.0-rc.1-release", "release-bundle-manifest.json"),
       JSON.stringify({
         schemaVersion: 1,
         app: "singbox-folder-sync",
         type: "release-bundle-manifest",
-        version: "0.2.0-beta.2",
+        version: "0.3.0-rc.1",
         generatedAt: "2026-07-09T00:00:00.000Z",
         sourceTreeHash,
         buildId,
@@ -7175,6 +7175,14 @@ test("release status summarizes preflight bundle and N1 evidence without secrets
     assert.equal(driftReport.currentSource.ok, false);
     assert.equal(driftReport.sourceAlignment.ok, false);
     await rm(join(tempRoot, "package.json"), { force: true });
+
+    await writeFile(join(tempRoot, "package.json"), JSON.stringify({ version: "0.3.0-rc.1" }), "utf8");
+    await mkdir(join(tempRoot, "dist", "release-bundles", "singbox-folder-sync-0.3.0-rc.1-release"), { recursive: true });
+    const nextVersion = await runReleaseStatus(["--repo-root", tempRoot, "--json"]);
+    assert.equal(nextVersion.code, 0, nextVersion.stderr || nextVersion.stdout);
+    const nextVersionReport = JSON.parse(nextVersion.stdout);
+    assert.equal(nextVersionReport.releaseBundle.version, "0.3.0-rc.1");
+    assert.equal(nextVersionReport.releaseBundle.zipPath, "dist/release-bundles/singbox-folder-sync-0.3.0-rc.1-release.zip");
 
     const preflight = JSON.parse(await readFile(join(tempRoot, "reports", "release", "preflight.json"), "utf8"));
     preflight.summary.failed = 1;
@@ -7292,8 +7300,8 @@ test("pilot wave tools prepare participant records and summarize without storing
     pilotOne.rollbackDrill = {
       performed: true,
       packageType: "desktop",
-      fromVersion: "0.2.0-beta.2-next",
-      toVersion: "0.2.0-beta.2",
+      fromVersion: "0.3.0-rc.1-next",
+      toVersion: "0.3.0-rc.1",
       dataBackupConfirmed: true,
       verificationArtifact: "reports/pilot/pilot-test/pilot-001/rollback-smoke.json",
       recoveredAt: "2026-07-09T08:30:00.000Z",
@@ -7347,8 +7355,8 @@ test("pilot wave tools prepare participant records and summarize without storing
     assert.deepEqual(report.metrics.completedRollbackDrills, [{
       participantId: "pilot-001",
       packageType: "desktop",
-      fromVersion: "0.2.0-beta.2-next",
-      toVersion: "0.2.0-beta.2",
+      fromVersion: "0.3.0-rc.1-next",
+      toVersion: "0.3.0-rc.1",
       verificationArtifact: "reports/pilot/pilot-test/pilot-001/rollback-smoke.json",
       recoveredAt: "2026-07-09T08:30:00.000Z",
       owner: "support"
@@ -11159,7 +11167,7 @@ test("heartbeat auth signs the JSON heartbeat payload", () => {
   const timestamp = "2026-07-03T10:00:00.000Z";
   const payload = {
     clientName: "company-pc1",
-    clientVersion: "0.2.0-beta.2",
+    clientVersion: "0.3.0-rc.1",
     optional: undefined,
     sync: {
       syncState: "syncing",
@@ -11774,11 +11782,11 @@ test("marking sing-box applied requires a pending change and explicit confirmati
 
 test("admin summary exposes runtime app version for deployment verification", () => {
   const state = createDefaultAdminState();
-  state.appVersion = "0.2.0-beta.2-test";
+  state.appVersion = "0.3.0-rc.1-test";
   const summary = summarizeAdminState(state);
-  assert.equal(summary.appVersion, "0.2.0-beta.2-test");
+  assert.equal(summary.appVersion, "0.3.0-rc.1-test");
   assert.equal(summary.diagnostics.role, "server");
-  assert.equal(summary.diagnostics.version, "0.2.0-beta.2-test");
+  assert.equal(summary.diagnostics.version, "0.3.0-rc.1-test");
   assert.equal(summary.diagnostics.protocols.profile, 1);
   assert.equal(summary.diagnostics.protocols.heartbeat, 1);
 });
@@ -11931,7 +11939,7 @@ test("admin summary treats missing adminState protocol as incomplete diagnostics
   user.diagnostics = {
     app: "singbox-folder-sync",
     role: "client",
-    version: "0.2.0-beta.2",
+    version: "0.3.0-rc.1",
     protocols: {
       claim: 1,
       profile: 1,
@@ -12532,7 +12540,7 @@ test("device heartbeat rejects replayed auth nonce", () => {
   createClaim(state, { clientName: "company-pc1" });
   const heartbeat = signHeartbeatForState(state, {
     clientName: "company-pc1",
-    clientVersion: "0.2.0-beta.2"
+    clientVersion: "0.3.0-rc.1"
   });
 
   recordDeviceHeartbeat(state, heartbeat);
@@ -12554,10 +12562,10 @@ test("device heartbeat appears as an online device in the admin summary", () => 
 
   recordDeviceHeartbeat(state, signHeartbeatForState(state, {
     clientName: "company-pc1",
-    clientVersion: "0.2.0-beta.2",
+    clientVersion: "0.3.0-rc.1",
     diagnostics: buildRuntimeDiagnostics({
       role: "client",
-      version: "0.2.0-beta.2",
+      version: "0.3.0-rc.1",
       buildId: "client-build-1"
     }),
     remoteAddress: "192.168.1.23",
@@ -12618,9 +12626,9 @@ test("device heartbeat appears as an online device in the admin summary", () => 
   assertServerDeviceSummaryContract(summary.devices[0], "summary.devices[0]");
   assert.equal(summary.devices[0].online, true);
   assert.equal(summary.devices[0].bucket, "home-sync");
-  assert.equal(summary.devices[0].clientVersion, "0.2.0-beta.2");
+  assert.equal(summary.devices[0].clientVersion, "0.3.0-rc.1");
   assert.equal(summary.devices[0].diagnostics.role, "client");
-  assert.equal(summary.devices[0].diagnostics.version, "0.2.0-beta.2");
+  assert.equal(summary.devices[0].diagnostics.version, "0.3.0-rc.1");
   assert.equal(summary.devices[0].diagnostics.buildId, "client-build-1");
   assert.equal(summary.devices[0].diagnostics.protocols.clientStatus, 1);
   assert.equal(summary.devices[0].compatibility.ok, true);
@@ -12652,10 +12660,10 @@ test("device heartbeat without diagnostics clears stale compatibility", () => {
 
   recordDeviceHeartbeat(state, signHeartbeatForState(state, {
     clientName: "diagnostics-pc",
-    clientVersion: "0.2.0-beta.2",
+    clientVersion: "0.3.0-rc.1",
     diagnostics: buildRuntimeDiagnostics({
       role: "client",
-      version: "0.2.0-beta.2"
+      version: "0.3.0-rc.1"
     })
   }));
   assert.equal(summarizeAdminState(state).devices[0].compatibility.ok, true);
@@ -12680,13 +12688,13 @@ test("device heartbeat treats malformed diagnostics as missing", () => {
   const state = createDefaultAdminState();
   createClaim(state, { clientName: "malformed-diagnostics-pc" });
   const wrongRole = {
-    ...buildRuntimeDiagnostics({ role: "client", version: "0.2.0-beta.2" }),
+    ...buildRuntimeDiagnostics({ role: "client", version: "0.3.0-rc.1" }),
     role: "server"
   };
 
   recordDeviceHeartbeat(state, signHeartbeatForState(state, {
     clientName: "malformed-diagnostics-pc",
-    clientVersion: "0.2.0-beta.2",
+    clientVersion: "0.3.0-rc.1",
     diagnostics: wrongRole
   }));
 
@@ -13107,7 +13115,7 @@ function fakeZipEntryBody(entry) {
       schemaVersion: 1,
       app: "singbox-folder-sync",
       package: packageName,
-      version: "0.2.0-beta.2",
+      version: "0.3.0-rc.1",
       builtAt: "2026-07-04T00:00:00.000Z",
       sourceTreeHash: FAKE_SOURCE_TREE_HASH,
       buildId: FAKE_BUILD_ID,
@@ -13364,7 +13372,7 @@ async function writeFakeReleaseBundleZip(tempRoot, bundleName, options = {}) {
     schemaVersion: 1,
     app: "singbox-folder-sync",
     package: packageName,
-    version: "0.2.0-beta.2",
+    version: "0.3.0-rc.1",
     builtAt: "2026-07-04T00:00:00.000Z",
     sourceTreeHash,
     buildId,
@@ -13402,7 +13410,7 @@ async function writeFakeReleaseBundleZip(tempRoot, bundleName, options = {}) {
     schemaVersion: 1,
     app: "singbox-folder-sync",
     type: "release-bundle-manifest",
-    version: "0.2.0-beta.2",
+    version: "0.3.0-rc.1",
     bundleName,
     sourceTreeHash,
     buildId,
@@ -13410,14 +13418,14 @@ async function writeFakeReleaseBundleZip(tempRoot, bundleName, options = {}) {
     clientPackages: {
       desktop: {
         package: "SyncraftDesktop",
-        version: "0.2.0-beta.2",
+        version: "0.3.0-rc.1",
         builtAt: "2026-07-04T00:00:00.000Z",
         sourceTreeHash,
         buildId
       },
       portable: {
         package: "SyncraftClient",
-        version: "0.2.0-beta.2",
+        version: "0.3.0-rc.1",
         builtAt: "2026-07-04T00:00:00.000Z",
         sourceTreeHash,
         buildId
@@ -13545,7 +13553,7 @@ async function writeReleaseBundleFixture(tempRoot) {
     "README.md": "Productized delivery fixture\n",
     "package.json": JSON.stringify({
       name: "singbox-folder-sync",
-      version: "0.2.0-beta.2",
+      version: "0.3.0-rc.1",
       type: "module"
     }),
     "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
@@ -13670,7 +13678,7 @@ async function writeFakeReleaseArtifact(tempRoot, packageName, sourceTreeHash = 
     schemaVersion: 1,
     app: "singbox-folder-sync",
     package: packageName,
-    version: "0.2.0-beta.2",
+    version: "0.3.0-rc.1",
     builtAt: "2026-07-04T00:00:00.000Z",
     sourceTreeHash,
     buildId,
@@ -13734,8 +13742,8 @@ function buildRuntimeContractDeviceFixture() {
     lastSeenAt: "2026-07-04T12:00:00.000Z",
     bucket: "home-sync",
     prefix: "devices/contract-pc",
-    clientVersion: "0.2.0-beta.2",
-    diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.2.0-beta.2" }),
+    clientVersion: "0.3.0-rc.1",
+    diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.3.0-rc.1" }),
     compatibility: {
       ok: true,
       status: "compatible",
@@ -13825,9 +13833,9 @@ function buildRuntimeContractClientStatusFixture() {
   return {
     ok: true,
     mode: "client-exe-runtime",
-    appVersion: "0.2.0-beta.2",
-    clientVersion: "0.2.0-beta.2",
-    diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.2.0-beta.2" }),
+    appVersion: "0.3.0-rc.1",
+    clientVersion: "0.3.0-rc.1",
+    diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.3.0-rc.1" }),
     releaseManifest: buildRuntimeContractReleaseManifestSummaryFixture(),
     paths: {
       root: "C:\\SFSC",
@@ -13960,7 +13968,7 @@ function buildRuntimeContractHeartbeatFixture(options = {}) {
     server: "https://sync.example.com",
     sentAt: "2026-07-04T12:00:00.000Z",
     status: 200,
-    serverDiagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.2.0-beta.2" }),
+    serverDiagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.3.0-rc.1" }),
     compatibility: {
       ok: true,
       status: "compatible",
@@ -14008,9 +14016,9 @@ function buildRuntimeContractDiagnosticBundleFixture() {
 
 function buildRuntimeContractDiagnosticSummaryFixture() {
   return {
-    appVersion: "0.2.0-beta.2",
+    appVersion: "0.3.0-rc.1",
     releaseManifestOk: true,
-    releaseManifestVersion: "0.2.0-beta.2",
+    releaseManifestVersion: "0.3.0-rc.1",
     releaseManifestBuiltAt: "2026-07-04T00:00:00.000Z",
     releaseManifestErrorCode: "",
     releaseManifestSupportDocsOk: true,
@@ -14042,7 +14050,7 @@ function buildRuntimeContractDiagnosticSummaryFixture() {
     heartbeatDeviceBucket: "redacted",
     heartbeatDevicePrefix: "redacted",
     heartbeatDeviceCurrentFile: "redacted",
-    heartbeatServerProtocols: buildRuntimeDiagnostics({ role: "server", version: "0.2.0-beta.2" }).protocols,
+    heartbeatServerProtocols: buildRuntimeDiagnostics({ role: "server", version: "0.3.0-rc.1" }).protocols,
     heartbeatCompatibilityStatus: "compatible",
     heartbeatCompatibilityAction: "none",
     heartbeatCompatibilitySeverity: "ok",
@@ -14057,8 +14065,8 @@ function buildRuntimeContractDiagnosticSummaryFixture() {
 
 function buildRuntimeContractDiagnosticStatusFixture() {
   return {
-    diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.2.0-beta.2" }),
-    appVersion: "0.2.0-beta.2",
+    diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.3.0-rc.1" }),
+    appVersion: "0.3.0-rc.1",
     profileImported: false,
     profileSummary: {
       clientName: "",
@@ -14100,7 +14108,7 @@ function buildRuntimeContractDiagnosticStatusFixture() {
       status: 200,
       errorCode: "",
       remoteErrorCode: "",
-      serverDiagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.2.0-beta.2" }),
+      serverDiagnostics: buildRuntimeDiagnostics({ role: "server", version: "0.3.0-rc.1" }),
       compatibility: {
         ok: true,
         status: "compatible",
@@ -14268,7 +14276,7 @@ function buildRuntimeContractReleaseManifestSummaryFixture() {
     ok: true,
     schemaVersion: 1,
     package: "SyncraftClient",
-    version: "0.2.0-beta.2",
+    version: "0.3.0-rc.1",
     builtAt: "2026-07-04T00:00:00.000Z",
     errorCode: "",
     message: "",
@@ -14467,9 +14475,9 @@ async function writeInternalTrialRecordFixture(tempRoot, recordPath) {
   await writeFile(releaseZip, "release", "utf8");
   await writeFile(desktopZip, "desktop", "utf8");
   await writeFile(portableZip, "portable", "utf8");
-  await writeFile(releaseManifest, JSON.stringify({ preflightVerified: true, version: "0.2.0-beta.2" }), "utf8");
-  await writeFile(desktopManifest, JSON.stringify({ version: "0.2.0-beta.2", files: [] }), "utf8");
-  await writeFile(portableManifest, JSON.stringify({ version: "0.2.0-beta.2", files: [] }), "utf8");
+  await writeFile(releaseManifest, JSON.stringify({ preflightVerified: true, version: "0.3.0-rc.1" }), "utf8");
+  await writeFile(desktopManifest, JSON.stringify({ version: "0.3.0-rc.1", files: [] }), "utf8");
+  await writeFile(portableManifest, JSON.stringify({ version: "0.3.0-rc.1", files: [] }), "utf8");
   const releaseHash = createHash("sha256").update(await readFile(releaseZip)).digest("hex");
   const desktopHash = createHash("sha256").update(await readFile(desktopZip)).digest("hex");
   const portableHash = createHash("sha256").update(await readFile(portableZip)).digest("hex");

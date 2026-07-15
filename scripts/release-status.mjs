@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertReportSafe } from "./lib/reportSecrets.mjs";
+import { releaseBundlePaths } from "./lib/releasePaths.mjs";
 
 const defaultProjectRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const projectRoot = resolve(readArg("--repo-root") || defaultProjectRoot);
@@ -27,9 +28,10 @@ try {
 }
 
 function buildReleaseStatus() {
-  const bundleManifestPath = "dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release/release-bundle-manifest.json";
-  const bundleZipPath = "dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release.zip";
-  const bundleShaPath = `${bundleZipPath}.sha256`;
+  const release = releaseBundlePaths(projectRoot);
+  const bundleManifestPath = release.manifest;
+  const bundleZipPath = release.zip;
+  const bundleShaPath = release.sha256;
   const n1LatestPath = "reports/n1/latest-post-deploy.json";
   const bundledPreflightPath = rel(resolve(dirname(repoPath(bundleManifestPath)), "reports", "release-bundle", "preflight.json"));
   const preflightPath = existsSync(repoPath(bundledPreflightPath)) ? bundledPreflightPath : "reports/release/preflight.json";
@@ -74,6 +76,7 @@ function buildReleaseStatus() {
       sourceTreeHash: preflight?.context?.SourceTreeHash || preflight?.context?.SourceFingerprint?.hash || ""
     },
     releaseBundle: {
+      version: release.version,
       manifestPath: bundleManifestPath,
       zipPath: bundleZipPath,
       exists: existsSync(repoPath(bundleZipPath)),

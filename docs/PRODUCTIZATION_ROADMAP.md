@@ -4,11 +4,11 @@ This roadmap tracks the path from the current beta/productized baseline to an in
 
 ## Current Baseline
 
-As of 2026-07-09, the authoritative release evidence is:
+As of 2026-07-15, the authoritative release evidence is version-scoped rather than hard-coded to one beta version:
 
 - Strict preflight: `reports/release/preflight.json`
 - N1 latest acceptance: `reports/n1/latest-post-deploy.json`
-- Release bundle: `dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release.zip`
+- Release bundle: `dist/release-bundles/singbox-folder-sync-<version>-release.zip`
 - Safe operator summary: `pnpm run release:status`
 
 Current verified gates:
@@ -93,10 +93,10 @@ Completed:
 - N1 release acceptance verifies version alignment, source alignment, release bundle evidence, lifecycle smoke, cleanup, and final restart clear.
 - `pnpm run release:status` prints a safe operator summary covering preflight, bundle SHA, N1 latest, final restart clear, and source alignment.
 
-Next slices:
+Completed:
 
-- Add retention guidance for old `reports/n1/*` and old release bundles.
-- Document exactly when N1 deploy must be rerun versus when existing runtime evidence can be reused.
+- Evidence retention and rerun/reuse rules are documented in `docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md`.
+- Release-status, internal-trial, and pilot scripts resolve the release bundle from the current package version instead of a fixed beta path.
 
 ### Client Trial Experience
 
@@ -152,7 +152,6 @@ Next slices:
 ## Immediate Priority Order
 
 1. Keep release evidence current after every code or doc change.
-2. Remove stale fixed test-count wording from release gates and point humans to strict preflight as the authority.
-3. Add retention and rerun guidance for N1/release evidence.
-4. Improve server-side support summaries and daily health operations.
-5. Dry-run pilot tooling with synthetic records.
+2. Rebuild the candidate and run clean-Windows E2E before expanding the user cohort.
+3. Improve server-side support summaries and daily health operations.
+4. Dry-run pilot tooling with synthetic records.

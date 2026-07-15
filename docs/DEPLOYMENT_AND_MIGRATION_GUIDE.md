@@ -326,9 +326,22 @@ dist/SyncraftClient.zip
 
 内部 beta 扩大范围前，按 `docs/INTERNAL_TRIAL_CHECKLIST.md` 在干净 Windows 环境执行人工 E2E。先运行 `pnpm run trial:record` 生成 `reports/internal-trial/internal-trial-record.json`，再运行 `pnpm run trial:assist` 生成只读辅助报告 `reports/internal-trial/internal-trial-assistant.json`，用于汇总自动化证据和剩余人工动作；助手报告不能替代人工判断。生成真实内测 SyncKey 时使用 `pnpm run trial:create-t-key -- --base-url http://192.168.1.254:5177 --client-name "<本轮客户端名>" --expires-in-hours 2 --print-t-key`，该命令要求 `SFSC_ADMIN_TOKEN` 或 `ADMIN_TOKEN`，只把 SyncKey / SyncKey URI 的 SHA256、长度、claim 短码和过期时间写入 `reports/internal-trial/trial-t-key-report.json`，完整 SyncKey 仅在显式 `--print-t-key` 时打印一次。人工记录优先通过 `pnpm run trial:record:update` 写入 tester/date/Windows 环境、章节状态、notes 和 artifact，命令会拒绝疑似 SyncKey、完整 VLESS URI、S3 secret、heartbeat secret、管理 token 或私钥内容进入记录。客户端已启动且拿到真实完整 SyncKey 后，可运行 `pnpm run trial:client-runner` 串起本地 API 导入、保存任务、预览、可选真实同步和诊断导出；该脚本默认不运行真实同步，必须显式传 `--run-sync --i-understand-real-sync` 才会调用 `/api/sync/run`，且对象存储中文件结果仍需人工确认。人工完成各章节后运行 `pnpm run trial:record:verify` 校验记录。该清单覆盖发布证据、ZIP SHA256、首次启动、SyncKey 导入、目录选择、预览、小规模同步、停止/重启、诊断包隐私和便携包兼容抽检；任一关键路径失败时，先修复并重新运行 strict preflight，涉及服务端变更时重新执行 N1 release acceptance。
 
-5-10 人小范围试点必须在内部人工 E2E 通过后再启动，并使用随包文档 `docs/PRODUCTIZATION_ROADMAP.md`、`docs/PILOT_RUNBOOK.md`、`docs/PILOT_ACCEPTANCE_CRITERIA.md` 和 `docs/PILOT_SUPPORT_GUIDE.md`。试点准入门禁包括：最新 strict preflight 的全量测试通过且 `releaseOk=true`、双客户端包 smoke 通过、release bundle SHA256 已按 `dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release.zip.sha256` 核对、`reports/n1/latest-post-deploy.json` 指向的 N1 run 通过 release acceptance、internal trial assistant 为 `ready-for-human-review`。用 `pnpm run pilot:prepare` 生成批次名册、每人命令单和 `participant-record.json`，用 `pnpm run pilot:summary` 汇总安装、导入、首次同步、诊断包、P0/P1 和回滚演练门禁。试点按 2 人、3-4 人、剩余 3-4 人分批 rollout，每批至少观察 1 个完整工作日；每日检查 N1 health、`restartRequired=false`、设备心跳、最近同步状态、支持单和诊断包隐私。升级必须重新打包、重新 strict preflight，服务端变更还必须重新 N1 release acceptance；客户端回滚保留 `data/`，服务端回滚使用 `deploy-n1.ps1 -Apply -RollbackLatest` 并保留 `.env`、`server/data`、`server/sing-box`。出现 P0、同根因 P1 影响 2 人及以上、疑似密钥泄露、误同步到非试点前缀、无法停止同步或诊断包脱敏失败时，立即暂停新增参与者和新 SyncKey。
+5-10 人小范围试点必须在内部人工 E2E 通过后再启动，并使用随包文档 `docs/PRODUCTIZATION_ROADMAP.md`、`docs/PILOT_RUNBOOK.md`、`docs/PILOT_ACCEPTANCE_CRITERIA.md` 和 `docs/PILOT_SUPPORT_GUIDE.md`。试点准入门禁包括：最新 strict preflight 的全量测试通过且 `releaseOk=true`、双客户端包 smoke 通过、release bundle SHA256 已按 `dist/release-bundles/singbox-folder-sync-<version>-release.zip.sha256` 核对、`reports/n1/latest-post-deploy.json` 指向的 N1 run 通过 release acceptance、internal trial assistant 为 `ready-for-human-review`。用 `pnpm run pilot:prepare` 生成批次名册、每人命令单和 `participant-record.json`，用 `pnpm run pilot:summary` 汇总安装、导入、首次同步、诊断包、P0/P1 和回滚演练门禁。试点按 2 人、3-4 人、剩余 3-4 人分批 rollout，每批至少观察 1 个完整工作日；每日检查 N1 health、`restartRequired=false`、设备心跳、最近同步状态、支持单和诊断包隐私。升级必须重新打包、重新 strict preflight，服务端变更还必须重新 N1 release acceptance；客户端回滚保留 `data/`，服务端回滚使用 `deploy-n1.ps1 -Apply -RollbackLatest` 并保留 `.env`、`server/data`、`server/sing-box`。出现 P0、同根因 P1 影响 2 人及以上、疑似密钥泄露、误同步到非试点前缀、无法停止同步或诊断包脱敏失败时，立即暂停新增参与者和新 SyncKey。
 
 在可创建桌面窗口的 Windows 会话中，可先运行 `pnpm run smoke:electron-window` 做最小真实窗口 smoke，再运行 `pnpm run smoke:electron-e2e` 做打包桌面 UI 业务链路 smoke。后者会用离线服务端 profile 走导入、保存任务、preview，并在临时复制的桌面包中注入 fake sing-box/rclone，覆盖 UI 开始同步、停止同步、同步历史和诊断 JSON 脱敏校验；它补充人工 E2E，但不替代 N1 真实 SyncKey 导入和真实小文件同步。
+
+交付形态：
+
+- `SyncraftDesktop.zip` 是 Windows 产品候选版的默认交付物；`SyncraftClient.zip` 仅作为无法使用桌面包时的兼容回退。
+- 当前不提供安装器：项目尚未引入代码签名证书、自动更新服务或系统级卸载注册，提前加入安装器会让 Windows 信任提示、升级和回滚更难支持。
+- 两个 ZIP 都是自包含交付物，不修改系统代理、路由、DNS、防火墙或系统服务。每次交付必须同时提供 ZIP、同名 `.sha256`、`release-manifest.json` 和对应 release bundle。
+
+证据留存与重跑：
+
+- 每个已交付版本保留 release bundle、两个客户端 ZIP、`.sha256`、`reports/release/`、`reports/n1/<run-id>/` 和 `latest-post-deploy.json` 指向的汇总，至少覆盖当前版本和上一个可回滚版本。
+- 当前源码、客户端包、release bundle 或服务端部署任一项变化后，旧的 strict preflight、包 smoke 和 N1 release acceptance 都不能作为新版本的放行证据；必须重新构建并重跑对应门禁。
+- 仅查看既有报告、处理文档或新增不进入交付包的运营记录时，可复用同一 build ID/source tree hash 的证据；只要摘要不一致，就必须停止复用。
+- 清理旧报告前，确认它既不是当前 `latest-post-deploy.json` 指向的 run，也不是上一个可回滚版本的唯一证据；清理后仍保留版本、SHA-256、build ID、source tree hash、验收结论和存档位置的安全摘要。
 
 安装：
 

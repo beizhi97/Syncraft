@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertReportSafe, writeJsonReportSync } from "./lib/reportSecrets.mjs";
+import { releaseBundlePaths } from "./lib/releasePaths.mjs";
 
 const projectRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const cohortDir = repoPath(readArg("--cohort-dir") || latestPilotDir() || "reports/pilot");
@@ -54,7 +55,8 @@ function buildSummary() {
 }
 
 function releaseEvidence(wave = {}) {
-  const releaseManifest = readOptionalJson("dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release/release-bundle-manifest.json");
+  const releasePaths = releaseBundlePaths(projectRoot);
+  const releaseManifest = readOptionalJson(releasePaths.manifest);
   const betaBaseline = readOptionalJson("reports/beta-host/beta-candidate-baseline.json");
   const n1Latest = readOptionalJson("reports/n1/latest-post-deploy.json");
   const n1Summary = readOptionalJson(n1Latest?.summaryJson || "");
@@ -62,9 +64,9 @@ function releaseEvidence(wave = {}) {
   const assistant = readOptionalJson("reports/internal-trial/internal-trial-assistant.json");
   return {
     releaseBundle: {
-      path: "dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release.zip",
-      exists: existsSync(repoPath("dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release.zip")),
-      sha256: fileSha256IfExists("dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release.zip"),
+      path: releasePaths.zip,
+      exists: existsSync(repoPath(releasePaths.zip)),
+      sha256: fileSha256IfExists(releasePaths.zip),
       preflightVerified: releaseManifest?.preflightVerified === true,
       preflightSummary: releaseManifest?.preflightVerification?.summary || releaseManifest?.preflight?.summary || null,
       desktopFileCount: releaseManifest?.preflightVerified ? releaseManifest?.artifacts ? null : null : null,

@@ -812,10 +812,10 @@ test("client local HTTP API returns structured errors", async (t) => {
   assertClientStatusContract(statusAfterSavePayload);
   assert.equal(statusAfterSavePayload.ok, true);
   assert.equal(statusAfterSavePayload.mode, "client-exe-runtime");
-  assert.equal(statusAfterSavePayload.appVersion, "0.2.0-beta.2");
-  assert.equal(statusAfterSavePayload.clientVersion, "0.2.0-beta.2");
+  assert.equal(statusAfterSavePayload.appVersion, "0.3.0-rc.1");
+  assert.equal(statusAfterSavePayload.clientVersion, "0.3.0-rc.1");
   assert.equal(statusAfterSavePayload.diagnostics.role, "client");
-  assert.equal(statusAfterSavePayload.diagnostics.version, "0.2.0-beta.2");
+  assert.equal(statusAfterSavePayload.diagnostics.version, "0.3.0-rc.1");
   assert.equal(statusAfterSavePayload.diagnostics.protocols.profile, 1);
   assert.equal(statusAfterSavePayload.diagnostics.protocols.heartbeat, 1);
   assert.match(statusAfterSavePayload.paths.root, /sfsc-client-http-/);
@@ -951,7 +951,7 @@ test("client local HTTP API returns structured errors", async (t) => {
     schemaVersion: 1,
     app: "singbox-folder-sync",
     package: "SyncraftDesktop",
-    version: "0.2.0-beta.2",
+    version: "0.3.0-rc.1",
     builtAt: "2026-07-04T00:00:00.000Z",
     files: releaseManifestFiles("SyncraftDesktop")
   }, null, 2), "utf8");
@@ -961,7 +961,7 @@ test("client local HTTP API returns structured errors", async (t) => {
   const statusAfterManifestPayload = await statusAfterManifest.json();
   assert.equal(statusAfterManifestPayload.releaseManifest.ok, true);
   assert.equal(statusAfterManifestPayload.releaseManifest.package, "SyncraftDesktop");
-  assert.equal(statusAfterManifestPayload.releaseManifest.version, "0.2.0-beta.2");
+  assert.equal(statusAfterManifestPayload.releaseManifest.version, "0.3.0-rc.1");
   assert.equal(statusAfterManifestPayload.releaseManifest.builtAt, "2026-07-04T00:00:00.000Z");
   assert.equal(statusAfterManifestPayload.releaseManifest.fileCount, 27);
   assert.equal(statusAfterManifestPayload.releaseManifest.supportDocuments.ok, true);
@@ -983,7 +983,7 @@ test("client local HTTP API returns structured errors", async (t) => {
     schemaVersion: 1,
     app: "singbox-folder-sync",
     package: "SyncraftClient",
-    version: "0.2.0-beta.2",
+    version: "0.3.0-rc.1",
     builtAt: "2026-07-04T01:00:00.000Z",
     files: releaseManifestFiles("SyncraftClient")
   }, null, 2), "utf8");
@@ -1002,7 +1002,7 @@ test("client local HTTP API returns structured errors", async (t) => {
     schemaVersion: 1,
     app: "singbox-folder-sync",
     package: "SyncraftDesktop",
-    version: "0.2.0-beta.2",
+    version: "0.3.0-rc.1",
     builtAt: "2026-07-04T00:00:00.000Z",
     files: releaseManifestFiles("SyncraftDesktop", {
       "resources/app/docs/INTERFACE_CONTRACT.md": { size: 0, sha256: "not-a-sha" }
@@ -1049,7 +1049,7 @@ test("client local HTTP API returns structured errors", async (t) => {
     schemaVersion: 1,
     app: "singbox-folder-sync",
     package: "SyncraftDesktop",
-    version: "0.2.0-beta.2",
+    version: "0.3.0-rc.1",
     builtAt: "2026-07-04T00:00:00.000Z",
     files: releaseManifestFiles("SyncraftDesktop")
   }, null, 2), "utf8");
@@ -1113,9 +1113,9 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.match(diagnosticPayload.filename, /^sfsc-client-diagnostics-.*\.json$/);
   assert.equal(diagnosticPayload.bundle.schemaVersion, 1);
   assert.equal(diagnosticPayload.bundle.role, "client");
-  assert.equal(diagnosticPayload.bundle.summary.appVersion, "0.2.0-beta.2");
+  assert.equal(diagnosticPayload.bundle.summary.appVersion, "0.3.0-rc.1");
   assert.equal(diagnosticPayload.bundle.summary.releaseManifestOk, true);
-  assert.equal(diagnosticPayload.bundle.summary.releaseManifestVersion, "0.2.0-beta.2");
+  assert.equal(diagnosticPayload.bundle.summary.releaseManifestVersion, "0.3.0-rc.1");
   assert.equal(diagnosticPayload.bundle.summary.releaseManifestBuiltAt, "2026-07-04T00:00:00.000Z");
   assert.equal(diagnosticPayload.bundle.summary.releaseManifestErrorCode, "");
   assert.equal(diagnosticPayload.bundle.summary.releaseManifestSupportDocsOk, true);
@@ -1138,7 +1138,7 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.equal(diagnosticPayload.bundle.environment.platform, process.platform);
   assert.equal(diagnosticPayload.bundle.environment.portableRoot, true);
   assert.equal(diagnosticPayload.bundle.environment.releaseManifest.ok, true);
-  assert.equal(diagnosticPayload.bundle.environment.releaseManifest.version, "0.2.0-beta.2");
+  assert.equal(diagnosticPayload.bundle.environment.releaseManifest.version, "0.3.0-rc.1");
   assert.equal(diagnosticPayload.bundle.environment.releaseManifest.fileCount, 27);
   assert.equal(diagnosticPayload.bundle.environment.releaseManifest.supportDocuments.ok, true);
   assert.equal(diagnosticPayload.bundle.environment.releaseManifest.requiredFiles.ok, true);
@@ -4675,7 +4675,7 @@ test("client status preserves server heartbeat device sync summary without VLESS
           lastSeenAt: "2026-07-04T12:00:00.000Z",
           bucket: "home-sync",
           prefix: "devices/company-pc1",
-          clientVersion: "0.2.0-beta.2",
+          clientVersion: "0.3.0-rc.1",
           lastRemoteAddress: "127.0.0.1",
           syncState: "syncing",
           speedMbps: 50,
@@ -4830,7 +4830,7 @@ test("client status preserves server heartbeat device sync summary without VLESS
   assert.equal(status.heartbeat.device.lastSeenAt, "2026-07-04T12:00:00.000Z");
   assert.equal(status.heartbeat.device.bucket, "home-sync");
   assert.equal(status.heartbeat.device.prefix, "devices/company-pc1");
-  assert.equal(status.heartbeat.device.clientVersion, "0.2.0-beta.2");
+  assert.equal(status.heartbeat.device.clientVersion, "0.3.0-rc.1");
   assert.equal(status.heartbeat.device.lastRemoteAddress, "127.0.0.1");
   assert.equal(status.heartbeat.device.syncState, "syncing");
   assert.equal(status.heartbeat.device.sync.state, "syncing");
@@ -6699,7 +6699,7 @@ function buildMockProfile({ server, clientName }) {
 }
 
 function buildServerDiagnostics(protocols = {}) {
-  const diagnostics = buildRuntimeDiagnostics({ role: "server", version: "0.2.0-beta.2" });
+  const diagnostics = buildRuntimeDiagnostics({ role: "server", version: "0.3.0-rc.1" });
   return {
     ...diagnostics,
     protocols: {
@@ -6729,7 +6729,7 @@ function buildHeartbeatResponse({ clientName, compatibility, diagnostics = build
       lastSeenAt: "2026-07-04T12:00:00.000Z",
       bucket: "home-sync",
       prefix: `devices/${clientName}`,
-      clientVersion: "0.2.0-beta.2",
+      clientVersion: "0.3.0-rc.1",
       lastRemoteAddress: "127.0.0.1",
       syncState: "idle",
       speedMbps: 0,

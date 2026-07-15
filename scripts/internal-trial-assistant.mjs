@@ -4,6 +4,7 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { writeJsonReportSync } from "./lib/reportSecrets.mjs";
+import { releaseBundlePaths } from "./lib/releasePaths.mjs";
 
 const projectRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const recordPath = repoPath(readArg("--record") || "reports/internal-trial/internal-trial-record.json");
@@ -81,10 +82,11 @@ function summarizeTrialRecord(record) {
 }
 
 function collectArtifacts(record) {
+  const release = releaseBundlePaths(projectRoot);
   const trialRunnerArtifacts = findRecordArtifactPaths(record, /client-trial-runner.*\.json$/i);
   const candidates = [
     ["trial-record", recordPath],
-    ["release-bundle-manifest", "dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release/release-bundle-manifest.json"],
+    ["release-bundle-manifest", release.manifest],
     ["release-bundle-zip", record.evidence?.releaseBundle?.path],
     ["desktop-zip", record.evidence?.desktopPackage?.path],
     ["portable-zip", record.evidence?.portablePackage?.path],
@@ -110,7 +112,8 @@ function collectArtifacts(record) {
 
 function collectObservations(record, artifacts) {
   const observations = [];
-  const releaseManifest = readOptionalJson("dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release/release-bundle-manifest.json");
+  const release = releaseBundlePaths(projectRoot);
+  const releaseManifest = readOptionalJson(release.manifest);
   const preflight = readOptionalJson("reports/release/preflight.json");
   const electronWindow = readOptionalJson("reports/release/electron-window-smoke.json");
   const electronE2e = readOptionalJson("reports/release/electron-e2e-smoke.json");
@@ -276,6 +279,7 @@ function buildSectionHints(record, observations) {
 }
 
 function findCurrentEvidenceDrift(record, current) {
+  const currentRelease = releaseBundlePaths(projectRoot);
   const drift = [];
   const evidence = record.evidence || {};
   const release = evidence.releaseBundle || {};
@@ -285,7 +289,7 @@ function findCurrentEvidenceDrift(record, current) {
   const currentDesktopVersion = current.desktopSmoke?.context?.releaseManifest?.version || current.desktopSmoke?.summary?.version || "";
   const currentPortableVersion = current.portableSmoke?.context?.releaseManifest?.version || current.portableSmoke?.summary?.version || "";
 
-  if (!release.sha256 || release.sha256 !== fileSha256(repoPath("dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release.zip"))) {
+  if (!release.sha256 || release.sha256 !== fileSha256(repoPath(currentRelease.zip))) {
     drift.push("release bundle SHA256 differs");
   }
   if (!release.version || release.version !== current.releaseManifest?.version) {

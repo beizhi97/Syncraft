@@ -1,6 +1,6 @@
 {
   "name": "singbox-folder-sync",
-  "version": "0.2.0-beta.2",
+  "version": "0.3.0-rc.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.15.4",

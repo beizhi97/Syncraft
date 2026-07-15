@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeJsonReportSync, writeTextReportSync } from "./lib/reportSecrets.mjs";
+import { releaseBundlePaths } from "./lib/releasePaths.mjs";
 
 const projectRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const cohortId = slug(readArg("--cohort-id") || `pilot-${dateSlug()}`);
@@ -290,9 +291,10 @@ pnpm run pilot:summary -- --cohort-dir ${psQuote(rel(outputDir))}
 }
 
 function collectArtifacts() {
+  const release = releaseBundlePaths(projectRoot);
   return [
-    artifact("release-bundle-manifest", "dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release/release-bundle-manifest.json"),
-    artifact("release-bundle-zip", "dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release.zip"),
+    artifact("release-bundle-manifest", release.manifest),
+    artifact("release-bundle-zip", release.zip),
     artifact("desktop-zip", "dist/SyncraftDesktop.zip"),
     artifact("portable-zip", "dist/SyncraftClient.zip"),
     artifact("n1-latest", "reports/n1/latest-post-deploy.json"),

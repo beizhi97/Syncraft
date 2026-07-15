@@ -484,14 +484,14 @@ test("client support summary copies only safe operational fields", async () => {
   const context = buildSupportSummaryContext(app);
 
   context.latestStatus = {
-    appVersion: "0.2.0-beta.2",
+    appVersion: "0.3.0-rc.1",
     diagnostics: {
       buildId: "sfsc-test-build",
       buildTime: "2026-07-09T12:00:00.000Z"
     },
     releaseManifest: {
       ok: true,
-      version: "0.2.0-beta.2",
+      version: "0.3.0-rc.1",
       builtAt: "2026-07-09T12:05:00.000Z"
     },
     safeguards: {
@@ -608,8 +608,8 @@ test("client diagnostic bundle redacts secrets and support-private identifiers f
   const bundle = buildDiagnosticBundle({
     generatedAt: "2026-07-04T00:00:00.000Z",
     status: {
-      diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.2.0-beta.2" }),
-      appVersion: "0.2.0-beta.2",
+      diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.3.0-rc.1" }),
+      appVersion: "0.3.0-rc.1",
       profileImported: true,
       futurePrivateDebugPayload: "new-sensitive-field-that-must-not-leak",
       profileSummary: {
@@ -645,7 +645,7 @@ test("client diagnostic bundle redacts secrets and support-private identifiers f
         serverDiagnostics: {
           app: "singbox-folder-sync",
           role: "server",
-          version: "0.2.0-beta.2",
+          version: "0.3.0-rc.1",
           buildId: "",
           buildTime: null,
           protocols: {
@@ -734,7 +734,7 @@ test("client diagnostic bundle redacts secrets and support-private identifiers f
         ok: true,
         schemaVersion: 1,
         package: "SyncraftDesktop",
-        version: "0.2.0-beta.2",
+        version: "0.3.0-rc.1",
         builtAt: "2026-07-04T00:00:00.000Z",
         fileCount: 8,
         supportDocuments: {
@@ -828,9 +828,9 @@ test("client diagnostic bundle redacts secrets and support-private identifiers f
   assert.equal(text.includes("home-sync"), false);
   assert.equal(text.includes("devices/company-pc1"), false);
   assert.equal(bundle.schemaVersion, 1);
-  assert.equal(bundle.summary.appVersion, "0.2.0-beta.2");
+  assert.equal(bundle.summary.appVersion, "0.3.0-rc.1");
   assert.equal(bundle.summary.releaseManifestOk, true);
-  assert.equal(bundle.summary.releaseManifestVersion, "0.2.0-beta.2");
+  assert.equal(bundle.summary.releaseManifestVersion, "0.3.0-rc.1");
   assert.equal(bundle.summary.releaseManifestBuiltAt, "2026-07-04T00:00:00.000Z");
   assert.equal(bundle.summary.releaseManifestErrorCode, "");
   assert.equal(bundle.summary.releaseManifestSupportDocsOk, false);
@@ -3836,8 +3836,8 @@ function buildSupportSummaryContext(app) {
 
 function makeClientStatus(overrides = {}) {
   return {
-    appVersion: overrides.appVersion || "0.2.0-beta.2",
-    clientVersion: overrides.appVersion || "0.2.0-beta.2",
+    appVersion: overrides.appVersion || "0.3.0-rc.1",
+    clientVersion: overrides.appVersion || "0.3.0-rc.1",
     diagnostics: { protocols: { claim: 1, profile: 1, adminState: 1, clientStatus: 1, heartbeat: 1 } },
     releaseManifest: { ok: true, builtAt: "2026-07-08T00:00:00.000Z" },
     binaries: {

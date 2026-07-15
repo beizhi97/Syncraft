@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeJsonReportSync } from "./lib/reportSecrets.mjs";
+import { releaseBundlePaths } from "./lib/releasePaths.mjs";
 
 const projectRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const outputPath = resolve(readArg("--output") || "reports/internal-trial/internal-trial-record.json");
@@ -183,7 +184,8 @@ function buildInitialRecord() {
 }
 
 function collectEvidence() {
-  const releaseBundleManifestPath = repoPath("dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release/release-bundle-manifest.json");
+  const release = releaseBundlePaths(projectRoot);
+  const releaseBundleManifestPath = repoPath(release.manifest);
   const releaseBundleManifest = readJson(releaseBundleManifestPath, "release bundle manifest");
   const latestN1Path = repoPath("reports/n1/latest-post-deploy.json");
   const latestN1 = readJson(latestN1Path, "latest N1 post-deploy pointer");
@@ -192,13 +194,13 @@ function collectEvidence() {
 
   return {
     releaseBundle: {
-      path: rel("dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release.zip"),
-      sha256Path: rel("dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release.zip.sha256"),
+      path: rel(release.zip),
+      sha256Path: rel(release.sha256),
       manifestPath: rel(releaseBundleManifestPath),
       version: releaseBundleManifest.version || "",
       generatedAt: releaseBundleManifest.generatedAt || "",
       preflightVerified: releaseBundleManifest.preflightVerified === true,
-      sha256: fileSha256(repoPath("dist/release-bundles/singbox-folder-sync-0.2.0-beta.2-release.zip"))
+      sha256: fileSha256(repoPath(release.zip))
     },
     desktopPackage: packageEvidence("SyncraftDesktop"),
     portablePackage: packageEvidence("SyncraftClient"),
