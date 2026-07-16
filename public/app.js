@@ -69,6 +69,7 @@ byId("copyClaimBtn").addEventListener("click", copyClaim);
 byId("copyClaimUriBtn").addEventListener("click", copyClaimUri);
 byId("redeemPreviewBtn").addEventListener("click", redeemPreview);
 byId("refreshBtn").addEventListener("click", loadState);
+byId("refreshOverviewBtn").addEventListener("click", loadState);
 byId("loginForm").addEventListener("submit", loginAdmin);
 byId("logoutBtn").addEventListener("click", logoutAdmin);
 byId("confirmForm").addEventListener("submit", submitConfirmation);
@@ -76,6 +77,7 @@ byId("confirmCancelBtn").addEventListener("click", cancelConfirmation);
 document.querySelectorAll("[data-tab-target]").forEach((tab) => {
   tab.addEventListener("click", () => switchTab(tab.dataset.tabTarget));
 });
+document.querySelector(".config-preview .toggle")?.addEventListener("click", toggleConfigPreview);
 
 boot();
 setInterval(refreshLiveDevices, 5000);
@@ -138,6 +140,7 @@ async function refreshLiveDevices() {
     state = await api("/api/admin/state");
     renderApplyNotice();
     renderStatStrip();
+    renderOverview();
     renderDevices();
   } catch (error) {
     if (error.code === "admin_auth_required") {
@@ -1140,6 +1143,7 @@ function setConfirmMessage(message) {
 function renderState() {
   if (!state) return;
   renderStatStrip();
+  renderOverview();
   renderVless();
   renderApplyNotice();
   renderStorage();
@@ -1150,12 +1154,27 @@ function renderState() {
 
 function switchTab(tabId) {
   if (!tabId) return;
+  const targetPanel = byId(tabId);
+  const navGroup = targetPanel?.dataset.navGroup || "";
   document.querySelectorAll("[data-tab-target]").forEach((tab) => {
-    tab.classList.toggle("active", tab.dataset.tabTarget === tabId);
+    const groupedActive = navGroup && tab.dataset.navGroup === navGroup;
+    tab.classList.toggle("active", tab.dataset.tabTarget === tabId || groupedActive);
   });
   document.querySelectorAll(".tab-panel").forEach((panel) => {
     panel.classList.toggle("active", panel.id === tabId);
   });
+  byId("pageTitle").textContent = targetPanel?.dataset.pageTitle || "Syncraft 管理";
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function toggleConfigPreview() {
+  const preview = document.querySelector(".config-preview");
+  if (!preview) return;
+  preview.classList.toggle("collapsed");
+  const expanded = !preview.classList.contains("collapsed");
+  const toggle = preview.querySelector(".toggle");
+  toggle.textContent = expanded ? "×" : "▾";
+  toggle.setAttribute("aria-label", expanded ? "收起配置预览" : "展开配置预览");
 }
 
 function renderStatStrip() {
@@ -1186,6 +1205,68 @@ function renderStatStrip() {
   setStatText("statStorageUsageSub", buckets.length
     ? `${buckets.filter((bucket) => !bucket.disabledAt).length} 个启用仓库`
     : "暂无仓库状态");
+}
+
+function renderOverview() {
+  const tunnel = state?.tunnel || {};
+  const storage = state?.storage || {};
+  const devices = Array.isArray(state?.devices) ? state.devices : [];
+  const enabledDevices = devices.filter((device) => device.enabled !== false);
+  const buckets = Array.isArray(storage.buckets) ? storage.buckets : [];
+  const activeBuckets = buckets.filter((bucket) => !bucket.disabledAt);
+  const issues = [];
+
+  if (tunnel.restartRequired) {
+    issues.push({ level: "warning", title: "配置修改尚未应用", detail: "sing-box 仍在使用上一版配置，请到基础设置执行“重启并应用”。" });
+  }
+  if (!tunnel.protocol) {
+    issues.push({ level: "warning", title: "VLESS 尚未配置", detail: "生成隧道配置后，客户端才能建立同步连接。" });
+  }
+  if (!activeBuckets.length) {
+    issues.push({ level: "danger", title: "没有可用同步仓库", detail: "检查 MinIO 连接并至少启用一个同步仓库。" });
+  }
+  const offlineCount = enabledDevices.filter((device) => !device.online).length;
+  if (offlineCount) {
+    issues.push({ level: "warning", title: `${offlineCount} 台设备离线`, detail: "查看设备页的最近心跳和客户端状态。" });
+  }
+  const incompatibleCount = enabledDevices.filter((device) => device.compatibility?.ok === false).length;
+  if (incompatibleCount) {
+    issues.push({ level: "danger", title: `${incompatibleCount} 台设备协议不兼容`, detail: "同步前需要升级对应客户端或确认兼容策略。" });
+  }
+  const failedCount = enabledDevices.filter((device) => device.sync?.lastRun?.status === "error").length;
+  if (failedCount) {
+    issues.push({ level: "danger", title: `${failedCount} 台设备最近同步失败`, detail: "打开设备详情查看稳定错误码和恢复建议。" });
+  }
+
+  const count = byId("overviewAttentionCount");
+  count.textContent = issues.length ? `${issues.length} 项` : "无需处理";
+  count.className = `badge ${issues.some((issue) => issue.level === "danger") ? "bad" : issues.length ? "warning" : "good"}`;
+  byId("overviewAttentionList").innerHTML = issues.length
+    ? issues.slice(0, 4).map((issue) => `<div class="notice ${issue.level}"><strong>${escapeHtml(issue.title)}</strong><span>${escapeHtml(issue.detail)}</span></div>`).join("")
+    : `<div class="notice success"><strong>当前没有待处理事项</strong><span>服务配置、设备和存储摘要未发现异常。</span></div>`;
+
+  setOverviewStatus("overviewServiceState", true, "API 与管理状态可达");
+  setOverviewStatus("overviewTunnelState", Boolean(tunnel.protocol) && !tunnel.restartRequired, tunnel.restartRequired ? "待重启应用" : tunnel.protocol ? "已配置并应用" : "尚未配置");
+  setOverviewStatus("overviewStorageState", activeBuckets.length > 0, activeBuckets.length ? `${activeBuckets.length} 个仓库可用` : "没有可用仓库");
+  const protocolCount = Object.keys(state?.diagnostics?.protocols || {}).length;
+  setOverviewStatus("overviewProtocolState", protocolCount > 0, protocolCount ? `${protocolCount} 项协议已报告` : "协议摘要缺失");
+
+  const recent = [...devices].sort((left, right) => String(right.lastSeenAt || "").localeCompare(String(left.lastSeenAt || ""))).slice(0, 5);
+  byId("overviewDeviceList").innerHTML = recent.length ? `
+    <div class="overview-device-row header"><span>设备</span><span>在线</span><span>同步</span><span>最近心跳</span></div>
+    ${recent.map((device) => `
+      <div class="overview-device-row">
+        <span class="overview-device-name">${escapeHtml(device.clientName || device.id || "未知设备")}</span>
+        <span class="pill ${device.enabled === false ? "warn" : device.online ? "good" : ""}">${device.enabled === false ? "停用" : device.online ? "在线" : "离线"}</span>
+        <span class="overview-device-meta">${escapeHtml(formatSyncState(currentDeviceSyncState(device)))}</span>
+        <span class="overview-device-meta">${escapeHtml(formatTime(device.lastSeenAt))}</span>
+      </div>`).join("")}` : `<div class="empty">暂无设备，先签发一个设备 SyncKey。</div>`;
+}
+
+function setOverviewStatus(id, ok, text) {
+  const target = byId(id);
+  target.textContent = text;
+  target.className = `status ${ok ? "good" : "warn"}`;
 }
 
 function setStatValue(id, text, stateClass = "") {
