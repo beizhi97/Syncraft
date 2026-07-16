@@ -1,0 +1,5 @@
+#!/command/with-contenv sh
+set -eu
+
+mkdir -p "$(dirname "${SINGBOX_CONFIG_PATH:-/data/sing-box/config.json}")" "${SINGBOX_CONTROL_DIR:-/data/control}"
+exec /usr/local/bin/sfsc-sing-box-supervisor

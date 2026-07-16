@@ -66,7 +66,7 @@ test("sing-box restart control rejects missing or mismatched config hashes", asy
 async function emulateSupervisor(controlDir, result) {
   let requestName = "";
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    requestName = (await readdir(controlDir)).find((name) => name.startsWith("restart-request-")) || "";
+    requestName = (await readdir(controlDir)).find((name) => name.startsWith("restart-request-") && name.endsWith(".json")) || "";
     if (requestName) break;
     await delay(5);
   }

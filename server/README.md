@@ -1,6 +1,37 @@
-# Docker Server Shape
+# Server Appliance
 
-The server side is intended to run in Docker Compose.
+The N1 server runs as a systemd-managed appliance container. The appliance image contains Node.js, sing-box, rclone, MinIO Client, and s6-overlay. MinIO remains a separate container and keeps its own storage lifecycle.
+
+The two boot units are:
+
+- `sfsc-appliance.service`: runs the Node control plane and sing-box under s6.
+- `sfsc-minio.service`: runs MinIO with `/ssd/sfsc-test/minio` mounted as its data directory.
+
+Build and install the N1 services from `/opt/sfsc-test`:
+
+```bash
+sudo sh server/install-n1-appliance.sh
+```
+
+The installer builds `sfsc-appliance:local`, installs both systemd units, replaces the legacy `sync-server` and `sing-box` Compose containers, and waits for the unified readiness endpoint:
+
+```bash
+curl --fail http://127.0.0.1:5177/healthz
+systemctl status sfsc-appliance.service sfsc-minio.service
+```
+
+`/healthz` is ready only when Node is serving, sing-box is alive and listening, the bundled rclone binary is executable, the state volume is writable, and MinIO answers its live probe.
+
+State is retained outside the image:
+
+- `/opt/sfsc-test/server/data/app` -> `/data/app`
+- `/opt/sfsc-test/server/data/control` -> `/data/control`
+- `/opt/sfsc-test/server/sing-box` -> `/data/sing-box`
+- `/ssd/sfsc-test/minio` -> MinIO `/data`
+
+The older Compose files remain for generic development and migration reference. They are not the N1 lifecycle owner.
+
+## Legacy Compose Shape
 
 It contains:
 

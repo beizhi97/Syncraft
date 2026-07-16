@@ -1,0 +1,10 @@
+#!/command/with-contenv sh
+set -eu
+
+mkdir -p "${SERVER_DATA_ROOT:-/data/app}" "${SINGBOX_CONTROL_DIR:-/data/control}"
+if [ ! -s /run/sfsc-instance-id ]; then
+  od -An -N16 -tx1 /dev/urandom | tr -d ' \n' > /run/sfsc-instance-id
+  chmod 0600 /run/sfsc-instance-id
+fi
+export SFSC_INSTANCE_ID="$(cat /run/sfsc-instance-id)"
+exec node /app/src/server.js

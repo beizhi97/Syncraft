@@ -1,0 +1,20 @@
+[Unit]
+Description=Syncraft server appliance
+Requires=docker.service sfsc-minio.service
+After=docker.service network-online.target sfsc-minio.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=45
+ExecStartPre=-/usr/bin/docker rm -f sfsc-appliance
+ExecStart=/usr/bin/docker run --name sfsc-appliance --network host --env-file /opt/sfsc-test/server/.env -e HOST=0.0.0.0 -e PORT=5177 -e SERVER_DATA_ROOT=/data/app -e SINGBOX_CONFIG_PATH=/data/sing-box/config.json -e SINGBOX_CONTROL_DIR=/data/control -e SINGBOX_LISTEN_PORT=45679 -e VLESS_PORT=45679 -e RCLONE_BIN=/usr/local/bin/rclone -e S3_ENDPOINT=http://127.0.0.1:9000 -v /opt/sfsc-test/server/data/app:/data/app -v /opt/sfsc-test/server/data/control:/data/control -v /opt/sfsc-test/server/sing-box:/data/sing-box sfsc-appliance:local
+ExecStop=/usr/bin/docker stop --time 30 sfsc-appliance
+ExecStopPost=-/usr/bin/docker rm -f sfsc-appliance
+
+[Install]
+WantedBy=multi-user.target
+

@@ -8,7 +8,7 @@ Syncraft 是一个自托管文件夹同步工具，用于在运营商单 TCP 流
 
 系统分为服务端和客户端：
 
-- 服务端运行在 N1/Debian/Docker 环境，集成 `sync-server`、`sing-box`、`MinIO`。
+- 服务端运行在 N1/Debian/Docker 环境。systemd 管理 appliance 与独立 MinIO 两个容器；appliance 内由 s6 管理 Node 控制面和 `sing-box`，并内置 `rclone`。
 - 客户端为 Windows 桌面 EXE，内置 `sing-box.exe` 和 `rclone.exe`。
 - 客户端不修改系统代理、路由、DNS、防火墙或 TUN，只让同步进程走本地代理。
 
@@ -34,7 +34,11 @@ Windows Client EXE
 公网/Lucky/端口转发
         |
         v
-Server Docker Compose
+Server systemd
+  ├── sfsc-appliance container (s6 -> Node + sing-box; bundled rclone)
+  └── sfsc-minio container (independent persistent storage)
+
+Legacy / development Docker Compose
   sync-server :5177
   sing-box VLESS inbound
   MinIO S3 storage
@@ -251,7 +255,7 @@ Server Docker Compose
 - 客户端 `profile.json` 和 `jobs.json` 不直接保存 S3 `secretAccessKey` 或 `profile.heartbeat.secret`，而在原密钥字段中保存 `{ "secretRef": "..." }` 引用对象；运行时通过本地 secret vault 水合后再生成 rclone 配置和 heartbeat auth。进程内 `readProfile()` / `readJobs()` 返回水合后的运行时对象；HTTP 的 `GET /api/profile`、`POST /api/profile/import.profile`、`GET /api/jobs`、`POST /api/jobs/save.job` 和 `GET /api/client/status.jobs` 只返回展示安全摘要，不得包含 access key、S3 secret、heartbeat secret/nonce、原始 VLESS URI、SyncKey、claim code、token 或完整 profile。当前 vault 后端是 `data/secrets.json`，后续可替换为 Windows Credential Manager。
 - 若 `secretRef` 找不到对应条目，状态接口仍返回 `safeguards.secretVault.ok: false`，同步预览/运行返回 `secret_vault_missing`，提示用户重新导入 SyncKey。
 - 若本地 JSON 状态文件损坏，状态接口仍返回 200，并通过 `safeguards.localState` 点名损坏文件；保存任务、导入 profile、启动同步等会修改状态的入口返回 `local_state_corrupt`，避免继续覆盖损坏文件。
-- 服务端启动时必须先获取 `SERVER_DATA_ROOT/sfsc-state.lock`，同一数据目录只允许一个 sync-server 写入者；若已有写入者或无法判断的遗留锁，启动失败并返回 `server_state_locked`，同机 owner PID 已不存在的陈旧锁可自动接管，其他情况需管理员确认无活动进程后才能清理。`sfsc-state.json` 存在但损坏时必须失败并保留原文件，不得用默认状态静默覆盖；状态写入使用临时文件和原子 rename，写入失败返回 `server_state_write_failed` 并回滚本次请求对内存管理状态的修改。
+- 服务端启动时必须先获取 `SERVER_DATA_ROOT/sfsc-state.lock`，同一数据目录只允许一个 sync-server 写入者。owner 记录容器 `instanceId`、进程启动身份并持续刷新心跳：同一容器内 PID 复用时通过 `processStartedAt` 识别旧进程，不同容器实例仅在心跳超时后接管；仍有活动 owner 或无法判断的锁必须返回 `server_state_locked`。`sfsc-state.json` 存在但损坏时必须失败并保留原文件，不得用默认状态静默覆盖；状态写入使用临时文件和原子 rename，写入失败返回 `server_state_write_failed` 并回滚本次请求对内存管理状态的修改。
 - `server/sing-box/config.json` 当前只保留占位配置；真实运行密钥应来自服务端状态或环境变量。
 
 ## 9. 双端接口约定

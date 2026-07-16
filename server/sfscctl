@@ -5,6 +5,9 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 COMPOSE_FILE=${SFSC_COMPOSE_FILE:-docker-compose.yml}
 BACKUP_DIR=${SFSC_BACKUP_DIR:-$ROOT/backups}
 HEALTH_URL=${SFSC_HEALTH_URL:-}
+RUNTIME=${SFSC_RUNTIME:-auto}
+APPLIANCE_UNIT=${SFSC_APPLIANCE_UNIT:-sfsc-appliance.service}
+MINIO_UNIT=${SFSC_MINIO_UNIT:-sfsc-minio.service}
 
 usage() {
   echo "Usage: ./sfscctl {health|upgrade|backup|restore <archive>}" >&2
@@ -17,6 +20,34 @@ require_tool() {
 
 compose() {
   docker compose -f "$COMPOSE_FILE" "$@"
+}
+
+runtime() {
+  if [ "$RUNTIME" != auto ]; then
+    echo "$RUNTIME"
+    return
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl cat "$APPLIANCE_UNIT" >/dev/null 2>&1; then
+    echo appliance
+  else
+    echo compose
+  fi
+}
+
+stop_runtime() {
+  if [ "$(runtime)" = appliance ]; then
+    systemctl stop "$APPLIANCE_UNIT" "$MINIO_UNIT"
+  else
+    compose down
+  fi
+}
+
+start_runtime() {
+  if [ "$(runtime)" = appliance ]; then
+    systemctl start "$MINIO_UNIT" "$APPLIANCE_UNIT"
+  else
+    compose up -d --build
+  fi
 }
 
 timestamp() {
@@ -50,23 +81,32 @@ verify_archive() {
 restore() {
   archive=$1
   require_tool tar
-  require_tool docker
   verify_archive "$archive"
   before=$(backup)
   stage=$(mktemp -d "$ROOT/.restore.XXXXXX")
   trap 'rm -rf "$stage"' EXIT INT TERM
   tar -xzf "$archive" -C "$stage"
-  compose down
+  stop_runtime
   rm -rf "$ROOT/data" "$ROOT/sing-box"
   [ ! -e "$stage/.env" ] || cp -p "$stage/.env" "$ROOT/.env"
   [ ! -d "$stage/data" ] || cp -a "$stage/data" "$ROOT/data"
   [ ! -d "$stage/sing-box" ] || cp -a "$stage/sing-box" "$ROOT/sing-box"
-  compose up -d --build
+  start_runtime
   echo "restore-prebackup=$before"
 }
 
 health() {
   require_tool docker
+  if [ "$(runtime)" = appliance ]; then
+    require_tool systemctl
+    systemctl is-enabled "$MINIO_UNIT" "$APPLIANCE_UNIT"
+    systemctl is-active "$MINIO_UNIT" "$APPLIANCE_UNIT"
+    docker ps --filter name=sfsc-appliance --filter name=singbox-folder-sync-minio
+    require_tool curl
+    curl --fail --silent --show-error "${HEALTH_URL:-http://127.0.0.1:5177}/healthz"
+    echo
+    return
+  fi
   compose ps
   if [ -n "$HEALTH_URL" ]; then
     require_tool curl
@@ -78,7 +118,11 @@ health() {
 upgrade() {
   require_tool docker
   before=$(backup)
-  compose up -d --build
+  if [ "$(runtime)" = appliance ]; then
+    sh "$ROOT/install-n1-appliance.sh"
+  else
+    compose up -d --build
+  fi
   echo "upgrade-prebackup=$before"
 }
 

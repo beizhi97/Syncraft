@@ -1,12 +1,12 @@
 import http from "node:http";
 import net from "node:net";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { hostname } from "node:os";
 import { dirname, extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { requestSingboxRestart } from "./core/singboxControl.js";
+import { checkApplianceHealth } from "./core/applianceHealth.js";
+import { acquireServerStateLock } from "./core/serverStateLock.js";
 import { ensureMinioClaimAccess, removeMinioDeviceAccess, setMinioDeviceAccessEnabled } from "./minioProvisioner.js";
 import {
   buildClientSingboxConfig,
@@ -61,8 +61,6 @@ const port = Number(process.env.PORT || 5177);
 const host = process.env.HOST || "127.0.0.1";
 const dataDir = process.env.SERVER_DATA_ROOT || join(root, "server", "data", "app");
 const statePath = join(dataDir, "sfsc-state.json");
-const stateLockPath = join(dataDir, "sfsc-state.lock");
-const stateLockOwnerPath = join(stateLockPath, "owner.json");
 const singboxConfigPath = process.env.SINGBOX_CONFIG_PATH || join(root, "server", "sing-box", "config.json");
 const singboxControlDir = process.env.SINGBOX_CONTROL_DIR || "";
 const PLACEHOLDER_ADMIN_TOKENS = new Set(["change-this-admin-token"]);
@@ -86,7 +84,14 @@ const diagnostics = buildRuntimeDiagnostics({
 });
 let releaseStateLock;
 try {
-  releaseStateLock = acquireServerStateLock();
+  releaseStateLock = acquireServerStateLock({
+    dataDir,
+    statePath,
+    staleAfterMs: Number(process.env.SFSC_STATE_LOCK_STALE_MS || 30_000),
+    onStaleLock: (owner) => {
+      console.warn(`[sfsc] server_state_stale_lock_removed: previous owner ${owner?.hostname || "unknown"}:${owner?.pid || "unknown"}`);
+    }
+  });
 } catch (error) {
   const normalized = normalizeHttpError(error, "server_error");
   console.error(`[sfsc] ${normalized.code}: ${normalized.message}`);
@@ -113,6 +118,17 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST") {
       assertJsonWriteContentType(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/healthz") {
+      const health = await checkApplianceHealth({
+        dataDir,
+        singboxControlDir,
+        singboxPort: Number(process.env.SINGBOX_LISTEN_PORT || process.env.VLESS_PORT || 45678),
+        rcloneBin: process.env.RCLONE_BIN,
+        storageEndpoint: process.env.S3_ENDPOINT
+      });
+      return json(res, health, health.ok ? 200 : 503);
     }
 
     if (req.method === "GET" && url.pathname === "/api/health") {
@@ -550,121 +566,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, host, () => {
   console.log(`Syncraft server: http://${host}:${port}/`);
 });
-
-function acquireServerStateLock() {
-  mkdirSync(dataDir, { recursive: true });
-  const owner = {
-    token: randomBytes(16).toString("hex"),
-    pid: process.pid,
-    hostname: hostname(),
-    startedAt: new Date().toISOString(),
-    statePath
-  };
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      mkdirSync(stateLockPath);
-      try {
-        writeFileSync(stateLockOwnerPath, JSON.stringify(owner, null, 2), "utf8");
-      } catch (error) {
-        rmSync(stateLockPath, { recursive: true, force: true });
-        throw createHttpError(
-          "server_state_write_failed",
-          500,
-          `Failed to write server state lock owner: ${error.message}`
-        );
-      }
-      return registerServerStateLockRelease(owner);
-    } catch (error) {
-      if (error?.code === "EEXIST" && attempt === 0 && removeStaleServerStateLock()) {
-        continue;
-      }
-      if (error?.code === "EEXIST") {
-        throw createHttpError(
-          "server_state_locked",
-          409,
-          `Server state directory is already locked: ${stateLockPath}`
-        );
-      }
-      if (error?.code && error?.publicMessage) {
-        throw error;
-      }
-      throw createHttpError(
-        "server_state_write_failed",
-        500,
-        `Failed to create server state lock: ${error.message}`
-      );
-    }
-  }
-  throw createHttpError("server_state_locked", 409, `Server state directory is already locked: ${stateLockPath}`);
-}
-
-function registerServerStateLockRelease(owner) {
-  let released = false;
-  const release = () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    if (isCurrentServerStateLockOwner(owner)) {
-      rmSync(stateLockPath, { recursive: true, force: true });
-    }
-  };
-  process.once("exit", release);
-  for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.once(signal, () => {
-      release();
-      process.exit(0);
-    });
-  }
-  return release;
-}
-
-function removeStaleServerStateLock() {
-  const owner = readServerStateLockOwner();
-  if (!owner || owner.hostname !== hostname() || !Number.isInteger(owner.pid) || owner.pid <= 0) {
-    return false;
-  }
-  if (isProcessAlive(owner.pid)) {
-    return false;
-  }
-  rmSync(stateLockPath, { recursive: true, force: true });
-  return true;
-}
-
-function isCurrentServerStateLockOwner(owner) {
-  const current = readServerStateLockOwner();
-  return Boolean(
-    current &&
-      current.token === owner.token &&
-      current.pid === owner.pid &&
-      current.hostname === owner.hostname &&
-      current.statePath === owner.statePath
-  );
-}
-
-function readServerStateLockOwner() {
-  try {
-    return JSON.parse(readFileSync(stateLockOwnerPath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function isProcessAlive(pid) {
-  if (pid === process.pid) {
-    return true;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if (error?.code === "ESRCH") {
-      return false;
-    }
-    return true;
-  }
-}
 
 async function serveStatic(pathname, res) {
   let fullPath;

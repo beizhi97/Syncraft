@@ -23,7 +23,7 @@ Syncraft 把 `sing-box`、`rclone` 和 MinIO/S3 组合成一套可管理的同�
 
 ## 你会得到什么
 
-- Docker Compose 服务端：管理控制台、sing-box、MinIO、HTTPS 入口。
+- Appliance 服务端：systemd 管理 appliance 与独立 MinIO 容器，appliance 内由 s6 管理 Node、sing-box，并内置 rclone。
 - Windows 客户端：内置 `sing-box.exe` 和 `rclone.exe`，支持上传、下载、双向同步和定时任务。
 - SyncKey 一次性导入：客户端不需要手工填写 S3 密钥或 VLESS 参数。
 - 同步进度、最近历史、脱敏日志和诊断包。
@@ -35,7 +35,7 @@ Syncraft 把 `sing-box`、`rclone` 和 MinIO/S3 组合成一套可管理的同�
 
 ### 1. 管理员部署服务端
 
-准备一台能够运行 Docker Compose 的 Linux 服务器，并确保域名已解析到服务器、`80`、`443` 和 VLESS 端口可从客户端网络访问。
+准备一台能够运行 Docker 和 systemd 的 Linux 服务器，并确保域名及现有公网入口已指向服务器、管理端口和 VLESS 端口可从客户端网络访问。通用开发环境仍可使用 Compose，N1 正式环境使用 `server/install-n1-appliance.sh` 安装。
 
 ```bash
 cd server
@@ -186,7 +186,7 @@ GitHub 的 `.github/workflows/ci.yml` 执行发布审计与全量测试；`.gith
 src/                 服务端 API 与共享核心逻辑
 public/              服务端管理控制台
 client/              Windows 本地 API、Electron、客户端 UI 与构建脚本
-server/              Docker Compose、Caddy 和 sing-box 部署配置
+server/              appliance、systemd、Compose 兼容配置和 sing-box 部署文件
 tests/               Node 合同与行为测试
 docs/                协议、设计、部署、试点与交接文档
 scripts/             CI、smoke、发布与 N1 自动化

@@ -277,7 +277,7 @@ SFSC_HEALTH_URL=http://127.0.0.1:5177 SFSC_COMPOSE_FILE=docker-compose.n1.yml sh
 常见稳定错误码和处理方式：
 
 - `server_state_corrupt`：服务端启动时发现 `sfsc-state.json` 不是合法 JSON，会拒绝启动并保留原文件，不得覆盖为默认状态。先停止服务，备份损坏文件，再从最近备份恢复或手工修复 JSON；修复后启动服务并运行 `/api/health` 与 `scripts/smoke-server.mjs`。
-- `server_state_locked`：服务端启动时发现 `SERVER_DATA_ROOT/sfsc-state.lock` 已存在，说明同一状态目录可能已有另一个 sync-server、容器副本或本地进程在写入。同一主机上若 owner PID 已不存在，服务端会自动接管陈旧锁；其他情况应先确认没有活动进程、重复 compose 服务或共享挂载多写入者。只有确认锁是异常崩溃留下的陈旧锁后，才可以备份现场并删除 `sfsc-state.lock`，随后重新启动服务。
+- `server_state_locked`：服务端启动时发现 `SERVER_DATA_ROOT/sfsc-state.lock` 已存在，说明同一状态目录可能已有另一个 sync-server、容器副本或本地进程在写入。owner 会记录容器 `instanceId`、`processStartedAt` 并刷新 `heartbeatAt`；同一容器内 PID 复用时可立即识别旧进程，不同容器实例的 owner 只有在心跳超时后才会自动接管。其他情况应先确认没有活动进程、重复服务或共享挂载多写入者。只有确认锁是异常崩溃留下的陈旧锁后，才可以备份现场并删除 `sfsc-state.lock`，随后重新启动服务。
 - `server_state_write_failed`：服务端无法写入状态文件，常见原因是 `SERVER_DATA_ROOT` 权限、磁盘空间、只读挂载或安全软件拦截。修复目录权限和磁盘后，重试 SyncKey 创建、兑换或心跳；失败请求不会发布幽灵 SyncKey、不会消耗未持久化的 SyncKey，也不会让控制台显示未持久化的假在线设备。
 - `server_singbox_config_write_failed`：服务端无法写入 sing-box 配置。检查 `SINGBOX_CONFIG_PATH`、父目录权限、容器挂载和磁盘空间；该错误会回滚本次管理状态修改，修复后重新执行 tunnel 生成或配置写入。
 

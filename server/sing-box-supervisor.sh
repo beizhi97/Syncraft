@@ -32,12 +32,16 @@ stop_singbox() {
 }
 
 wait_ready() {
+  listen_port_hex="$(printf '%04X' "$LISTEN_PORT")"
   attempts=0
   while [ "$attempts" -lt 50 ]; do
     if ! kill -0 "$SINGBOX_PID" 2>/dev/null; then
       return 1
     fi
-    if nc -z 127.0.0.1 "$LISTEN_PORT" >/dev/null 2>&1; then
+    if awk -v port=":$listen_port_hex" '
+      $2 ~ port "$" && $4 == "0A" { found = 1 }
+      END { exit !found }
+    ' /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
       return 0
     fi
     attempts=$((attempts + 1))
