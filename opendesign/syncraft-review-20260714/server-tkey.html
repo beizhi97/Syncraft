@@ -1,7 +1,75 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Syncraft 管理控制台 · SyncKey</title><link rel="stylesheet" href="prototype.css"></head>
-<body><div class="app-shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">SF</span><strong>Syncraft 管理</strong></div><div class="nav-label">运行</div><a class="nav-item" href="server-overview.html"><span class="nav-dot"></span>概览</a><a class="nav-item active" href="server-tkey.html"><span class="nav-dot"></span>SyncKey</a><a class="nav-item" href="server-devices.html"><span class="nav-dot"></span>设备</a><div class="nav-label">配置</div><a class="nav-item" href="server-infrastructure.html"><span class="nav-dot"></span>基础设置</a><div class="sidebar-foot"><div class="status">等待管理状态</div></div></aside>
-<main class="main"><header class="topbar"><span class="crumb">SyncKey</span><div class="top-actions"><span id="claimServiceStatus" class="status" aria-live="polite">正在读取管理状态</span></div></header><div class="content"><header class="page-head"><div><h1 data-od-id="tkey-title">签发 SyncKey</h1><p>为一个已创建的同步 ID 和已启用设备授予一次性访问权限。</p></div><button id="refreshClaimStateBtn" class="btn" aria-label="重新读取可签发的同步 ID 与设备">刷新</button></header>
-<div class="split"><section data-od-id="tkey-form-panel"><div class="panel-head"><h2>签发步骤</h2><span class="status" aria-live="polite">先选择范围</span></div><form class="panel-body stack" novalidate><div class="grid-2"><div class="field"><label for="claimBucket">1. 同步 ID</label><select id="claimBucket" disabled aria-describedby="sync-id-help"><option value="">正在加载已创建的同步 ID…</option></select><small id="sync-id-help">同一同步 ID 指向同一份内容；它不是访问密码。</small></div><div class="field"><label for="deviceName">2. 设备</label><select id="deviceName" disabled aria-describedby="device-help"><option value="">正在加载已启用设备…</option></select><small id="device-help">仅显示已启用且可授予权限的设备。</small></div></div><div class="grid-2"><div class="field"><label for="claimRole">3. 角色</label><select id="claimRole"><option value="owner">owner</option><option value="writer" selected>writer</option><option value="reader">reader</option></select></div><div class="field"><label for="claimExpiry">4. 有效期</label><select id="claimExpiry"><option>1 小时</option><option selected>8 小时</option><option>24 小时</option></select></div></div><div id="claimMessage" class="notice" role="status" aria-live="polite"><strong>等待选择</strong><span>加载完成后，选择同步 ID 与设备即可签发。</span></div><div class="btn-row"><button id="createClaimBtn" type="button" class="btn primary" data-od-id="create-tkey-button" disabled>生成 SyncKey</button><span class="quiet-note">生成后仅显示一次。</span></div></form></section>
-<aside id="claimResult" class="hidden" data-od-id="tkey-result-panel" aria-live="polite"><div class="panel-head"><h2>签发结果</h2><span class="badge warning">仅显示一次</span></div><div class="panel-body stack"><div class="notice warning"><strong>安全交付给目标设备</strong><span>测试兑换会消耗这枚 SyncKey；正常交付时请直接复制导入码或链接。</span></div><div class="summary-list"><div class="summary-row"><span class="k">同步 ID</span><span id="claimResultSyncId">—</span></div><div class="summary-row"><span class="k">设备</span><span id="claimResultDevice">—</span></div><div class="summary-row"><span class="k">角色</span><span id="claimResultRole">—</span></div></div><div class="field"><label for="claimMasked">SyncKey 导入码</label><div class="input-row"><div id="claimMasked" class="input secret" role="textbox" aria-readonly="true">••••••••••••</div><button type="button" class="btn" data-secret-toggle="claimMasked">显示</button></div></div><div class="btn-row"><button class="btn" data-toast="复制操作应使用接口返回的导入码">复制导入码</button><button class="btn" data-toast="复制操作应使用接口返回的导入链接">复制导入链接</button></div><button class="btn" data-open-modal="redeemModal">测试兑换…</button></div></aside></div></div></main></div>
-<div id="redeemModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="redeem-title"><div class="dialog"><div class="dialog-head"><h2 id="redeem-title">测试兑换会消耗 SyncKey</h2></div><div class="dialog-body"><div class="notice warning"><strong>测试后不能交给客户端使用</strong><span>仅在验证签发链路时执行；正常交付请取消。</span></div></div><div class="dialog-foot"><button class="btn" data-close-modal>取消</button><button class="btn danger" data-close-modal data-toast="测试兑换应调用真实兑换接口">确认测试兑换</button></div></div></div><script src="prototype.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Syncraft 管理控制台 · SyncKey</title>
+  <link rel="stylesheet" href="prototype.css">
+</head>
+<body class="server-console">
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="管理导航">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">SF</span><strong>Syncraft 管理</strong></div>
+      <div class="nav-label">运行</div>
+      <a class="nav-item" href="server-overview.html"><span class="nav-dot"></span>概览</a>
+      <a class="nav-item active" href="server-tkey.html" aria-current="page"><span class="nav-dot"></span>SyncKey</a>
+      <a class="nav-item" href="server-devices.html"><span class="nav-dot"></span>设备</a>
+      <div class="nav-label">配置</div>
+      <a class="nav-item" href="server-infrastructure.html"><span class="nav-dot"></span>基础设置</a>
+      <div class="sidebar-foot"><span id="claimServiceStatus" class="status">管理状态未加载</span></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar"><span class="crumb">SyncKey</span><span class="status success">已登录</span></header>
+      <div class="content server-content">
+        <div class="page-head compact-head"><div><h1 data-od-id="tkey-title">签发 SyncKey</h1></div><button id="refreshClaimStateBtn" class="btn" type="button">刷新可选项</button></div>
+
+        <div class="issuance-layout">
+          <form class="issuance-form" data-od-id="tkey-form-panel">
+            <fieldset class="form-section">
+              <legend><span>1</span>同步空间</legend>
+              <div class="field"><label for="claimBucket">同步 ID</label><select id="claimBucket" disabled><option value="">正在加载同步空间</option></select></div>
+            </fieldset>
+            <fieldset class="form-section">
+              <legend><span>2</span>设备与角色</legend>
+              <div class="grid-2">
+                <div class="field"><label for="deviceName">设备</label><select id="deviceName" disabled><option value="">正在加载已启用设备</option></select></div>
+                <div class="field"><label for="claimRole">角色</label><select id="claimRole"><option value="owner">所有者</option><option value="writer" selected>可写</option><option value="reader">只读</option></select></div>
+              </div>
+            </fieldset>
+            <fieldset class="form-section">
+              <legend><span>3</span>有效期</legend>
+              <div class="field field-narrow"><label for="claimExpiry">一次性兑换有效期</label><select id="claimExpiry"><option>1 小时</option><option selected>8 小时</option><option>24 小时</option></select></div>
+            </fieldset>
+            <div class="form-actions"><button id="createClaimBtn" class="btn primary" data-od-id="create-tkey-button" type="button" disabled>生成 SyncKey</button></div>
+          </form>
+
+          <aside id="claimResult" class="result-surface hidden" data-od-id="tkey-result-panel" aria-live="polite">
+            <div class="section-head"><h2>生成结果</h2><span class="badge warning">仅显示一次</span></div>
+            <div class="result-body">
+              <dl class="result-list">
+                <div><dt>同步 ID</dt><dd id="claimResultSyncId">—</dd></div>
+                <div><dt>设备</dt><dd id="claimResultDevice">—</dd></div>
+                <div><dt>角色</dt><dd id="claimResultRole">—</dd></div>
+                <div><dt>有效期</dt><dd>等待签发结果</dd></div>
+              </dl>
+              <div class="field"><label for="claimMasked">SyncKey 导入码</label><div class="input-row"><div id="claimMasked" class="input secret" role="textbox" aria-readonly="true">••••••••••••</div><button class="btn" type="button" data-secret-toggle="claimMasked">显示</button></div></div>
+              <div class="btn-row"><button class="btn primary" type="button" data-toast="导入码已复制">复制导入码</button><button class="btn" type="button" data-toast="导入链接已复制">复制导入链接</button></div>
+              <button class="btn danger-link" type="button" data-open-modal="redeemModal">测试兑换</button>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="redeemModal" class="modal" aria-hidden="true">
+    <div class="dialog" aria-labelledby="redeemTitle">
+      <div class="dialog-head"><h2 id="redeemTitle">确认测试兑换</h2></div>
+      <div class="dialog-body"><p>测试后该 SyncKey 立即失效。</p></div>
+      <div class="dialog-foot"><button class="btn" type="button" data-close-modal>取消</button><button class="btn danger" type="button" data-close-modal data-toast="测试兑换请求已提交">确认兑换</button></div>
+    </div>
+  </div>
+  <script src="prototype.js"></script>
+</body>
+</html>

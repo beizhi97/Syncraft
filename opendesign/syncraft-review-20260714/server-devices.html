@@ -1,1 +1,48 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Syncraft 管理控制台 · 设备</title><link rel="stylesheet" href="prototype.css"></head><body><div class="app-shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">SF</span><strong>Syncraft 管理</strong></div><div class="nav-label">运行</div><a class="nav-item" href="server-overview.html"><span class="nav-dot"></span>概览</a><a class="nav-item" href="server-tkey.html"><span class="nav-dot"></span>SyncKey</a><a class="nav-item active" href="server-devices.html"><span class="nav-dot"></span>设备</a><div class="nav-label">配置</div><a class="nav-item" href="server-infrastructure.html"><span class="nav-dot"></span>基础设置</a><div class="sidebar-foot"><div id="deviceServerState" class="status">等待服务状态</div></div></aside><main class="main"><header class="topbar"><span class="crumb">设备</span><div class="top-actions"><span id="deviceLoadState" class="status">等待设备接口</span></div></header><div class="content"><div class="page-head"><div><h1 data-od-id="devices-title">设备监控</h1><p>从管理状态接口加载设备、同步和兼容性摘要。</p></div><a class="btn primary" href="server-tkey.html">生成 SyncKey</a></div><section class="panel" data-od-id="device-table-panel"><div class="toolbar"><input id="deviceSearch" class="input" placeholder="搜索设备、同步 ID 或状态"><select style="width:130px"><option>全部在线状态</option><option>在线</option><option>离线</option></select><select style="width:130px"><option>全部兼容性</option><option>兼容</option><option>警告</option><option>不兼容</option></select><span class="spacer"></span><button class="btn small" data-refresh-devices>刷新</button></div><table><thead><tr><th style="width:18%">设备</th><th style="width:11%">启用</th><th style="width:11%">在线</th><th style="width:13%">同步</th><th style="width:14%">兼容性</th><th style="width:16%">同步 ID</th><th>最近心跳</th><th style="width:70px"></th></tr></thead><tbody id="deviceList"><tr><td colspan="8" class="empty-cell">暂无设备数据。点击“刷新”从 <span class="mono">/api/admin/state</span> 重新加载。</td></tr></tbody></table></section></div></main></div><script src="prototype.js"></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Syncraft 管理控制台 · 设备</title>
+  <link rel="stylesheet" href="prototype.css">
+</head>
+<body class="server-console">
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="管理导航">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">SF</span><strong>Syncraft 管理</strong></div>
+      <div class="nav-label">运行</div>
+      <a class="nav-item" href="server-overview.html"><span class="nav-dot"></span>概览</a>
+      <a class="nav-item" href="server-tkey.html"><span class="nav-dot"></span>SyncKey</a>
+      <a class="nav-item active" href="server-devices.html" aria-current="page"><span class="nav-dot"></span>设备</a>
+      <div class="nav-label">配置</div>
+      <a class="nav-item" href="server-infrastructure.html"><span class="nav-dot"></span>基础设置</a>
+      <div class="sidebar-foot"><span id="deviceServerState" class="status">服务状态未加载</span></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar"><span class="crumb">设备</span><span id="deviceLoadState" class="status" role="status" aria-live="polite">设备状态未加载</span></header>
+      <div class="content server-content">
+        <div class="page-head compact-head"><div><h1 data-od-id="devices-title">设备</h1></div><a class="btn primary" href="server-tkey.html">生成 SyncKey</a></div>
+        <section class="table-section" data-od-id="device-table-panel">
+          <div class="toolbar device-toolbar">
+            <label class="sr-only" for="deviceSearch">搜索设备</label>
+            <input id="deviceSearch" class="input" type="search" placeholder="搜索设备或同步 ID">
+            <label class="sr-only" for="deviceOnlineFilter">在线状态</label>
+            <select id="deviceOnlineFilter"><option>全部在线状态</option><option>在线</option><option>离线</option></select>
+            <label class="sr-only" for="deviceCompatFilter">兼容性</label>
+            <select id="deviceCompatFilter"><option>全部兼容性</option><option>兼容</option><option>警告</option><option>不兼容</option></select>
+            <span class="spacer"></span><button class="btn" type="button" data-refresh-devices>刷新</button>
+          </div>
+          <div class="table-wrap" tabindex="0" aria-label="设备表格，可横向滚动">
+            <table class="device-table">
+              <thead><tr><th>设备</th><th>在线</th><th>末次心跳</th><th>兼容性</th><th>最近同步</th><th>同步 ID</th><th class="table-actions">操作</th></tr></thead>
+              <tbody id="deviceList"><tr><td colspan="7" class="empty-cell">暂无设备数据。刷新后重试。</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script src="prototype.js"></script>
+</body>
+</html>

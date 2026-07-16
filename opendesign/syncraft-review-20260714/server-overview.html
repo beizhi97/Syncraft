@@ -5,240 +5,90 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Syncraft 管理控制台 · 概览</title>
   <link rel="stylesheet" href="prototype.css">
-  <script>document.documentElement.classList.add('motion-enabled');</script>
-  <style>
-    /* 页面级动效：快速、克制，仅用于层级建立与刷新反馈。 */
-    .motion-enabled [data-reveal] {
-      opacity: 0;
-      transform: translateY(8px);
-    }
-
-    .motion-enabled.motion-ready [data-reveal] {
-      opacity: 1;
-      transform: translateY(0);
-      transition:
-        opacity 220ms cubic-bezier(.2, 0, 0, 1),
-        transform 260ms cubic-bezier(.2, 0, 0, 1);
-      transition-delay: var(--reveal-delay, 0ms);
-    }
-
-    .refresh-control {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .refresh-state {
-      min-width: 52px;
-      color: var(--muted);
-      font-size: 12px;
-      opacity: 0;
-      transform: translateY(2px);
-      transition:
-        opacity 150ms cubic-bezier(.2, 0, 0, 1),
-        transform 180ms cubic-bezier(.2, 0, 0, 1);
-    }
-
-    .refresh-state.visible {
-      opacity: 1;
-      transform: translateY(0);
-    }
-
-    .refresh-surface {
-      transition:
-        opacity 140ms cubic-bezier(.2, 0, 0, 1),
-        transform 180ms cubic-bezier(.2, 0, 0, 1);
-    }
-
-    #overviewContent.is-refreshing .refresh-surface {
-      opacity: .55;
-      transform: translateY(2px);
-    }
-
-    #refreshBtn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 7px;
-      min-width: 88px;
-    }
-
-    #refreshBtn.is-loading::before {
-      content: "";
-      width: 12px;
-      height: 12px;
-      border: 1.5px solid var(--border-2);
-      border-top-color: var(--fg);
-      border-radius: 50%;
-      animation: refresh-spin 600ms linear infinite;
-    }
-
-    #refreshBtn:active:not(:disabled) {
-      transform: translateY(1px);
-      transition: transform 80ms cubic-bezier(.2, 0, 0, 1);
-    }
-
-    @keyframes refresh-spin {
-      to { transform: rotate(360deg); }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .motion-enabled [data-reveal],
-      .motion-enabled.motion-ready [data-reveal],
-      .refresh-state,
-      .refresh-state.visible,
-      .refresh-surface,
-      #overviewContent.is-refreshing .refresh-surface,
-      #refreshBtn:active:not(:disabled) {
-        opacity: 1;
-        transform: none;
-        transition: none;
-      }
-
-      #refreshBtn.is-loading::before {
-        animation: none;
-        border-color: var(--border-2);
-        border-top-color: var(--fg);
-      }
-
-      .server-overview-page .status.syncing::before {
-        animation: none;
-      }
-    }
-  </style>
 </head>
-<body class="server-overview-page">
+<body class="server-console server-overview-page">
   <div class="app-shell">
-    <aside class="sidebar" data-od-id="server-sidebar">
-      <div class="brand">
-        <span class="brand-mark">SF</span>
-        <strong>Syncraft 管理</strong>
-      </div>
+    <aside class="sidebar" data-od-id="server-sidebar" aria-label="管理导航">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">SF</span><strong>Syncraft 管理</strong></div>
       <div class="nav-label">运行</div>
-      <a class="nav-item active" href="server-overview.html"><span class="nav-dot"></span>概览</a>
+      <a class="nav-item active" href="server-overview.html" aria-current="page"><span class="nav-dot"></span>概览</a>
       <a class="nav-item" href="server-tkey.html"><span class="nav-dot"></span>SyncKey</a>
       <a class="nav-item" href="server-devices.html"><span class="nav-dot"></span>设备</a>
       <div class="nav-label">配置</div>
       <a class="nav-item" href="server-infrastructure.html"><span class="nav-dot"></span>基础设置</a>
-      <div class="sidebar-foot">
-        <div class="status">等待服务状态</div>
-        <div style="margin-top:7px">协议 v1</div>
-      </div>
+      <div class="sidebar-foot"><span class="status warning">服务状态未完整加载</span></div>
     </aside>
 
     <main class="main" data-od-id="server-overview-main">
       <header class="topbar" data-od-id="server-topbar">
         <span class="crumb">运行概览</span>
-        <div class="top-actions">
-          <span class="status success">已登录</span>
-          <a class="btn small" href="server-login.html">退出</a>
-        </div>
+        <div class="top-actions"><span class="status success">已登录</span><a class="btn small" href="server-login.html">退出</a></div>
       </header>
 
-      <div class="content" id="overviewContent" aria-busy="false">
-        <div class="page-head" data-reveal style="--reveal-delay:0ms">
-          <div>
-            <h1 data-od-id="server-overview-title">服务状态</h1>
-          </div>
+      <div class="content server-content" id="overviewContent" aria-busy="false">
+        <div class="page-head compact-head">
+          <div><h1 data-od-id="server-overview-title">运行概览</h1></div>
           <div class="refresh-control">
             <span id="refreshState" class="refresh-state" role="status" aria-live="polite"></span>
-            <button id="refreshBtn" class="btn" type="button" data-od-id="refresh-server-status">刷新状态</button>
+            <button id="refreshBtn" class="btn" type="button" data-od-id="refresh-server-status">刷新</button>
           </div>
         </div>
 
-        <div class="metric-row refresh-surface" data-reveal style="--reveal-delay:40ms;margin-bottom:16px" data-od-id="server-metrics">
-          <div class="metric"><span class="label">隧道</span><span class="value" style="font-family:var(--font);font-size:16px">等待状态</span></div>
-          <div class="metric"><span class="label">在线设备</span><span class="value">—</span></div>
-          <div class="metric"><span class="label">正在同步</span><span class="value">—</span></div>
-        </div>
+        <section class="attention-board" data-od-id="server-attention-panel" aria-labelledby="attentionTitle">
+          <div class="section-head"><h2 id="attentionTitle">需要处理</h2><span class="badge warning">2 项状态未确认</span></div>
+          <div class="attention-list">
+            <article class="attention-row warning">
+              <span class="severity">警告</span>
+              <div><strong>设备兼容性摘要不可用</strong><p>无法确认配置下发与同步是否会被阻止。</p></div>
+              <a class="btn small" href="server-devices.html">查看设备</a>
+            </article>
+            <article class="attention-row danger">
+              <span class="severity">失败</span>
+              <div><strong>组件版本检查部分失败</strong><p>MinIO 与 MinIO mc 当前状态未知。</p></div>
+              <a class="btn small" href="server-infrastructure.html#settings-versions">检查组件</a>
+            </article>
+          </div>
+        </section>
 
-        <div class="split refresh-surface" data-reveal style="--reveal-delay:80ms">
-          <section class="panel" data-od-id="server-attention-panel">
-            <div class="panel-head"><h2>需要处理</h2><span class="badge warning">2 项</span></div>
-            <div class="panel-body stack">
-              <div class="notice warning">
-                <strong>等待兼容性摘要</strong>
-                <span>客户端协议可运行，但需要用户确认后才能启动同步。</span>
-                <div><a class="btn small" href="server-devices.html">查看设备</a></div>
-              </div>
-              <div class="notice">
-                <strong>配置修改尚未应用</strong>
-                <span>新的 VLESS 参数已保存；当前运行实例仍使用上一次配置。</span>
-                <div><a class="btn small" href="server-infrastructure.html">检查并应用</a></div>
-              </div>
-            </div>
-          </section>
+        <section class="runtime-strip" data-od-id="server-metrics" aria-label="关键运行状态">
+          <div><span>隧道</span><strong class="status">等待状态</strong></div>
+          <div><span>设备</span><strong class="mono">—</strong></div>
+          <div><span>同步中</span><strong class="mono">—</strong></div>
+          <div><span>存储</span><strong class="status">等待状态</strong></div>
+        </section>
 
-          <aside class="panel" data-od-id="server-readiness-panel">
-            <div class="panel-head"><h2>配置就绪度</h2></div>
-            <div class="panel-body summary-list">
-              <div class="summary-row"><span class="k">服务健康</span><span class="status">等待状态接口</span></div>
-              <div class="summary-row"><span class="k">VLESS</span><span class="status">等待状态接口</span></div>
-              <div class="summary-row"><span class="k">存储</span><span class="status">等待状态接口</span></div>
-              <div class="summary-row"><span class="k">同步仓库</span><span>等待状态接口</span></div>
-              <div class="summary-row"><span class="k">协议</span><span class="status">等待状态接口</span></div>
-            </div>
-          </aside>
-        </div>
-
-        <section class="panel refresh-surface" data-reveal style="--reveal-delay:120ms;margin-top:16px" data-od-id="server-recent-devices">
-          <div class="panel-head"><h2>近期设备</h2><a class="btn small" href="server-devices.html">查看全部</a></div>
-          <table>
-            <thead><tr><th>设备</th><th>在线</th><th>同步</th><th>兼容性</th><th>仓库</th><th>最近心跳</th></tr></thead>
-            <tbody id="overviewDeviceList"><tr><td colspan="6" class="empty-cell">等待 <span class="mono">/api/admin/state</span> 返回设备摘要。</td></tr></tbody>
-          </table>
+        <section class="table-section" data-od-id="server-recent-devices">
+          <div class="section-head"><h2>近期设备</h2><a class="btn small" href="server-devices.html">查看全部</a></div>
+          <div class="table-wrap" tabindex="0" aria-label="近期设备表格，可横向滚动">
+            <table>
+              <thead><tr><th>设备</th><th>在线</th><th>末次心跳</th><th>兼容性</th><th>最近同步</th><th></th></tr></thead>
+              <tbody id="overviewDeviceList"><tr><td colspan="6" class="empty-cell">设备状态尚未加载。刷新后重试。</td></tr></tbody>
+            </table>
+          </div>
         </section>
       </div>
     </main>
   </div>
-
   <script src="prototype.js"></script>
   <script>
     (function () {
-      var root = document.documentElement;
       var content = document.getElementById('overviewContent');
       var button = document.getElementById('refreshBtn');
       var state = document.getElementById('refreshState');
-      var refreshTimer = 0;
-      var clearTimer = 0;
-
-      requestAnimationFrame(function () {
-        requestAnimationFrame(function () {
-          root.classList.add('motion-ready');
-        });
-      });
-
       button.addEventListener('click', function () {
         if (button.disabled) return;
-        window.clearTimeout(refreshTimer);
-        window.clearTimeout(clearTimer);
         button.disabled = true;
-        button.classList.add('is-loading');
-        button.textContent = '刷新中…';
-        content.classList.add('is-refreshing');
+        button.textContent = '刷新中';
         content.setAttribute('aria-busy', 'true');
-        state.classList.remove('visible');
-        state.textContent = '';
-
-        refreshTimer = window.setTimeout(function () {
-          content.classList.remove('is-refreshing');
-          content.setAttribute('aria-busy', 'false');
+        state.textContent = '正在读取状态';
+        window.setTimeout(function () {
           button.disabled = false;
-          button.classList.remove('is-loading');
-          button.textContent = '刷新状态';
-          state.textContent = '刚刚更新';
-          state.classList.add('visible');
-
-          clearTimer = window.setTimeout(function () {
-            state.classList.remove('visible');
-          }, 2400);
-        }, 420);
+          button.textContent = '重试';
+          content.setAttribute('aria-busy', 'false');
+          state.textContent = '部分状态读取失败';
+          state.classList.add('error-text');
+        }, 520);
       });
-
-      window.addEventListener('pagehide', function () {
-        window.clearTimeout(refreshTimer);
-        window.clearTimeout(clearTimer);
-      }, { once: true });
     })();
   </script>
 </body>
