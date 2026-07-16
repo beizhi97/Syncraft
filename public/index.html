@@ -51,11 +51,11 @@
       <div class="main-wrap content">
         <section id="tab-overview" class="tab-panel active" data-page-title="运行概览">
           <div class="page-head">
-            <div><h1>服务状态</h1><p>查看隧道、设备和存储的当前运行摘要。</p></div>
+            <div><h1>运行概览</h1></div>
             <button id="refreshOverviewBtn" class="btn-secondary" type="button">刷新状态</button>
           </div>
 
-          <div class="stat-strip metric-row" data-component="stat-strip">
+          <div class="stat-strip metric-row" data-component="stat-strip" aria-label="运行摘要">
             <div class="stat-tile metric"><span class="stat-label label">隧道</span><span class="stat-value value" id="statTunnelValue">未加载</span><span class="stat-sub" id="statTunnelSub">等待服务端状态</span></div>
             <div class="stat-tile metric"><span class="stat-label label">在线设备</span><span class="stat-value value" id="statOnlineDevicesValue">-</span><span class="stat-sub" id="statOnlineDevicesSub">暂无设备状态</span></div>
             <div class="stat-tile metric"><span class="stat-label label">同步中</span><span class="stat-value value" id="statSyncingValue">-</span><span class="stat-sub" id="statSyncingSub">暂无同步任务</span></div>
@@ -85,7 +85,7 @@
         </section>
 
         <section id="tab-tkey" class="tab-panel" data-page-title="SyncKey" data-component="tkey-panel">
-          <div class="page-head"><div><h1>签发 SyncKey</h1><p>为同步 ID 和设备生成一次性导入凭据。</p></div></div>
+          <div class="page-head"><div><h1>签发 SyncKey</h1></div></div>
           <div class="workspace-split">
             <section class="panel">
               <div class="panel-head"><h2>签发步骤</h2><span class="status">选择范围与权限</span></div>
@@ -139,7 +139,7 @@
         </section>
 
         <section id="tab-devices" class="tab-panel" data-page-title="设备" data-component="devices-panel">
-          <div class="page-head"><div><h1>设备监控</h1><p>查看设备在线、同步与协议兼容状态。</p></div><button class="btn-primary" type="button" data-tab-target="tab-tkey">生成 SyncKey</button></div>
+          <div class="page-head"><div><h1>设备</h1></div><button class="btn-primary" type="button" data-tab-target="tab-tkey">生成 SyncKey</button></div>
           <section class="panel device-panel">
             <div class="filter-bar device-filters">
               <input id="deviceSearch" type="text" placeholder="搜索设备、同步状态或文件">
@@ -153,9 +153,9 @@
           </section>
         </section>
 
-        <section id="tab-vless" class="tab-panel" data-page-title="基础设置" data-nav-group="settings" data-component="vless-panel">
-          <div class="page-head"><div><h1>基础设置</h1><p>配置公网隧道和服务端监听参数。</p></div></div>
-          <div class="settings-tabs"><button class="settings-tab active" type="button" data-tab-target="tab-vless">VLESS</button><button class="settings-tab" type="button" data-tab-target="tab-storage">存储与仓库</button></div>
+        <section id="tab-vless" class="tab-panel" role="tabpanel" aria-labelledby="settings-tab-vless storage-tab-vless" data-page-title="基础设置" data-nav-group="settings" data-component="vless-panel">
+          <div class="page-head"><div><h1>基础设置</h1></div></div>
+          <div class="settings-tabs" role="tablist" aria-label="基础设置"><button id="settings-tab-vless" class="settings-tab active" type="button" role="tab" aria-selected="true" aria-controls="tab-vless" data-tab-target="tab-vless">VLESS</button><button id="settings-tab-storage" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="tab-storage" data-tab-target="tab-storage">存储</button><button id="settings-tab-versions" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="tab-versions" data-tab-target="tab-versions">版本与更新</button></div>
           <section class="panel">
             <div class="panel-head"><h2>VLESS 服务配置</h2><span class="status">受控配置</span></div>
             <div class="panel-body">
@@ -186,9 +186,9 @@
           </section>
         </section>
 
-        <section id="tab-storage" class="tab-panel" data-page-title="基础设置" data-nav-group="settings" data-component="storage-panel">
-          <div class="page-head"><div><h1>基础设置</h1><p>管理存储连接与同步仓库。</p></div></div>
-          <div class="settings-tabs"><button class="settings-tab" type="button" data-tab-target="tab-vless">VLESS</button><button class="settings-tab active" type="button" data-tab-target="tab-storage">存储与仓库</button></div>
+        <section id="tab-storage" class="tab-panel" role="tabpanel" aria-labelledby="settings-tab-storage" data-page-title="基础设置" data-nav-group="settings" data-component="storage-panel">
+          <div class="page-head"><div><h1>基础设置</h1></div></div>
+          <div class="settings-tabs" role="tablist" aria-label="基础设置"><button id="storage-tab-vless" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="tab-vless" data-tab-target="tab-vless">VLESS</button><button id="storage-tab-storage" class="settings-tab active" type="button" role="tab" aria-selected="true" aria-controls="tab-storage" data-tab-target="tab-storage">存储</button><button id="storage-tab-versions" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="tab-versions" data-tab-target="tab-versions">版本与更新</button></div>
           <div class="workspace-split storage-layout">
             <section class="panel">
               <div class="panel-head"><h2>存储连接</h2><span class="status">MinIO / S3</span></div>
@@ -214,6 +214,15 @@
               </div>
             </section>
           </div>
+        </section>
+        <section id="tab-versions" class="tab-panel" role="tabpanel" aria-labelledby="settings-tab-versions storage-tab-versions" data-page-title="基础设置" data-nav-group="settings">
+          <div class="page-head"><div><h1>基础设置</h1></div></div>
+          <div class="settings-tabs" role="tablist" aria-label="基础设置"><button class="settings-tab" type="button" data-tab-target="tab-vless">VLESS</button><button class="settings-tab" type="button" data-tab-target="tab-storage">存储</button><button class="settings-tab active" type="button" data-tab-target="tab-versions">版本与更新</button></div>
+          <section id="settings-versions" class="panel version-panel" aria-labelledby="versionsTitle">
+            <div class="panel-head"><h2 id="versionsTitle">组件版本</h2><button id="checkUpdatesBtn" class="btn-secondary" type="button" disabled aria-describedby="componentCheckStatus">检查更新</button></div>
+            <div id="componentCheckStatus" class="status warning" role="status" aria-live="polite">更新检查未接入</div>
+            <div class="panel-body"><div id="componentList" class="component-list"><div>Syncraft appliance <span id="applianceVersion">—</span></div><div>Node <span>—</span></div><div>sing-box <span>—</span></div><div>rclone <span>—</span></div><div>MinIO <span>—</span></div><div>MinIO mc <span>—</span></div></div><p class="quiet-note">受控升级：固定 tag、构建与检查、替换或回滚。</p></div>
+          </section>
         </section>
       </div>
     </main>

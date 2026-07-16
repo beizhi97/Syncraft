@@ -76,6 +76,16 @@ byId("confirmForm").addEventListener("submit", submitConfirmation);
 byId("confirmCancelBtn").addEventListener("click", cancelConfirmation);
 document.querySelectorAll("[data-tab-target]").forEach((tab) => {
   tab.addEventListener("click", () => switchTab(tab.dataset.tabTarget));
+  if (tab.closest(".settings-tabs")) {
+    tab.setAttribute("role", "tab");
+    tab.addEventListener("keydown", (event) => {
+      const tabs = [...tab.closest(".settings-tabs").querySelectorAll("[data-tab-target]")];
+      const current = tabs.indexOf(tab);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : event.key === "ArrowRight" ? (current + 1) % tabs.length : event.key === "ArrowLeft" ? (current + tabs.length - 1) % tabs.length : -1;
+      if (next < 0) return;
+      event.preventDefault(); tabs[next].focus(); switchTab(tabs[next].dataset.tabTarget);
+    });
+  }
 });
 document.querySelector(".config-preview .toggle")?.addEventListener("click", toggleConfigPreview);
 
@@ -1149,6 +1159,7 @@ function renderState() {
   renderStorage();
   renderSyncSpaces();
   renderDevices();
+  renderComponentVersions();
   toggleRealitySettings();
 }
 
@@ -1159,12 +1170,19 @@ function switchTab(tabId) {
   document.querySelectorAll("[data-tab-target]").forEach((tab) => {
     const groupedActive = navGroup && tab.dataset.navGroup === navGroup;
     tab.classList.toggle("active", tab.dataset.tabTarget === tabId || groupedActive);
+    if (tab.closest(".settings-tabs")) tab.setAttribute("aria-selected", String(tab.dataset.tabTarget === tabId));
   });
   document.querySelectorAll(".tab-panel").forEach((panel) => {
     panel.classList.toggle("active", panel.id === tabId);
   });
   byId("pageTitle").textContent = targetPanel?.dataset.pageTitle || "Syncraft 管理";
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function renderComponentVersions() {
+  const target = byId("applianceVersion");
+  if (!target) return;
+  target.textContent = state?.diagnostics?.version || state?.appVersion || "—";
 }
 
 function toggleConfigPreview() {
@@ -1243,7 +1261,7 @@ function renderOverview() {
   count.className = `badge ${issues.some((issue) => issue.level === "danger") ? "bad" : issues.length ? "warning" : "good"}`;
   byId("overviewAttentionList").innerHTML = issues.length
     ? issues.slice(0, 4).map((issue) => `<div class="notice ${issue.level}"><strong>${escapeHtml(issue.title)}</strong><span>${escapeHtml(issue.detail)}</span></div>`).join("")
-    : `<div class="notice success"><strong>当前没有待处理事项</strong><span>服务配置、设备和存储摘要未发现异常。</span></div>`;
+    : `<div class="notice success"><strong>无待处理项</strong></div>`;
 
   setOverviewStatus("overviewServiceState", true, "API 与管理状态可达");
   setOverviewStatus("overviewTunnelState", Boolean(tunnel.protocol) && !tunnel.restartRequired, tunnel.restartRequired ? "待重启应用" : tunnel.protocol ? "已配置并应用" : "尚未配置");

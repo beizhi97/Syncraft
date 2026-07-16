@@ -16,6 +16,9 @@
   --font:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Segoe UI",sans-serif;
   --mono:"SF Mono","SF Mono SC",ui-monospace,"Cascadia Code","Consolas",monospace;
 }
+
+/* Delivery pass: reduce dashboard weight and make update state explicit. */
+.page-head p{display:none}.stat-strip{border-radius:0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}.stat-tile{background:transparent!important;box-shadow:none!important}.settings-tab{min-height:42px;border:0;border-bottom:2px solid transparent;background:transparent;padding:9px 0}.settings-tab.active{border-bottom-color:var(--accent)}.version-panel{margin-top:16px}.component-list{display:grid;border-top:1px solid var(--border)}.component-list>div{display:flex;justify-content:space-between;gap:16px;min-height:42px;padding:10px 0;border-bottom:1px solid var(--border)}.component-list span{font-family:var(--mono);color:var(--text-3)}.quiet-note{margin:14px 0 0;color:var(--text-3);font-size:12px}
 html{font-size:var(--seed-font-size)}
 body{font-family:var(--font);background:var(--bg);color:var(--text);line-height:1.5;-webkit-font-smoothing:antialiased}
 button{font-family:inherit;font-size:inherit;cursor:pointer;border:none;background:none;color:inherit}
