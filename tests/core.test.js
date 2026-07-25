@@ -11073,6 +11073,19 @@ test("daily schedule rolls to tomorrow when time passed", () => {
   assert.equal(next.getMinutes(), 30);
 });
 
+test("startup schedules resolve the next run marker after mode normalization", () => {
+  const now = new Date("2026-07-03T10:00:00.000Z");
+  // computeNextRun must branch on the normalized mode, not the raw input.
+  // Reading schedule.mode directly made every non-canonical spelling fall
+  // through to null even though describeSchedule already treated it as startup.
+  for (const mode of ["startup", "STARTUP", " startup ", "Startup"]) {
+    assert.equal(computeNextRun({ mode }, now), "on-startup", `mode ${JSON.stringify(mode)}`);
+    assert.equal(describeSchedule({ mode }), "Run on client startup", `mode ${JSON.stringify(mode)}`);
+  }
+  assert.equal(computeNextRun(normalizeSchedule({ mode: "STARTUP" }), now), "on-startup");
+  assert.equal(computeNextRun({ mode: "manual" }, now), null);
+});
+
 test("SFSC import profile encodes server-issued tunnel and storage settings", () => {
   const profile = {
     version: 1,

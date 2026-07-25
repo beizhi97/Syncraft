@@ -39,7 +39,7 @@ export function computeNextRun(schedule = {}, now = new Date()) {
     return next;
   }
 
-  if (schedule.mode === "startup") {
+  if (normalized.mode === "startup") {
     return "on-startup";
   }
 
