@@ -350,6 +350,24 @@ function secretStoreFile(paths) {
   return paths.secretsFile || join(dirname(paths.profileFile || paths.jobsFile || paths.syncHistoryFile), "secrets.json");
 }
 
+// Applies the same owner-only ACL used for the secret vault to any other local
+// file that holds credentials (rclone.conf, sing-box config). Best-effort: a
+// failure is reported, never thrown, so a sync is not blocked by ACL tooling.
+export async function protectLocalSecretFile(file) {
+  if (!file) {
+    return { protected: false, mode: "not_applicable", errorCode: "file_missing" };
+  }
+  try {
+    await access(file);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return { protected: false, mode: process.platform === "win32" ? "windows-acl" : "not_applicable", exists: false };
+    }
+    throw error;
+  }
+  return { ...(await protectSecretVaultFile(file)), exists: true };
+}
+
 async function protectSecretVaultFile(file) {
   if (process.platform !== "win32") {
     return { protected: true, mode: "not_applicable" };

@@ -115,7 +115,7 @@ When a new profile is imported over an existing one, saved jobs are refreshed ag
 
 Bidirectional jobs always run through `rclone bisync`. If a caller submits `destructiveSync: true` with `direction: "bidirectional"`, the local API and preview layer normalize it back to non-destructive state so the UI safety model cannot be bypassed by direct API calls.
 
-Preview output may show the generated rclone commands, but display commands must mask S3 `secret_access_key`. The internal argument array still carries the real value so the runtime can write the rclone remote config.
+Preview output may show the generated rclone commands, but display commands must mask the S3 secret. The secret is never placed in the argument array: it is injected as the `RCLONE_CONFIG_<REMOTE>_SECRET_ACCESS_KEY` environment variable so it cannot be read from the process command line.
 
 ## Packaging Direction
 

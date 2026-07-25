@@ -31,6 +31,7 @@
     { "code": "invalid_json", "status": 400 },
     { "code": "invalid_path", "status": 400 },
     { "code": "invalid_vless_uri", "status": 400 },
+    { "code": "local_host_forbidden", "status": 403 },
     { "code": "local_state_corrupt", "status": 409 },
     { "code": "local_write_forbidden", "status": 403 },
     { "code": "last_active_bucket_disable_blocked", "status": 409 },

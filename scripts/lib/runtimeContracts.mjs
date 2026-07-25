@@ -1111,10 +1111,21 @@ export function assertRclonePreviewContract(rclone, label = "rclone", options = 
   assertObject(rclone.remoteConfig, `${label}.remoteConfig`);
   assertNonEmptyString(rclone.remoteConfig.executable, `${label}.remoteConfig.executable`);
   assertArray(rclone.remoteConfig.args, `${label}.remoteConfig.args`);
+  assertObject(rclone.remoteConfig.env, `${label}.remoteConfig.env`);
   assertNonEmptyString(rclone.remoteConfig.displayCommand, `${label}.remoteConfig.displayCommand`);
   assertPreviewDisplayTextIsSafe(rclone.remoteConfig.displayCommand, `${label}.remoteConfig.displayCommand`, options);
-  if (rclone.remoteConfig.displayCommand.includes("secret_access_key")) {
-    assertMatch(rclone.remoteConfig.displayCommand, /secret_access_key\s+\S*\*{2,}\S*/i, `${label}.remoteConfig.displayCommand`);
+  // The S3 secret must never reach process argv; it is injected through
+  // RCLONE_CONFIG_<REMOTE>_SECRET_ACCESS_KEY instead.
+  assert(
+    !rclone.remoteConfig.args.includes("secret_access_key"),
+    `${label}.remoteConfig.args must not carry secret_access_key`
+  );
+  if (rclone.remoteConfig.displayCommand.includes("SECRET_ACCESS_KEY")) {
+    assertMatch(
+      rclone.remoteConfig.displayCommand,
+      /SECRET_ACCESS_KEY="\S*\*{2,}\S*"/i,
+      `${label}.remoteConfig.displayCommand`
+    );
   }
   assertObject(rclone.storage, `${label}.storage`);
   assertNonEmptyString(rclone.remotePath, `${label}.remotePath`);
@@ -1123,7 +1134,17 @@ export function assertRclonePreviewContract(rclone, label = "rclone", options = 
     assertEqual(typeof rclone.safety[field], "boolean", `${label}.safety.${field}`);
   }
   if (options.remoteConfigSecret) {
-    assert(rclone.remoteConfig.args.includes(options.remoteConfigSecret), `${label}.remoteConfig.args secret`);
+    const secretEnvValues = Object.entries(rclone.remoteConfig.env)
+      .filter(([key]) => /SECRET_ACCESS_KEY$/i.test(key))
+      .map(([, value]) => value);
+    assert(
+      secretEnvValues.includes(options.remoteConfigSecret),
+      `${label}.remoteConfig.env secret`
+    );
+    assert(
+      !rclone.remoteConfig.args.includes(options.remoteConfigSecret),
+      `${label}.remoteConfig.args must not leak the secret`
+    );
   }
 }
 

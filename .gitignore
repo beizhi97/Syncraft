@@ -22,6 +22,10 @@ server/.env
 server/.env.*
 !server/.env.example
 
+# Release signing keys (private key must never be committed; the .pub is tracked)
+secrets/
+release-signing-key.pem
+
 # Server runtime state
 server/data/
 server/sing-box/config.json

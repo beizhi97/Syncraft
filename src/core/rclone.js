@@ -86,11 +86,13 @@ export function buildRclonePreview(job, options = {}) {
     }
   }
 
+  const remoteConfig = buildRcloneRemoteConfig(storage, job, rcloneBin, rcloneConfigPath);
   const env = {
     HTTP_PROXY: proxyUrl,
     HTTPS_PROXY: proxyUrl,
     ALL_PROXY: proxyUrl,
-    NO_PROXY: "127.0.0.1,localhost"
+    NO_PROXY: "127.0.0.1,localhost",
+    ...remoteConfig.env
   };
 
   return {
@@ -98,7 +100,7 @@ export function buildRclonePreview(job, options = {}) {
     args,
     env,
     displayCommand: renderCommand(rcloneBin, args, env),
-    remoteConfig: buildRcloneRemoteConfig(storage, job, rcloneBin, rcloneConfigPath),
+    remoteConfig,
     storage,
     remotePath,
     safety: {
@@ -134,7 +136,10 @@ function resolveTarget(job, remotePath) {
 }
 
 function renderCommand(executable, args, env) {
-  const envLines = Object.entries(env).map(([key, value]) => `$env:${key}="${value}"`);
+  const envLines = Object.entries(env).map(([key, value]) => {
+    const displayValue = isSensitiveEnvKey(key) ? maskSecretValue(value) : value;
+    return `$env:${key}="${displayValue}"`;
+  });
   const command = [executable, ...args.map(quoteArg)].join(" ");
   return [...envLines, command].join("\n");
 }
@@ -142,6 +147,9 @@ function renderCommand(executable, args, env) {
 function buildRcloneRemoteConfig(storage, job, rcloneBin, rcloneConfigPath) {
   const accessKeyId = job.accessKeyId || job.s3AccessKeyId || "company-pc1";
   const secretAccessKey = job.secretAccessKey || job.s3SecretAccessKey || "CHANGE_ME_CLIENT_SECRET";
+  // Keep the secret out of process argv. rclone reads it from
+  // RCLONE_CONFIG_<REMOTE>_SECRET_ACCESS_KEY when the remote is used.
+  const secretEnvKey = rcloneConfigEnvKey(storage.remoteName, "SECRET_ACCESS_KEY");
   const args = [
     "config",
     "create",
@@ -153,8 +161,6 @@ function buildRcloneRemoteConfig(storage, job, rcloneBin, rcloneConfigPath) {
     "false",
     "access_key_id",
     accessKeyId,
-    "secret_access_key",
-    secretAccessKey,
     "endpoint",
     storage.endpoint,
     "region",
@@ -165,21 +171,47 @@ function buildRcloneRemoteConfig(storage, job, rcloneBin, rcloneConfigPath) {
     args.push("--config", rcloneConfigPath);
   }
 
-  const displayArgs = maskRcloneConfigArgs(args);
+  const env = {
+    [secretEnvKey]: secretAccessKey
+  };
   return {
     executable: rcloneBin,
     args,
-    displayCommand: [rcloneBin, ...displayArgs.map(quoteArg)].join(" ")
+    env,
+    displayCommand: renderCommand(rcloneBin, args, env)
   };
 }
 
-function maskRcloneConfigArgs(args) {
-  const masked = [...args];
-  const secretIndex = masked.indexOf("secret_access_key");
-  if (secretIndex >= 0 && secretIndex + 1 < masked.length) {
-    masked[secretIndex + 1] = maskSecretValue(masked[secretIndex + 1]);
+export function rcloneConfigEnvKey(remoteName, field) {
+  const remote = String(remoteName || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!remote) {
+    throw new Error("Remote name is required for rclone env config");
   }
-  return masked;
+  const keyField = String(field || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!keyField) {
+    throw new Error("rclone env config field is required");
+  }
+  return `RCLONE_CONFIG_${remote}_${keyField}`;
+}
+
+function isSensitiveEnvKey(key) {
+  const text = String(key || "").toUpperCase();
+  if (!text) {
+    return false;
+  }
+  if (text.endsWith("ACCESS_KEY_ID") || text.endsWith("_ACCESS_KEY_ID")) {
+    return false;
+  }
+  return /SECRET|PASSWORD|TOKEN|PRIVATE_KEY|API_KEY/.test(text)
+    || text.endsWith("SECRET_ACCESS_KEY");
 }
 
 function maskSecretValue(secret) {

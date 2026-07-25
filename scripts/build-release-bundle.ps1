@@ -3,7 +3,8 @@ param(
   [string]$BundleName = "",
   [switch]$SkipPreflight,
   [string]$PreflightReportPath = "",
-  [string]$PreflightJsonReportPath = ""
+  [string]$PreflightJsonReportPath = "",
+  [switch]$RequireSignature
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +27,7 @@ $resolvedOutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $stageRoot = Join-Path $resolvedOutputDir $BundleName
 $zipPath = Join-Path $resolvedOutputDir "$BundleName.zip"
 $checksumPath = Join-Path $resolvedOutputDir "$BundleName.zip.sha256"
+$signaturePath = Join-Path $resolvedOutputDir "$BundleName.zip.sig"
 $preflightReportDir = Join-Path $repoRoot ".tmp\release-bundle\reports"
 $preflightTextReport = Join-Path $preflightReportDir "preflight.txt"
 $preflightJsonReport = Join-Path $preflightReportDir "preflight.json"
@@ -33,6 +35,27 @@ $preflightEvidenceSource = "strict"
 
 function Info($message) {
   Write-Host "[sfsc-bundle] $message"
+}
+
+function Warn($message) {
+  Write-Warning "[sfsc-bundle] $message"
+}
+
+function Invoke-ReleaseSignature($artifactPath, $targetSignaturePath) {
+  $hasKeyPath = -not [string]::IsNullOrWhiteSpace($env:SFSC_RELEASE_SIGNING_KEY)
+  $hasKeyPem = -not [string]::IsNullOrWhiteSpace($env:SFSC_RELEASE_SIGNING_KEY_PEM)
+  if (-not ($hasKeyPath -or $hasKeyPem)) {
+    if ($RequireSignature) {
+      throw "Release signature required but no signing key is configured (set SFSC_RELEASE_SIGNING_KEY or SFSC_RELEASE_SIGNING_KEY_PEM)."
+    }
+    return $false
+  }
+  $signer = Join-Path $repoRoot "scripts\release-signature.mjs"
+  & node $signer sign $artifactPath --signature $targetSignaturePath
+  if ($LASTEXITCODE -ne 0) {
+    throw "Release signing failed for $artifactPath"
+  }
+  return $true
 }
 
 function Assert-SafeOutputPath($path) {
@@ -419,6 +442,12 @@ $bundleManifest = [ordered]@{
   buildId = $sourceFingerprint.buildId
   sourceFingerprint = $sourceFingerprint
   clientPackages = $clientPackages
+  signature = [ordered]@{
+    algorithm = "ed25519"
+    detachedSidecar = "$BundleName.zip.sig"
+    required = [bool]$RequireSignature
+    verifyCommand = "node scripts/release-signature.mjs verify dist/release-bundles/$BundleName.zip"
+  }
   preflightVerified = $preflightVerified
   preflightVerification = $preflightVerification
   strictPreflight = -not [bool]$SkipPreflight
@@ -445,6 +474,16 @@ Compress-Archive -LiteralPath $stageRoot -DestinationPath $zipPath -Force
 $bundleHash = Get-Sha256HexFromFile $zipPath
 "$bundleHash  $BundleName.zip" | Set-Content -LiteralPath $checksumPath -Encoding ASCII
 
+# The .sha256 sidecar only proves internal consistency: anyone who edits the ZIP
+# can recompute it. The detached Ed25519 signature is what proves the bundle came
+# from the release key holder, so it is produced here whenever a key is available.
+$signatureCreated = Invoke-ReleaseSignature $zipPath $signaturePath
+
 Info "Release bundle directory: $stageRoot"
 Info "Release bundle ZIP: $zipPath"
 Info "Release bundle SHA256: $checksumPath"
+if ($signatureCreated) {
+  Info "Release bundle signature: $signaturePath"
+} else {
+  Warn "Release bundle is UNSIGNED. Set SFSC_RELEASE_SIGNING_KEY (or SFSC_RELEASE_SIGNING_KEY_PEM) to sign it; the .sha256 sidecar alone does not prove authenticity."
+}

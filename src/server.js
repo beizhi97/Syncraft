@@ -565,13 +565,24 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, host, () => {
   console.log(`Syncraft server: http://${host}:${port}/`);
+  if (!adminToken) {
+    console.warn("[sfsc] admin_auth_disabled: management API is UNAUTHENTICATED (SFSC_ALLOW_NO_ADMIN_TOKEN). Never expose this beyond loopback.");
+    if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
+      console.warn(`[sfsc] admin_auth_disabled_non_loopback: HOST=${host} with no admin token exposes full management access on the network.`);
+    }
+  }
 });
 
 async function serveStatic(pathname, res) {
   let fullPath;
   try {
     const requested = pathname === "/" ? "/index.html" : pathname;
-    fullPath = normalize(join(publicDir, decodeURIComponent(requested)));
+    const decoded = decodeURIComponent(requested);
+    // See the client note: an encoded backslash is only a separator on Windows.
+    if (decoded.includes("\\")) {
+      return jsonError(res, createHttpError("invalid_path", 400, "Invalid path"));
+    }
+    fullPath = normalize(join(publicDir, decoded));
   } catch {
     return jsonError(res, createHttpError("invalid_path", 400, "Invalid path"));
   }
@@ -699,6 +710,8 @@ function buildServiceHealthSummary(state) {
 
 function assertAdminAuthorized(req) {
   if (!adminToken) {
+    // No-auth mode is opt-in only (see resolveAdminToken) and is intended for
+    // local development. The startup banner warns operators loudly.
     return;
   }
   const supplied = readAdminToken(req);
@@ -709,11 +722,17 @@ function assertAdminAuthorized(req) {
 
 function resolveAdminToken(env = {}) {
   const token = String(env.SFSC_ADMIN_TOKEN || env.ADMIN_TOKEN || "").trim();
-  if (env.SFSC_REQUIRE_ADMIN_TOKEN !== "1") {
-    return token;
-  }
+  // Fail closed by default. Opt out only via explicit SFSC_ALLOW_NO_ADMIN_TOKEN=1
+  // or SFSC_REQUIRE_ADMIN_TOKEN=0. SFSC_REQUIRE_ADMIN_TOKEN=1 always forces a token
+  // (and wins over ALLOW), preserving production compose semantics.
+  const requireFlag = String(env.SFSC_REQUIRE_ADMIN_TOKEN || "").trim();
+  const forceRequire = requireFlag === "1";
+  const forceAllow = !forceRequire && (requireFlag === "0" || isTruthyEnv(env.SFSC_ALLOW_NO_ADMIN_TOKEN));
   if (!token) {
-    throw new Error("SFSC_REQUIRE_ADMIN_TOKEN=1 requires SFSC_ADMIN_TOKEN or ADMIN_TOKEN.");
+    if (forceAllow) {
+      return "";
+    }
+    throw new Error("SFSC_ADMIN_TOKEN or ADMIN_TOKEN is required. Set SFSC_ALLOW_NO_ADMIN_TOKEN=1 only for local no-auth development.");
   }
   if (PLACEHOLDER_ADMIN_TOKENS.has(token)) {
     throw new Error("SFSC_ADMIN_TOKEN must be changed from the placeholder before production startup.");
@@ -850,10 +869,10 @@ function pruneClaimRedeemFailureWindows(now) {
 }
 
 function claimRedeemFailureKey(audit = {}) {
-  return [
-    audit.remoteAddress || CLAIM_REDEEM_AUDIT_UNAVAILABLE,
-    audit.codeHash || CLAIM_REDEEM_AUDIT_UNAVAILABLE
-  ].join(":");
+  // Intentionally keyed on the client address only. Including a per-code hash
+  // would give every guessed code its own counter, so a brute-force attacker
+  // rotating codes would never reach the failure limit.
+  return String(audit.remoteAddress || CLAIM_REDEEM_AUDIT_UNAVAILABLE);
 }
 
 function hashClaimRedeemAuditCode(body = {}) {

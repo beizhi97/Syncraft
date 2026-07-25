@@ -31,6 +31,30 @@ pnpm run bundle:release
 
 所有 `reports/release/**`、`reports/n1/**`、内部试跑/试点报告以及 bundle 内 `reports/release-bundle/**` 在写盘、复制或压缩前都会经过共享敏感信息扫描器；若报告包含完整 SyncKey、sfsc 导入 URI、VLESS URI、管理 token、S3/MinIO secret、heartbeat secret 或私钥块，脚本会拒绝写入或入包。
 
+### 1.1 交付物签名（真实性验证）
+
+`.zip.sha256` 只能证明校验和与当前 ZIP 一致：任何能改动 ZIP 的人都能重算这个值，因此它只保证完整性，不保证来源真实性。真实性由分离式 Ed25519 签名 `.zip.sig` 提供。
+
+首次准备发布密钥（只做一次，且只在受控机器上）：
+
+```powershell
+node scripts/release-signature.mjs keygen --out-dir secrets/release-key
+```
+
+该命令生成 `release-signing-key.pem`（私钥，权限 0600，**不得入库**）和 `release-signing-key.pub`（公钥）。把公钥复制到仓库根目录 `release-signing-key.pub` 并提交，私钥存入发布密钥保管位置（release workflow 的 secret 或离线保管）。
+
+发布机上设置 `SFSC_RELEASE_SIGNING_KEY` 指向私钥路径（CI 中可用 `SFSC_RELEASE_SIGNING_KEY_PEM` 直接注入 PEM 内容），`pnpm run bundle:release` 会在写完 `.zip.sha256` 后自动生成 `<bundle>.zip.sig`；未配置密钥时脚本会打印 UNSIGNED 警告并继续，传 `-RequireSignature` 则在缺少密钥时直接失败。`release-bundle-manifest.json` 的 `signature` 区块记录算法、sidecar 名称和验证命令。
+
+接收方核对交付物：
+
+```powershell
+node scripts/release-signature.mjs verify dist/release-bundles/<bundle>.zip
+```
+
+`pnpm run audit:release` 也会在能找到受信公钥（`release-signing-key.pub`、`SFSC_RELEASE_PUBLIC_KEY` 或 `SFSC_RELEASE_PUBLIC_KEY_PEM`）时验证所有 `dist/**` 交付 ZIP 的签名：签名存在但校验失败一律判为失败；缺少签名默认只是警告，release/CI 环境应设置 `SFSC_REQUIRE_SIGNED_RELEASE=1`，让未签名交付物直接判为失败。
+
+签名覆盖 ZIP 交付物的来源，但不等于 Windows Authenticode 签名：客户端 exe 的 SmartScreen/UAC 提示需要单独购买代码签名证书后在打包阶段签名，属于尚未完成的独立事项。
+
 ## 2. 服务端部署
 
 进入服务端目录：

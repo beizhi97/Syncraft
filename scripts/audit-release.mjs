@@ -4,9 +4,14 @@ import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
 import { auditComposeConfig } from "./lib/composeAudit.mjs";
+import { verifyReleaseSignature } from "./lib/releaseSignature.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const issues = [];
+// Non-blocking findings: reported but they do not fail the audit. Used where the
+// check depends on release-only inputs (for example a signing key) that a local
+// developer run legitimately does not have.
+const warnings = [];
 const nonProductLanguagePattern = /\bMVP\b|\bdemo\b|\bprototype\b|proof of concept|\bPOC\b|演示版|样例版|试用版/i;
 
 async function readFile(path, options) {
@@ -47,6 +52,7 @@ await auditSingboxPlaceholderConfig();
 await auditComposeConfig(root).then((composeIssues) => issues.push(...composeIssues));
 await auditClientPackageChecksum();
 await auditReleaseBundleChecksum();
+await auditReleaseArtifactSignatures();
 await auditClientPackageManifestContractConsistency();
 await auditProductContractDocs();
 await auditProductIdentity();
@@ -88,6 +94,13 @@ for await (const file of walk(root)) {
   const text = await readFile(file, "utf8").catch(() => "");
   if (!text) continue;
   auditText(rel, text);
+}
+
+if (warnings.length) {
+  console.warn("Release audit warnings:");
+  for (const warning of warnings) {
+    console.warn(`- ${warning}`);
+  }
 }
 
 if (issues.length) {
@@ -199,6 +212,96 @@ async function auditReleaseBundleChecksum() {
     }
     await auditReleaseBundleZip(entry.name.slice(0, -4));
   }
+}
+
+// A `.zip` + `.zip.sha256` pair only proves internal consistency: whoever edits
+// the zip can recompute the checksum. The detached `.zip.sig` is the authenticity
+// check. Signatures are verified whenever a trusted public key is available, and
+// required outright when SFSC_REQUIRE_SIGNED_RELEASE=1 (release/CI setting).
+async function auditReleaseArtifactSignatures() {
+  const requireSigned = String(process.env.SFSC_REQUIRE_SIGNED_RELEASE || "").trim() === "1";
+  const publicKeyPem = await readTrustedReleasePublicKey();
+  const artifacts = await listReleaseArtifacts();
+  if (!artifacts.length) {
+    return;
+  }
+  if (!publicKeyPem) {
+    const message = "release artifacts cannot be authenticated: no trusted public key "
+      + "(release-signing-key.pub, SFSC_RELEASE_PUBLIC_KEY, or SFSC_RELEASE_PUBLIC_KEY_PEM)";
+    if (requireSigned) {
+      issues.push(message);
+    } else {
+      warnings.push(message);
+    }
+    return;
+  }
+  for (const artifact of artifacts) {
+    const relArtifact = relative(root, artifact).split(sep).join("/");
+    const relSignature = `${relArtifact}.sig`;
+    if (!await exists(`${artifact}.sig`)) {
+      const message = `${relArtifact} is not signed (missing ${relSignature})`;
+      if (requireSigned) {
+        issues.push(message);
+      } else {
+        warnings.push(message);
+      }
+      continue;
+    }
+    let record;
+    try {
+      record = JSON.parse(await readFile(`${artifact}.sig`, "utf8"));
+    } catch (error) {
+      issues.push(`${relSignature} is not valid JSON: ${error.message}`);
+      continue;
+    }
+    const digest = createHash("sha256").update(await readFile(artifact)).digest("hex");
+    const result = verifyReleaseSignature(record, publicKeyPem, digest);
+    if (!result.ok) {
+      issues.push(`${relSignature} failed verification: ${result.problems.join("; ")}`);
+    }
+  }
+}
+
+async function readTrustedReleasePublicKey() {
+  const inline = String(process.env.SFSC_RELEASE_PUBLIC_KEY_PEM || "").trim();
+  if (inline) {
+    return inline;
+  }
+  const candidates = [
+    String(process.env.SFSC_RELEASE_PUBLIC_KEY || "").trim(),
+    join(root, "release-signing-key.pub")
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (await exists(candidate)) {
+      return readFile(candidate, "utf8");
+    }
+  }
+  return "";
+}
+
+async function listReleaseArtifacts() {
+  const artifacts = [];
+  for (const name of ["SyncraftDesktop.zip", "SyncraftClient.zip"]) {
+    const path = join(root, "dist", name);
+    if (await exists(path)) {
+      artifacts.push(path);
+    }
+  }
+  const bundleDir = join(root, "dist", "release-bundles");
+  if (await exists(bundleDir)) {
+    let entries = [];
+    try {
+      entries = await readdir(bundleDir, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith(".zip")) {
+        artifacts.push(join(bundleDir, entry.name));
+      }
+    }
+  }
+  return artifacts;
 }
 
 async function auditReleaseBundleZip(bundleName) {

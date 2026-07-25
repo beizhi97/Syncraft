@@ -622,7 +622,7 @@ test("HTTP contract tests cover heartbeat device sync summary redaction", async 
   assert.match(clientHttpContract, /assertSyncPreviewContract\(preview/);
   assert.match(clientHttpContract, /preview\.schedule\.text\.trim\(\)/);
   assert.match(clientHttpContract, /preview\.rclone\.remotePath\.trim\(\)/);
-  assert.match(clientHttpContract, /preview\.rclone\.remoteConfig\.args\.includes\(rawStorageSecret\)/);
+  assert.match(clientHttpContract, /rcloneRemoteConfigSecretEnvValues\(preview\.rclone\)\.includes\(rawStorageSecret\)/);
   assert.match(clientHttpContract, /const missingVaultSave = await fetch\(`\$\{baseUrl\}\/api\/jobs\/save`/);
   assert.match(clientHttpContract, /const missingVaultRun = await fetch\(`\$\{baseUrl\}\/api\/sync\/run`/);
   assert.match(clientHttpContract, /assertClientLogsContract\(logsPayload/);
@@ -3295,8 +3295,8 @@ test("scoped storage mode provisions a device identity without retaining MinIO a
     const result = await ensureMinioClaimAccess(state, issued.claim, {
       configDir: join(temp, "mc"),
       policyDir: join(temp, "policies"),
-      run: async (args) => {
-        calls.push(args);
+      run: async (args, env) => {
+        calls.push({ args, env });
         if (args.slice(0, 3).join(" ") === "admin user info" || args.slice(0, 3).join(" ") === "admin policy info") {
           throw new Error("not found");
         }
@@ -3306,8 +3306,17 @@ test("scoped storage mode provisions a device identity without retaining MinIO a
 
     assert.deepEqual(result, { mode: "per-device-space", provisioned: true, policyName: `sfsc-${space.id}-writer` });
     assert.match(member.accessKeyId, /^sfsc-[a-f0-9]{24}$/);
-    assert.equal(calls.some((args) => args.slice(0, 3).join(" ") === "admin user add"), true);
-    assert.equal(calls.some((args) => args.slice(0, 3).join(" ") === "admin policy attach"), true);
+    assert.equal(calls.some(({ args }) => args.slice(0, 3).join(" ") === "admin user add"), true);
+    assert.equal(calls.some(({ args }) => args.slice(0, 3).join(" ") === "admin policy attach"), true);
+    // MinIO root credentials must travel in MC_HOST_sfsc, never in argv.
+    assert.equal(calls.some(({ args }) => args.slice(0, 2).join(" ") === "alias set"), false);
+    assert.equal(calls.some(({ args }) => args.includes(state.storage.secretAccessKey)), false);
+    for (const { env } of calls) {
+      assert.equal(
+        env.MC_HOST_sfsc,
+        `http://${encodeURIComponent(state.storage.accessKeyId)}:${encodeURIComponent(state.storage.secretAccessKey)}@minio:9000`
+      );
+    }
     await assert.rejects(access(join(temp, "mc")));
   } finally {
     await rm(temp, { recursive: true, force: true });
@@ -3342,11 +3351,13 @@ test("disabling a scoped device disables every membership credential", async () 
   const calls = [];
 
   const result = await setMinioDeviceAccessEnabled(state, owner.id, false, {
-    run: async (args) => calls.push(args)
+    run: async (args, env) => calls.push({ args, env })
   });
 
   assert.equal(result.changed, 2);
-  assert.equal(calls.filter((args) => args.slice(0, 4).join(" ") === "admin user disable sfsc").length, 2);
+  assert.equal(calls.filter(({ args }) => args.slice(0, 4).join(" ") === "admin user disable sfsc").length, 2);
+  assert.equal(calls.some(({ args }) => args.includes(state.storage.secretAccessKey)), false);
+  assert.equal(calls.every(({ env }) => typeof env.MC_HOST_sfsc === "string" && env.MC_HOST_sfsc.length > 0), true);
 });
 
 test("deleting a scoped device removes every membership credential", async () => {
@@ -3358,11 +3369,13 @@ test("deleting a scoped device removes every membership credential", async () =>
   const calls = [];
 
   const result = await removeMinioDeviceAccess(state, owner.id, {
-    run: async (args) => calls.push(args)
+    run: async (args, env) => calls.push({ args, env })
   });
 
   assert.equal(result.removed, 1);
-  assert.equal(calls.some((args) => args.slice(0, 4).join(" ") === "admin user remove sfsc"), true);
+  assert.equal(calls.some(({ args }) => args.slice(0, 4).join(" ") === "admin user remove sfsc"), true);
+  assert.equal(calls.some(({ args }) => args.includes(state.storage.secretAccessKey)), false);
+  assert.equal(calls.every(({ env }) => typeof env.MC_HOST_sfsc === "string" && env.MC_HOST_sfsc.length > 0), true);
 });
 
 test("SyncKey redemption fails after the sync space membership is revoked", () => {
@@ -10658,8 +10671,12 @@ test("buildRclonePreview includes S3-specific flags and remote config", () => {
   assert.ok(preview.args.includes("--s3-chunk-size"));
   assert.equal(preview.remotePath, "home-minio:home-sync/devices/company-pc1/projects");
   assert.ok(preview.remoteConfig.displayCommand.includes("provider Minio"));
-  assert.ok(preview.remoteConfig.args.includes("secret-for-test"));
+  assert.equal(preview.remoteConfig.args.includes("secret-for-test"), false);
+  assert.equal(preview.remoteConfig.args.includes("secret_access_key"), false);
+  assert.equal(preview.remoteConfig.env.RCLONE_CONFIG_HOME_MINIO_SECRET_ACCESS_KEY, "secret-for-test");
+  assert.equal(preview.env.RCLONE_CONFIG_HOME_MINIO_SECRET_ACCESS_KEY, "secret-for-test");
   assert.equal(preview.remoteConfig.displayCommand.includes("secret-for-test"), false);
+  assert.equal(preview.displayCommand.includes("secret-for-test"), false);
   assert.ok(preview.remoteConfig.displayCommand.includes("se****st"));
 });
 
@@ -13359,11 +13376,13 @@ async function writeReleaseAuditFixture(tempRoot) {
     "utf8"
   );
   await mkdir(join(tempRoot, "scripts", "lib"), { recursive: true });
-  await writeFile(
-    join(tempRoot, "scripts", "lib", "composeAudit.mjs"),
-    await readFile(join(projectRoot, "scripts", "lib", "composeAudit.mjs"), "utf8"),
-    "utf8"
-  );
+  for (const lib of ["composeAudit.mjs", "releaseSignature.mjs"]) {
+    await writeFile(
+      join(tempRoot, "scripts", "lib", lib),
+      await readFile(join(projectRoot, "scripts", "lib", lib), "utf8"),
+      "utf8"
+    );
+  }
   await writeFile(
     join(tempRoot, "scripts", "audit-compose.mjs"),
     await readFile(join(projectRoot, "scripts", "audit-compose.mjs"), "utf8"),

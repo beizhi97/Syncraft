@@ -230,7 +230,7 @@ Legacy / development Docker Compose
 - 客户端 UI 未展示的底层性能参数必须从导入 profile 的 `defaults` 继承；保存、预览和运行任务时不能把 `checkers`、`chunkSize`、`retries`、`lowLevelRetries`、`localProxyPort` 重置成硬编码默认值。
 - 客户端重新导入 profile 后必须刷新已保存 job 中的 profile 派生字段，替换旧 bucket、执行 prefix、secret、隐藏 defaults 和本地代理端口，同时保留用户填写的本地路径、方向、远端相对目录、空间类型、计划、带宽和可见并发参数；执行 `remotePrefix` 必须从新 profile prefix 与保留的 `remoteFolder/serverSpace` 重新派生。
 - 服务端控制台当前只暴露 SyncKey 常用默认项：`transfers`、`streams`、`checkers`、`chunkSize` 和 `schedule`；完整 `defaults` 仍由服务端 API/profile 合同承载。
-- 同步预览中的展示命令必须脱敏 S3 `secret_access_key`；内部执行参数保留真实值供 rclone 配置写入使用。
+- 同步预览中的展示命令必须脱敏 S3 secret；secret 不得进入执行参数数组，只能通过 `RCLONE_CONFIG_<REMOTE>_SECRET_ACCESS_KEY` 环境变量注入，避免在进程命令行中泄露。
 
 ## 8. 安全边界
 

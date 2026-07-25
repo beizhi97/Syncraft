@@ -54,6 +54,11 @@ import {
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const serverEntry = join(projectRoot, "src", "server.js");
 const serverSmokeEntry = join(projectRoot, "scripts", "smoke-server.mjs");
+// The server now fails closed on a missing admin token. These contract tests spawn
+// it with `...process.env` and exercise management APIs without credentials, so they
+// opt into no-auth mode explicitly. Tests that assert the fail-closed startup itself
+// override this per spawn (SFSC_REQUIRE_ADMIN_TOKEN=1 wins over ALLOW).
+process.env.SFSC_ALLOW_NO_ADMIN_TOKEN = "1";
 const REALITY_PUBLIC_KEY = "A".repeat(43);
 const REALITY_PRIVATE_KEY = "B".repeat(43);
 const REALITY_SHORT_ID = "abcdef1234567890";
@@ -1537,21 +1542,23 @@ test("HTTP contract: repeated failed claim redemption is rate limited", async (t
     errorCode: "claim_redeem_rate_limited"
   });
 
+  // Rotating to a fresh code must not reset the limiter: the failure window is
+  // keyed on the client address only, otherwise brute force would be free.
   const differentCode = await fetch(`${baseUrl}/api/claims/redeem`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ code: "JKLM-NPQR" })
   });
-  assert.equal(differentCode.status, 404);
+  assert.equal(differentCode.status, 429);
   assertHttpErrorResponseContract(await differentCode.json(), "differentCode", {
-    errorCode: "claim_not_found"
+    errorCode: "claim_redeem_rate_limited"
   });
 
   const stateText = await readFile(join(dataRoot, "sfsc-state.json"), "utf8");
   assert.equal(stateText.includes("ABCD-EFGH"), false);
   const state = JSON.parse(stateText);
   const windows = Object.values(state.claimRedeemFailures || {});
-  assert.equal(windows.length, 2);
+  assert.equal(windows.length, 1);
   assert.equal(windows.some((window) => window.failures >= 3 && window.limitedUntil > Date.now()), true);
 
   const adminState = await getJson(`${baseUrl}/api/admin/state`);
@@ -4294,7 +4301,9 @@ test("HTTP contract: admin token protects management APIs without blocking runti
     remoteConfigSecret: previewSecret,
     localProxyPort: 18082
   });
-  assert.equal(jobsPreview.rclone.remoteConfig.args.includes(previewSecret), true);
+  assert.equal(jobsPreview.rclone.remoteConfig.args.includes(previewSecret), false);
+  assert.equal(jobsPreview.rclone.remoteConfig.args.includes("secret_access_key"), false);
+  assert.equal(jobsPreview.rclone.remoteConfig.env.RCLONE_CONFIG_HOME_MINIO_SECRET_ACCESS_KEY, previewSecret);
   assert.equal(jobsPreview.rclone.remoteConfig.displayCommand.includes(previewSecret), false);
   assert.match(jobsPreview.rclone.remoteConfig.displayCommand, /pr\*\*\*\*ct/);
   assert.equal(jobsPreview.schedule.text, "Every 30 minutes");
@@ -4497,7 +4506,7 @@ test("HTTP contract: production server startup rejects missing or placeholder ad
     {
       label: "missing",
       env: { SFSC_ADMIN_TOKEN: "", ADMIN_TOKEN: "" },
-      message: /requires SFSC_ADMIN_TOKEN or ADMIN_TOKEN/
+      message: /SFSC_ADMIN_TOKEN or ADMIN_TOKEN is required/
     },
     {
       label: "placeholder",

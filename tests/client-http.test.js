@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -200,6 +200,107 @@ test("client local write APIs reject cross-site and non-JSON browser writes", as
     body: "{}"
   });
   assert.equal(jsonWithCharset.status, 200);
+});
+
+test("client local API rejects non-loopback Host headers on reads and writes", async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-client-host-guard-"));
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, [clientEntry], {
+    cwd: projectRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      HOST: "127.0.0.1",
+      PORT: String(port),
+      SFSC_PORTABLE_ROOT: tempRoot,
+      SFSC_APP_ROOT: join(projectRoot, "client"),
+      SFSC_OPEN_BROWSER: "0",
+      SFSC_HEARTBEAT_MS: "60000"
+    }
+  });
+
+  t.after(async () => {
+    await shutdownClient(baseUrl, child);
+    await removeTempRoot(tempRoot);
+  });
+
+  await waitForClient(baseUrl, child, tempRoot);
+
+  // A rebound DNS name resolving to 127.0.0.1 reaches the listener but carries
+  // the attacker's hostname in Host, so every method must be refused.
+  for (const [label, hostHeader] of [
+    ["rebindName", "attacker.example.invalid"],
+    ["rebindNameWithPort", `attacker.example.invalid:${port}`],
+    ["loopbackWrongPort", `127.0.0.1:${port + 1}`],
+    ["malformedHost", "]not-a-host["]
+  ]) {
+    const read = await rawClientRequest(port, "GET", "/api/health", hostHeader);
+    assert.equal(read.status, 403, `${label} read`);
+    assertHttpErrorResponseContract(JSON.parse(read.body), `${label}Read`, {
+      errorCode: "local_host_forbidden"
+    });
+
+    const write = await rawClientRequest(port, "POST", "/api/binaries/check", hostHeader, {
+      "content-type": "application/json"
+    }, "{}");
+    assert.equal(write.status, 403, `${label} write`);
+    assertHttpErrorResponseContract(JSON.parse(write.body), `${label}Write`, {
+      errorCode: "local_host_forbidden"
+    });
+
+    const staticAsset = await rawClientRequest(port, "GET", "/index.html", hostHeader);
+    assert.equal(staticAsset.status, 403, `${label} static`);
+  }
+
+  for (const [label, hostHeader] of [
+    ["loopbackIp", `127.0.0.1:${port}`],
+    ["localhostName", `localhost:${port}`],
+    ["ipv6Loopback", `[::1]:${port}`]
+  ]) {
+    const allowed = await rawClientRequest(port, "GET", "/api/health", hostHeader);
+    assert.equal(allowed.status, 200, `${label} allowed`);
+  }
+});
+
+test("client shuts down sing-box and rclone when the process is signalled", async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-client-signal-"));
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, [clientEntry], {
+    cwd: projectRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      HOST: "127.0.0.1",
+      PORT: String(port),
+      SFSC_PORTABLE_ROOT: tempRoot,
+      SFSC_APP_ROOT: join(projectRoot, "client"),
+      SFSC_OPEN_BROWSER: "0",
+      SFSC_HEARTBEAT_MS: "60000"
+    }
+  });
+  let stdout = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
+
+  t.after(async () => {
+    if (!child.killed && child.exitCode === null) {
+      child.kill("SIGKILL");
+    }
+    await removeTempRoot(tempRoot);
+  });
+
+  await waitForClient(baseUrl, child, tempRoot);
+  child.kill("SIGTERM");
+
+  const [exitCode] = await Promise.race([
+    once(child, "exit"),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`client ignored SIGTERM; stdout=${stdout}`)), 8000))
+  ]);
+  assert.equal(exitCode, 0);
+  assert.match(stdout, /stopping on SIGTERM/);
 });
 
 test("client runtime refuses occupied port unless health belongs to SFSC client", async (t) => {
@@ -795,7 +896,9 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.equal(previewFromMinimalJobPayload.rclone.storage.bucketName, "home-sync");
   assert.equal(previewFromMinimalJobPayload.rclone.storage.endpoint, "http://minio:9000");
   assert.equal(previewFromMinimalJobPayload.rclone.remotePath, "home-minio:home-sync/devices/company-pc1");
-  assert.equal(previewFromMinimalJobPayload.rclone.remoteConfig.args.includes("top-secret-value"), true);
+  assert.equal(previewFromMinimalJobPayload.rclone.remoteConfig.args.includes("top-secret-value"), false);
+  assert.equal(previewFromMinimalJobPayload.rclone.remoteConfig.args.includes("secret_access_key"), false);
+  assert.equal(previewFromMinimalJobPayload.rclone.remoteConfig.env.RCLONE_CONFIG_HOME_MINIO_SECRET_ACCESS_KEY, "top-secret-value");
   assert.equal(previewFromMinimalJobPayload.rclone.remoteConfig.args.includes("evil-secret-value"), false);
   assert.equal(previewFromMinimalJobPayload.rclone.remoteConfig.args.includes("evil-s3-secret-value"), false);
   assert.equal(JSON.stringify(previewFromMinimalJobPayload).includes("evil-minio"), false);
@@ -1413,7 +1516,9 @@ test("client local HTTP API returns structured errors", async (t) => {
   });
   assert.equal(bidirectionalPreviewPayload.rclone.args[0], "bisync");
   assert.equal(bidirectionalPreviewPayload.rclone.safety.deleteProtection, true);
-  assert.ok(bidirectionalPreviewPayload.rclone.remoteConfig.args.includes("top-secret-value-v2"));
+  // The refreshed profile renamed the remote to home-minio-v2, so the env key follows it.
+  assert.equal(bidirectionalPreviewPayload.rclone.remoteConfig.env.RCLONE_CONFIG_HOME_MINIO_V2_SECRET_ACCESS_KEY, "top-secret-value-v2");
+  assert.equal(bidirectionalPreviewPayload.rclone.remoteConfig.args.includes("top-secret-value-v2"), false);
   assert.equal(bidirectionalPreviewPayload.rclone.remoteConfig.args.includes("top-secret-value"), false);
   assert.equal(bidirectionalPreviewPayload.rclone.remoteConfig.displayCommand.includes("top-secret-value-v2"), false);
 
@@ -2423,8 +2528,9 @@ test("client sync run uses real rclone config secret while redacting execution l
   const syncEvent = fakeToolEvents.find((event) => event.tool === "rclone-sync");
   assert.ok(configEvent);
   assert.ok(syncEvent);
-  assert.equal(configEvent.argv.includes("secret_access_key"), true);
-  assert.equal(configEvent.argv.includes(rawSecret), true);
+  assert.equal(configEvent.argv.includes("secret_access_key"), false);
+  assert.equal(configEvent.argv.includes(rawSecret), false);
+  assert.equal(configEvent.secretEnv, rawSecret);
   assert.equal(configEvent.argv.includes("evil-secret-value"), false);
   assert.equal(configEvent.argv.includes("evil-s3-secret-value"), false);
   assert.equal(configEvent.argv.includes("http://minio:9000"), true);
@@ -3599,8 +3705,9 @@ test("client profile refresh preserves user job tuning while replacing profile-d
   assert.equal(preview.rclone.storage.remoteName, "new-minio");
   assert.equal(preview.rclone.storage.bucketName, "new-sync");
   assert.equal(preview.rclone.remotePath, "new-minio:new-sync/devices-v2/refresh-pc/projects");
-  assert.ok(preview.rclone.remoteConfig.args.includes(newSecret));
+  assert.equal(preview.rclone.remoteConfig.args.includes(newSecret), false);
   assert.equal(preview.rclone.remoteConfig.args.includes(oldSecret), false);
+  assert.equal(preview.rclone.remoteConfig.env.RCLONE_CONFIG_NEW_MINIO_SECRET_ACCESS_KEY, newSecret);
   assert.equal(preview.rclone.remoteConfig.displayCommand.includes(newSecret), false);
   assert.equal(preview.rclone.remoteConfig.displayCommand.includes(oldSecret), false);
   assert.equal(preview.schedule.text, "Every 17 minutes");
@@ -3629,6 +3736,9 @@ test("client imports a real server-issued SyncKey into local jobs and sync previ
       PUBLIC_SERVER_URL: serverBaseUrl,
       SERVER_DATA_ROOT: join(serverRoot, "data"),
       SINGBOX_CONFIG_PATH: join(serverRoot, "sing-box", "config.json"),
+      // Server fails closed without an admin token; this end-to-end path drives
+      // management APIs without credentials, so no-auth mode is opt-in here.
+      SFSC_ALLOW_NO_ADMIN_TOKEN: "1",
       S3_CLIENT_ENDPOINT: n1StorageEndpoint,
       LOCAL_PROXY_PORT: "18092"
     }
@@ -3780,7 +3890,8 @@ test("client imports a real server-issued SyncKey into local jobs and sync previ
   assert.equal(preview.rclone.remoteConfig.displayCommand.includes(rawStorageSecret), false);
   assert.equal(typeof preview.rclone.displayCommand, "string");
   assert.equal(preview.rclone.displayCommand.includes(rawStorageSecret), false);
-  assert.ok(preview.rclone.remoteConfig.args.includes(rawStorageSecret));
+  assert.equal(preview.rclone.remoteConfig.args.includes(rawStorageSecret), false);
+  assert.ok(rcloneRemoteConfigSecretEnvValues(preview.rclone).includes(rawStorageSecret));
   assert.equal(preview.rclone.storage.endpoint, n1StorageEndpoint);
   const remoteConfigArgs = preview.rclone.remoteConfig.args;
   assert.equal(remoteConfigArgs[remoteConfigArgs.indexOf("endpoint") + 1], n1StorageEndpoint);
@@ -6110,6 +6221,42 @@ test("client restores lastSuccessfulHeartbeat after restart for compatibility co
   });
 });
 
+// fetch() derives Host from the URL, so a spoofed Host needs a raw request.
+function rawClientRequest(port, method, path, hostHeader, extraHeaders = {}, body = null) {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({
+      host: "127.0.0.1",
+      port,
+      method,
+      path,
+      setHost: false,
+      headers: {
+        host: hostHeader,
+        connection: "close",
+        ...extraHeaders,
+        ...(body === null ? {} : { "content-length": Buffer.byteLength(body) })
+      }
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString("utf8") });
+      });
+    });
+    request.on("error", reject);
+    if (body !== null) {
+      request.write(body);
+    }
+    request.end();
+  });
+}
+
+function rcloneRemoteConfigSecretEnvValues(rclone = {}) {
+  return Object.entries(rclone?.remoteConfig?.env || {})
+    .filter(([key]) => /_SECRET_ACCESS_KEY$/.test(key))
+    .map(([, value]) => value);
+}
+
 async function installFakeSyncTools(root) {
   const binRoot = join(root, "resources", "bin", "win32");
   await mkdir(binRoot, { recursive: true });
@@ -6166,7 +6313,11 @@ if (executableName.includes("rclone")) {
 `, "utf8");
 
   await writeFile(join(root, "config"), `${prelude}
-recordFakeTool("rclone-config");
+recordFakeTool("rclone-config", {
+  secretEnv: Object.entries(process.env)
+    .filter(([key]) => /^RCLONE_CONFIG_.*_SECRET_ACCESS_KEY$/.test(key))
+    .map(([, value]) => value)[0] || ""
+});
 function finishConfig() {
   const raw = process.env.SFSC_FAKE_RAW_SECRET || "";
   const tunnel = process.env.SFSC_FAKE_TUNNEL_URI || "";

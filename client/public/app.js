@@ -1549,6 +1549,7 @@ function formatError(error) {
     rclone_config_failed: "同步配置写入失败，请检查存储配置和权限。",
     shared_remote_folder_required: "共享空间必须填写远端子目录，避免不同设备写入同一根目录。",
     invalid_remote_folder: "远端目录只能填写相对目录，不能使用盘符、绝对路径或 ..。",
+    local_host_forbidden: "请求的 Host 不是本机回环地址，已拒绝；请从客户端窗口内操作。",
     local_state_corrupt: "本地状态文件损坏，请先导出诊断包，备份并修复或隔离损坏 JSON 后再按需重新导入 SyncKey。",
     local_write_forbidden: "本地写入请求被拒绝，请从客户端窗口内操作。",
     last_active_bucket_disable_blocked: "服务端至少需要保留一个启用的同步仓库。",

@@ -21,6 +21,7 @@ const DEFAULT_STATUS_BY_CODE = {
   invalid_json: 400,
   invalid_path: 400,
   invalid_vless_uri: 400,
+  local_host_forbidden: 403,
   local_state_corrupt: 409,
   local_write_forbidden: 403,
   last_active_bucket_disable_blocked: 409,

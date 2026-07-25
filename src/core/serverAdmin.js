@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { normalizeBandwidthLimit } from "./bandwidth.js";
 import { CLAIM_CODE_ALPHABET, encodeClaimToken, extractClaimCode, normalizeClaimCode } from "./claimProtocol.js";
 import { ADMIN_STATE_VERSION, buildRuntimeDiagnostics, compareRuntimeDiagnostics, normalizeRuntimeDiagnostics } from "./diagnostics.js";
@@ -849,7 +849,7 @@ function pruneHeartbeatAuthNonces(user, nowMs = Date.now()) {
 
 export function redeemClaim(state, input = {}) {
   const code = extractClaimCode(input.code || input.tKey || input.tkey || input.claimCode || input.token || "");
-  const claim = state.claims.find((item) => item.code === code);
+  const claim = findClaimByCode(state, code);
   if (!claim) {
     const error = new Error("claim_not_found");
     error.status = 404;
@@ -876,6 +876,21 @@ export function redeemClaim(state, input = {}) {
   rememberClaimRedeemBinding(claim, input);
   touch(state);
   return claim.profile;
+}
+
+// Compares candidate codes with a fixed-time digest compare so redemption does
+// not leak how many leading characters of a SyncKey were guessed correctly.
+function findClaimByCode(state, code) {
+  const claims = Array.isArray(state?.claims) ? state.claims : [];
+  const target = createHash("sha256").update(String(code || "")).digest();
+  let match = null;
+  for (const item of claims) {
+    const candidate = createHash("sha256").update(String(item?.code || "")).digest();
+    if (timingSafeEqual(candidate, target)) {
+      match = match || item;
+    }
+  }
+  return match;
 }
 
 export function compactAdminState(state, options = {}) {

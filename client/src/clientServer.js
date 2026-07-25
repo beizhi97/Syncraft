@@ -49,6 +49,7 @@ import {
   inspectSecretVault,
   inspectLocalState,
   prepareClaimRecovery,
+  protectLocalSecretFile,
   recordSyncRunFinished,
   recordSyncRunStarted,
   readLastSuccessfulHeartbeat,
@@ -229,6 +230,10 @@ async function readClientVersion(paths) {
 
 const server = http.createServer(async (req, res) => {
   try {
+    // Guard every method (not just POST): a non-loopback Host header means the
+    // request was routed here through some other name (DNS rebinding), so reject
+    // it before any handler reads state.
+    assertLocalHostHeader(req);
     const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
     if (req.method === "POST") {
       assertLocalWriteRequest(req);
@@ -362,6 +367,7 @@ server.listen(port, host, () => {
   if (process.env.SFSC_OPEN_BROWSER === "1") {
     openBrowser(url);
   }
+  installShutdownSignalHandlers();
   startBackgroundLoops();
 });
 
@@ -405,6 +411,26 @@ async function shutdownClientRuntime() {
   ]);
   await new Promise((resolve) => server.close(resolve));
   process.exit(0);
+}
+
+// Without these, terminating the client (Electron shell exit, taskkill, Ctrl+C)
+// leaves sing-box.exe / rclone.exe running as orphans, holding the local proxy
+// port and continuing transfers.
+function installShutdownSignalHandlers() {
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"];
+  for (const signal of signals) {
+    process.on(signal, () => {
+      if (shutdownStarted) {
+        return;
+      }
+      shutdownStarted = true;
+      console.log(`Syncraft Client stopping on ${signal}`);
+      shutdownClientRuntime().catch((error) => {
+        console.error(error && error.stack ? error.stack : error);
+        process.exit(1);
+      });
+    });
+  }
 }
 
 async function handleListenError(error) {
@@ -1033,6 +1059,9 @@ async function startSingbox(options = {}) {
   });
   try {
     await writeFile(paths.singboxConfigFile, JSON.stringify(config, null, 2), "utf8");
+    // The generated config embeds the tunnel credential (VLESS UUID), so it gets
+    // the same owner-only ACL as the secret vault.
+    await protectLocalSecretFile(paths.singboxConfigFile);
     const check = await runBuffered(paths.singboxExe, ["check", "-c", paths.singboxConfigFile], {
       cwd: paths.root,
       timeoutMs: 10000
@@ -1280,12 +1309,14 @@ async function createSyncSafetyPlan(job = {}) {
     const preview = (await buildSyncPreviewFromNormalizedJob(normalizedJob)).rclone;
     const remoteConfig = await runBuffered(paths.rcloneExe, preview.remoteConfig.args, {
       cwd: paths.root,
+      env: preview.remoteConfig.env || preview.env,
       timeoutMs: 15000
     });
     if (!remoteConfig.ok) {
       const detail = redactRcloneConfigFailureDetail(remoteConfig, normalizedJob, preview);
       throw createHttpError("rclone_config_failed", 500, `Failed to write rclone remote config: ${detail}`);
     }
+    await protectRcloneConfigFile();
     if (!singboxProcess.isRunning()) {
       await startSingbox({ uri: tunnelUri, localProxyPort: normalizedJob.localProxyPort || 18081 });
     }
@@ -1377,11 +1408,16 @@ async function initializeBidirectionalSync(body = {}) {
   }
   await ensureSyncRunBinaries();
   const preview = (await buildSyncPreviewFromNormalizedJob(normalizedJob)).rclone;
-  const remoteConfig = await runBuffered(paths.rcloneExe, preview.remoteConfig.args, { cwd: paths.root, timeoutMs: 15000 });
+  const remoteConfig = await runBuffered(paths.rcloneExe, preview.remoteConfig.args, {
+    cwd: paths.root,
+    env: preview.remoteConfig.env || preview.env,
+    timeoutMs: 15000
+  });
   if (!remoteConfig.ok) {
     const detail = redactRcloneConfigFailureDetail(remoteConfig, normalizedJob, preview);
     throw createHttpError("rclone_config_failed", 500, `Failed to write rclone remote config: ${detail}`);
   }
+  await protectRcloneConfigFile();
   if (!singboxProcess.isRunning()) {
     await startSingbox({ uri: tunnelUri, localProxyPort: normalizedJob.localProxyPort || 18081 });
   }
@@ -1510,12 +1546,14 @@ async function runSyncExclusive(runPlan, options = {}) {
   })).rclone;
   const remoteConfig = await runBuffered(paths.rcloneExe, preview.remoteConfig.args, {
     cwd: paths.root,
+    env: preview.remoteConfig.env || preview.env,
     timeoutMs: 15000
   });
   if (!remoteConfig.ok) {
     const detail = redactRcloneConfigFailureDetail(remoteConfig, normalizedJob, preview);
     throw createHttpError("rclone_config_failed", 500, `Failed to write rclone remote config: ${detail}`);
   }
+  await protectRcloneConfigFile();
   if (!singboxProcess.isRunning()) {
     await startSingbox({
       uri: tunnelUri,
@@ -1563,11 +1601,33 @@ function redactRcloneConfigFailureDetail(result = {}, job = {}, preview = {}) {
   return redactKnownSecretValues(redactLogText(detail), collectRcloneConfigSecrets(job, preview));
 }
 
+// rclone writes the remote's access key into rclone.conf in cleartext, so the
+// file is locked down to the current account right after every config create.
+async function protectRcloneConfigFile() {
+  try {
+    await protectLocalSecretFile(paths.rcloneConfigFile);
+  } catch {
+    // Never let ACL hardening abort a sync; the vault inspection surfaces state.
+  }
+}
+
 function collectRcloneConfigSecrets(job = {}, preview = {}) {
   const values = [
     job.secretAccessKey,
     job.s3SecretAccessKey
   ];
+  // Prefer env-injected secrets (current path). Fall back to legacy argv
+  // layout so older previews / diagnostics still redact correctly.
+  for (const env of [preview?.remoteConfig?.env, preview?.env]) {
+    if (!env || typeof env !== "object") {
+      continue;
+    }
+    for (const [key, value] of Object.entries(env)) {
+      if (/SECRET_ACCESS_KEY$/i.test(key) || /SECRET|PASSWORD|TOKEN/i.test(key)) {
+        values.push(value);
+      }
+    }
+  }
   const args = Array.isArray(preview?.remoteConfig?.args) ? preview.remoteConfig.args : [];
   const secretIndex = args.indexOf("secret_access_key");
   if (secretIndex >= 0 && secretIndex + 1 < args.length) {
@@ -2513,7 +2573,14 @@ async function serveStatic(pathname, res) {
   let fullPath;
   try {
     const requested = pathname === "/" ? "/index.html" : pathname;
-    fullPath = normalize(join(paths.publicDir, decodeURIComponent(requested)));
+    const decoded = decodeURIComponent(requested);
+    // `\` is a path separator on Windows but a literal character elsewhere, so an
+    // encoded backslash (%5c) would only be caught by the traversal check on one
+    // platform. No static asset URL contains one, so reject it outright.
+    if (decoded.includes("\\")) {
+      return jsonError(res, makeHttpError("invalid_path", 400));
+    }
+    fullPath = normalize(join(paths.publicDir, decoded));
   } catch {
     return jsonError(res, makeHttpError("invalid_path", 400));
   }
@@ -2551,6 +2618,32 @@ function contentType(path) {
 function assertLocalWriteRequest(req) {
   assertBrowserWriteOrigin(req);
   assertJsonWriteContentType(req);
+}
+
+// Rejects requests whose Host header is not this loopback listener. Blocks DNS
+// rebinding, where a browser resolves an attacker-controlled name to 127.0.0.1
+// and would otherwise be treated as same-origin for reads.
+function assertLocalHostHeader(req) {
+  const rawHost = String(req.headers.host || "").trim();
+  const localPort = String(req.socket?.localPort || port);
+  if (!rawHost) {
+    // HTTP/1.0 clients may omit Host; the loopback bind still constrains reach.
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(`http://${rawHost}`);
+  } catch {
+    throw createHttpError("local_host_forbidden", 403, "Request Host header is not a loopback address");
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  const isLoopbackHost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+  const hostPort = parsed.port || "80";
+  if (!isLoopbackHost || hostPort !== localPort) {
+    throw createHttpError("local_host_forbidden", 403, "Request Host header is not a loopback address");
+  }
 }
 
 function assertBrowserWriteOrigin(req) {
