@@ -2323,6 +2323,86 @@ test("HTTP contract: failed heartbeat persistence does not update device presenc
   assert.ok(heartbeat.device.lastSeenAt);
 });
 
+test("HTTP contract: hung storage backend requests time out instead of freezing the appliance", async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-s3-timeout-"));
+  const port = await getFreePort();
+  const minioPort = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const minioUrl = `http://127.0.0.1:${minioPort}`;
+
+  // Accepts connections and never answers — the failure mode where the old
+  // code held the global admin-state write lock until the socket died on its
+  // own, freezing every POST on the appliance.
+  const sockets = new Set();
+  const hungMinio = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  hungMinio.listen(minioPort, "127.0.0.1");
+  await once(hungMinio, "listening");
+
+  const child = spawn(process.execPath, [serverEntry], {
+    cwd: projectRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      HOST: "127.0.0.1",
+      PORT: String(port),
+      PUBLIC_SERVER_URL: baseUrl,
+      S3_ENDPOINT: minioUrl,
+      SERVER_DATA_ROOT: join(tempRoot, "data"),
+      SINGBOX_CONFIG_PATH: join(tempRoot, "sing-box", "config.json"),
+      SFSC_S3_TIMEOUT_MS: "800"
+    }
+  });
+
+  t.after(async () => {
+    if (!child.killed) {
+      child.kill();
+      await Promise.race([
+        once(child, "exit"),
+        new Promise((resolve) => setTimeout(resolve, 1000))
+      ]).catch(() => {});
+    }
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    hungMinio.close();
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await waitForHealth(baseUrl, child);
+  const storageSave = await postJson(`${baseUrl}/api/admin/storage/save`, {
+    endpoint: minioUrl,
+    internalEndpoint: minioUrl,
+    accessKeyId: "syncadmin",
+    secretAccessKey: "change-this-minio-root-password"
+  });
+  assertAdminStorageSummaryContract(storageSave.storage, "s3Timeout.storageSave.storage");
+  const startedAt = Date.now();
+  const refresh = await postJson(`${baseUrl}/api/admin/storage/buckets/refresh`, {});
+  const elapsedMs = Date.now() - startedAt;
+  // Refresh degrades gracefully by contract: HTTP 200 with ok:false and a
+  // storage_request_failed errorCode. The point here is the *bound*: the remote
+  // failure must come from the request timeout, not from a socket that dies on
+  // its own long after the appliance froze.
+  assertAdminStorageBucketsRefreshResponseContract(refresh, "s3Timeout.refresh");
+  assert.equal(refresh.ok, false);
+  assert.equal(refresh.errorCode, "storage_request_failed");
+  assert.match(refresh.warning, /timed out after 800ms/);
+  // Well above the 800ms timeout for scheduling slack, far below the
+  // no-timeout behaviour where this request would outlive the test.
+  assert.equal(elapsedMs < 10_000, true, `expected a bounded failure, took ${elapsedMs}ms`);
+
+  // The write lock must be free immediately afterwards: another POST completes
+  // instead of queueing behind a hung storage connection.
+  const claim = await postJson(`${baseUrl}/api/claims/create`, {
+    clientName: "s3-timeout-pc",
+    server: baseUrl
+  });
+  assert.equal(typeof claim.tKey, "string");
+});
+
 test("HTTP contract: heartbeat failures are rate limited per source without counting disabled devices", async (t) => {
   const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-heartbeat-rate-limit-"));
   const port = await getFreePort();

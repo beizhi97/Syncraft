@@ -77,6 +77,11 @@ const HEARTBEAT_FAILURE_LIMIT = Number(process.env.SFSC_HEARTBEAT_FAILURE_LIMIT 
 const HEARTBEAT_FAILURE_WINDOW_MS = Number(process.env.SFSC_HEARTBEAT_FAILURE_WINDOW_MS || 5 * 60 * 1000);
 const HEARTBEAT_RATE_LIMIT_MS = Number(process.env.SFSC_HEARTBEAT_RATE_LIMIT_MS || 5 * 60 * 1000);
 const heartbeatFailureWindows = new Map();
+// Storage bucket routes run their MinIO/S3 requests while holding the global
+// admin-state write lock, so a single hung connection used to freeze every POST
+// on the appliance (heartbeats included) until the socket died on its own. The
+// bound matches the 15s timeout minioProvisioner already applies to mc calls.
+const S3_REQUEST_TIMEOUT_MS = Number(process.env.SFSC_S3_TIMEOUT_MS || 15_000);
 let adminToken;
 let trustProxyConfig;
 
@@ -1359,17 +1364,31 @@ async function signedS3Request({ endpoint, method, path, accessKeyId, secretAcce
     `Signature=${signature}`
   ].join(", ");
 
-  const response = await fetch(target, {
-    method,
-    redirect: "error",
-    headers: {
-      authorization,
-      host: target.host,
-      "x-amz-content-sha256": payloadHash,
-      "x-amz-date": amzDate
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), S3_REQUEST_TIMEOUT_MS);
+  let response;
+  let text;
+  try {
+    response = await fetch(target, {
+      method,
+      redirect: "error",
+      signal: controller.signal,
+      headers: {
+        authorization,
+        host: target.host,
+        "x-amz-content-sha256": payloadHash,
+        "x-amz-date": amzDate
+      }
+    });
+    text = await response.text();
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`MinIO ${method} ${path} timed out after ${S3_REQUEST_TIMEOUT_MS}ms`);
     }
-  });
-  const text = await response.text();
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if (!response.ok) {
     throw new Error(`MinIO ${method} ${path} failed: ${response.status} ${text.slice(0, 160)}`);
   }
