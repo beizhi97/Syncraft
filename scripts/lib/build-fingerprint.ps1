@@ -47,6 +47,12 @@ function Get-SourceFingerprintFiles($repoRootFull) {
     "client\public",
     "client\electron",
     "client\scripts",
+    # The lock pins the exact SHA-256 of every bundled third-party binary, so
+    # fingerprinting it transitively fingerprints the binaries themselves (the
+    # package smoke verifies the shipped exes against this lock). The exe blobs
+    # stay excluded below: they are downloads, not sources, and their identity
+    # is exactly what the lock records.
+    "client\resources\bin\win32\binaries.lock.json",
     "docs",
     "scripts",
     "tests"
@@ -84,7 +90,7 @@ function Test-FingerprintBlockedPath($relativePath) {
     '^server/sing-box/config\.json$',
     '^server/sing-box/.*\.(key|pem)$',
     '^client/data(/|$)',
-    '^client/resources/bin(/|$)'
+    '^client/resources/bin/(?!win32/binaries\.lock\.json$)'
   )) {
     if ($normalized -match $pattern) {
       return $true

@@ -127,7 +127,7 @@ release workflow 会显式解析 `reports/release/preflight.json`，要求 `rele
 powershell -ExecutionPolicy Bypass -File client/scripts/download-binaries.ps1 -Force
 ```
 
-临时实验可使用 `-SingBoxVersion` 或 `-RcloneVersion` 覆盖版本，但这类构建没有锁定 hash，不应作为正式 release artifact。
+临时实验可使用 `-SingBoxVersion` 或 `-RcloneVersion` 覆盖版本。覆盖版本没有锁定 hash，脚本默认直接拒绝执行；必须显式追加 `-AllowUnverified` 才会下载，输出会以 `UNVERIFIED` 警告标注并打印实际 SHA256，便于验证后回填 `binaries.lock.json`。这类构建不应作为正式 release artifact。构建指纹（buildId）会纳入 `binaries.lock.json`，因此更换锁定的组件版本必然改变 buildId；二进制文件本身仍不参与指纹，由锁文件里的 SHA256 代表其身份。
 
 该命令会串联发布审计、N1 dry-run、升级包验包、客户端包 smoke（要求 `dist\SyncraftDesktop` 和 `dist\SyncraftClient` 都存在并通过）和全量测试，不连接 N1、不修改远端。正式 `preflight:release` 是严格发布门禁：如果缺少任一客户端包，对应客户端包 smoke 必须失败而不是跳过；只有显式使用 quick/`-AllowSkips` 的开发自检才允许 skipped。结束时会输出 `Preflight report`，列出生成时间、仓库路径、Node 路径、`SkipTests` 和 `AllowSkips` 状态，以及每个步骤的 `passed`、`skipped` 或 `failed` 状态、耗时和跳过/失败原因，便于作为发布前检查记录。需要文本留档时可追加 `-ReportPath reports/preflight.txt`；需要给 CI 或自动化 agent 解析时可追加 `-JsonReportPath reports/preflight.json`。总 JSON 的 `steps[]` 会为每个步骤提供稳定 `errorCode`：通过为空，跳过为 `preflight_step_skipped`，失败按步骤名生成如 `preflight_release_audit_failed` 或 `preflight_client_package_smoke_desktop_failed`。当客户端包存在时，preflight 会同时把客户端包 smoke 子报告写到同目录的 `client-package-smoke-desktop.json` / `client-package-smoke-portable.json`，并在总 JSON 的 `context.ClientPackageSmokeJsonReportPaths` 中记录这些路径；兼容字段 `context.ClientPackageSmokeJsonReportPath` 指向桌面包子报告路径。总 JSON 还会在 `clientPackageSmokeReports[]` 中内嵌已生成的客户端包 smoke 报告，并把子报告的 `failure.check` 提升为 `failureCheck`；缺失或无法解析的子报告会以 `client_package_smoke_report_missing` / `client_package_smoke_report_invalid` 记录，便于 CI 只读取一个预检 JSON。相对路径按项目根目录解析，失败退出时也会尽量写入已完成步骤报告。确认全部通过后，如需单独查看 N1 升级计划可执行：
 

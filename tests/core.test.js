@@ -3902,6 +3902,20 @@ test("server smoke script covers deployment health and management checks", async
   assert.match(downloadBinaries, /releases\/tags\/\$tag/);
   assert.match(downloadBinaries, /\$SingBoxVersion/);
   assert.match(downloadBinaries, /\$RcloneVersion/);
+  // D-2: a version override drops out of the SHA-256 pin, so it must be an
+  // explicit opt-in that fails loudly by default and never a silent skip.
+  assert.match(downloadBinaries, /\[switch\]\$AllowUnverified/);
+  assert.match(downloadBinaries, /bypasses binaries\.lock\.json SHA-256 pinning/);
+  assert.match(downloadBinaries, /if \(!\$AllowUnverified\) \{\s*\n\s*throw/);
+  assert.match(downloadBinaries, /UNVERIFIED: record this sha256/);
+  assert.doesNotMatch(downloadBinaries, /no lock hash is available, skipping/);
+  // D-3: the binary lock participates in the source fingerprint so a different
+  // set of pinned third-party binaries can never share a buildId; the exe blobs
+  // themselves stay excluded because the lock records their identity.
+  const fingerprintHelper = await readFile(join(projectRoot, "scripts", "lib", "build-fingerprint.ps1"), "utf8");
+  assert.match(fingerprintHelper, /"client\\resources\\bin\\win32\\binaries\.lock\.json",/);
+  assert.match(fingerprintHelper, /\^client\/resources\/bin\/\(\?!win32\/binaries\\\.lock\\\.json\$\)/);
+  assert.doesNotMatch(fingerprintHelper, /\^client\/resources\/bin\(\/\|\$\)/);
   assert.match(smoke, /SFSC_SMOKE_BASE_URL/);
   assert.match(smoke, /from "\.\/lib\/runtimeContracts\.mjs"/);
   assert.match(deploy, /scripts\/lib\/runtimeContracts\.mjs/);

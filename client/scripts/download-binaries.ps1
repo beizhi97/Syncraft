@@ -3,7 +3,8 @@ param(
   [string]$LockFile = "",
   [string]$SingBoxVersion = "",
   [string]$RcloneVersion = "",
-  [switch]$Force
+  [switch]$Force,
+  [switch]$AllowUnverified
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,7 +55,9 @@ function Test-ExistingBinary($path, $expectedHash) {
     return $false
   }
   if (!$expectedHash) {
-    Write-Host "$(Split-Path -Leaf $path) already exists; no lock hash is available, skipping."
+    # Only reachable through -AllowUnverified: with no override the lock always
+    # supplies a validated hash. Say so instead of a quiet "skipping".
+    Write-Warning "UNVERIFIED: $(Split-Path -Leaf $path) already exists and no lock hash covers this override; keeping it as-is (sha256=$(Get-Sha256HexFromFile $path))."
     return $true
   }
   $actual = Get-Sha256HexFromFile $path
@@ -80,6 +83,15 @@ function Get-Release($repo, $tag) {
 
 function Resolve-ToolVersion($tool, $overrideVersion) {
   if ($overrideVersion) {
+    # A version override (including "latest") has no entry in binaries.lock.json,
+    # so nothing pins what actually lands in the client package. That must be an
+    # explicit, visible decision, never a side effect of a convenience flag.
+    if (!$AllowUnverified) {
+      throw ("Version override '$overrideVersion' bypasses binaries.lock.json SHA-256 pinning. " +
+        "Pass -AllowUnverified to accept an unverified download, then update binaries.lock.json " +
+        "with the printed sha256 so the pin covers the new version.")
+    }
+    Write-Warning "UNVERIFIED: version override '$overrideVersion' is not covered by binaries.lock.json."
     return [pscustomobject]@{
       Version = $overrideVersion.TrimStart("v")
       Tag = if ($overrideVersion -eq "latest") { "latest" } else { "v$($overrideVersion.TrimStart("v"))" }
@@ -131,6 +143,9 @@ function Install-Tool($name, $tool, $overrideVersion, $tmp) {
     throw "$($tool.exe) SHA256 mismatch after download. Expected $($resolved.ExpectedHash), got $actualHash."
   }
   Write-Host "$($tool.exe) installed: version=$($resolved.Version), sha256=$actualHash"
+  if (!$resolved.ExpectedHash) {
+    Write-Warning "UNVERIFIED: record this sha256 for $name in binaries.lock.json before shipping."
+  }
 }
 
 $lock = Read-BinaryLock $LockFile
