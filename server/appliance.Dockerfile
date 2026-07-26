@@ -1,12 +1,18 @@
 ARG SING_BOX_IMAGE_TAG=v1.13.14
-ARG RCLONE_IMAGE_TAG=1.71.1
+# D-5: every base image is pinned tag@digest (tags are mutable; override both
+# args together when upgrading). rclone is aligned with the Windows client's
+# binaries.lock.json (1.74.3) so both ends run the same sync engine.
+ARG SING_BOX_IMAGE_DIGEST=sha256:c8b67944345dc84a226b648a71f854818606eae0813c4e6a452f192ef821b5b8
+ARG RCLONE_IMAGE_TAG=1.74.3
+ARG RCLONE_IMAGE_DIGEST=sha256:623378ad0ff3ebd5cebf77720843c0e02edfe46e2d5b5ac6bed54c6371780dfb
 ARG MINIO_MC_IMAGE_TAG=RELEASE.2025-08-13T08-35-41Z
+ARG MINIO_MC_IMAGE_DIGEST=sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
 
-FROM ghcr.io/sagernet/sing-box:${SING_BOX_IMAGE_TAG} AS singbox
-FROM rclone/rclone:${RCLONE_IMAGE_TAG} AS rclone
-FROM quay.io/minio/mc:${MINIO_MC_IMAGE_TAG} AS minio-mc
+FROM ghcr.io/sagernet/sing-box:${SING_BOX_IMAGE_TAG}@${SING_BOX_IMAGE_DIGEST} AS singbox
+FROM rclone/rclone:${RCLONE_IMAGE_TAG}@${RCLONE_IMAGE_DIGEST} AS rclone
+FROM quay.io/minio/mc:${MINIO_MC_IMAGE_TAG}@${MINIO_MC_IMAGE_DIGEST} AS minio-mc
 
-FROM ghcr.io/linuxserver/baseimage-alpine:3.22
+FROM ghcr.io/linuxserver/baseimage-alpine:3.22@sha256:7451d313a8b95bd2b9ed798887e6b560ef5065e9ba6ef126a9e792d8b692df9c
 
 RUN apk add --no-cache ca-certificates curl netcat-openbsd nodejs
 

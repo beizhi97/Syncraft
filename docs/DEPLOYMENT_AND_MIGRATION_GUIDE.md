@@ -81,7 +81,7 @@ MINIO_MC_IMAGE_TAG=RELEASE.2025-08-13T08-35-41Z
 
 `MINIO_ROOT_PASSWORD` 同样是必填项：compose 模板对它使用 `:?` 强制注入，缺失时 `docker compose up` 直接失败；即便绕过 compose 直接启动服务端，`SFSC_REQUIRE_ADMIN_TOKEN=1` 下 `S3_SECRET_ACCESS_KEY` / `MINIO_ROOT_PASSWORD` 仍为 `change-this-minio-root-password` 占位值时服务端也会拒绝启动。从旧版本升级时，请先在 `.env` 中把该占位密码轮换为强随机值（同时更新 MinIO 侧凭据），再拉起新 compose。
 
-Docker 运行依赖默认锁定为固定 tag：`sing-box v1.13.14`、`minio RELEASE.2025-09-07T16-13-09Z`、`mc RELEASE.2025-08-13T08-35-41Z`。不要在正式部署中使用 `latest`；升级镜像时先修改 `.env` 中的 `SING_BOX_IMAGE_TAG`、`MINIO_IMAGE_TAG` 或 `MINIO_MC_IMAGE_TAG`，在测试环境执行 smoke 和 post-deploy 报告归档，再把新的默认 tag 写回 `server/.env.example` 与 compose 模板。
+Docker 运行依赖锁定为**固定 tag + digest 双重钉定**：`sing-box v1.13.14`、`minio RELEASE.2025-09-07T16-13-09Z`、`mc RELEASE.2025-08-13T08-35-41Z`、`caddy 2.10.2-alpine`，appliance 内置 `rclone 1.74.3`（与客户端 `binaries.lock.json` 对齐，`audit:compose` 会强制校验）。tag 在任何 registry 上都是可变的，digest 才锁定实际内容。不要在正式部署中使用 `latest`；升级镜像时必须同时更新 tag 与 digest——用 `docker buildx imagetools inspect <image:tag>` 读取 manifest-list digest，修改 `.env` 中的 `*_IMAGE_TAG` 与 `*_IMAGE_DIGEST`，在测试环境执行 smoke 和 post-deploy 报告归档，再把新的默认值写回 `server/.env.example`、compose 模板与各 Dockerfile。
 
 本地可用 `pnpm run audit:compose` 单独检查 compose 镜像锁定；正式 `audit:release` 和 `preflight:release` 也会执行同一审计，发现 `:latest`、缺失镜像 tag 默认值或 `.env.example` 默认值漂移时必须失败。
 

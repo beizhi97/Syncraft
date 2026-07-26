@@ -6762,6 +6762,42 @@ test("compose config audit enforces fixed image tags", async () => {
     assert.notEqual(weakMinioDefaultDrift.code, 0);
     assert.match(weakMinioDefaultDrift.stderr, /server\/docker-compose\.yml must not fall back to the placeholder MinIO password/);
 
+    // D-5: dropping the digest pin from a compose image must fail.
+    await writeComposeAuditFixture(tempRoot);
+    await writeFile(
+      join(tempRoot, "server", "docker-compose.yml"),
+      (await readFile(join(tempRoot, "server", "docker-compose.yml"), "utf8"))
+        .replace(/image: quay\.io\/minio\/minio:\$\{MINIO_IMAGE_TAG:-RELEASE\.2025-09-07T16-13-09Z\}@\$\{MINIO_IMAGE_DIGEST:-sha256:[0-9a-f]{64}\}/, "image: quay.io/minio/minio:${MINIO_IMAGE_TAG:-RELEASE.2025-09-07T16-13-09Z}"),
+      "utf8"
+    );
+    const digestDrift = await runComposeAudit(tempRoot);
+    assert.notEqual(digestDrift.code, 0);
+    assert.match(digestDrift.stderr, /server\/docker-compose\.yml must pin registry images by digest/);
+
+    // D-5: dropping the digest pin from a Dockerfile FROM must fail.
+    await writeComposeAuditFixture(tempRoot);
+    await writeFile(
+      join(tempRoot, "server", "sing-box.Dockerfile"),
+      (await readFile(join(tempRoot, "server", "sing-box.Dockerfile"), "utf8"))
+        .replace("FROM ghcr.io/sagernet/sing-box:${SING_BOX_IMAGE_TAG}@${SING_BOX_IMAGE_DIGEST}", "FROM ghcr.io/sagernet/sing-box:${SING_BOX_IMAGE_TAG}"),
+      "utf8"
+    );
+    const dockerfileDigestDrift = await runComposeAudit(tempRoot);
+    assert.notEqual(dockerfileDigestDrift.code, 0);
+    assert.match(dockerfileDigestDrift.stderr, /server\/sing-box\.Dockerfile must pin its base image by digest/);
+
+    // D-5: appliance rclone must stay aligned with the client binaries lock.
+    await writeComposeAuditFixture(tempRoot);
+    await writeFile(
+      join(tempRoot, "server", "appliance.Dockerfile"),
+      (await readFile(join(tempRoot, "server", "appliance.Dockerfile"), "utf8"))
+        .replace("ARG RCLONE_IMAGE_TAG=1.74.3", "ARG RCLONE_IMAGE_TAG=1.71.1"),
+      "utf8"
+    );
+    const rcloneAlignmentDrift = await runComposeAudit(tempRoot);
+    assert.notEqual(rcloneAlignmentDrift.code, 0);
+    assert.match(rcloneAlignmentDrift.stderr, /RCLONE_IMAGE_TAG=1\.71\.1 must match binaries\.lock\.json rclone version 1\.74\.3/);
+
     await writeComposeAuditFixture(tempRoot);
     await writeFile(
       join(tempRoot, "server", "docker-compose.n1.yml"),
@@ -13604,10 +13640,13 @@ async function writeReleaseAuditFixture(tempRoot) {
     "server/.env.example",
     "server/Caddyfile",
     "server/sfscctl",
+    "server/Dockerfile",
     "server/sing-box.Dockerfile",
+    "server/appliance.Dockerfile",
     "server/sing-box-supervisor.sh",
     "server/docker-compose.yml",
     "server/docker-compose.n1.yml",
+    "client/resources/bin/win32/binaries.lock.json",
     "tests/client-http.test.js",
     "tests/contract-http.test.js",
     "tests/helpers/contracts.js",
@@ -13815,6 +13854,10 @@ async function writeComposeAuditFixture(tempRoot) {
     "server/.env.example",
     "server/docker-compose.yml",
     "server/docker-compose.n1.yml",
+    "server/Dockerfile",
+    "server/sing-box.Dockerfile",
+    "server/appliance.Dockerfile",
+    "client/resources/bin/win32/binaries.lock.json",
     "scripts/audit-compose.mjs",
     "scripts/lib/composeAudit.mjs"
   ]) {
