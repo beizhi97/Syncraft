@@ -825,6 +825,7 @@ function formatError(error) {
     rclone_config_failed: "客户端同步配置写入失败，请检查存储配置和权限。",
     rclone_sync_failed: "同步失败，请查看客户端 rclone 日志。",
     secret_vault_missing: "客户端密钥库缺少同步密钥，请重新导入 SyncKey。",
+    secret_vault_unprotected: "客户端无法为本地密钥库设置访问权限，已拒绝保存密钥，请检查客户端所在磁盘和系统账户。",
     server_error: "服务端发生未知错误，请查看 sync-server 日志。",
     server_singbox_config_write_failed: "服务端 sing-box 配置写入失败，请检查配置路径和权限。",
     server_state_corrupt: "服务端状态文件损坏，请先备份并修复 sfsc-state.json。",

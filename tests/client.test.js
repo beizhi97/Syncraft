@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2319,7 +2319,12 @@ test("client store writes local JSON state atomically", async () => {
   assert.match(store, /await writeFile\(tempFile, JSON\.stringify\(value, null, 2\), "utf8"\)/);
   assert.match(store, /await rename\(tempFile, file\)/);
   assert.match(store, /return withFileWriteLock\(file, async \(\) =>/);
-  assert.match(store, /await writeJsonFileUnlocked\(file, secrets\)/);
+  // Secret vault writes go through the ACL-first protected path, not the generic
+  // JSON writer: the temp file must be locked down while still empty so the
+  // rename never publishes cleartext secrets under default permissions.
+  assert.match(store, /await writeProtectedTextFileUnlocked\(file, JSON\.stringify\(secrets, null, 2\), \{ failClosed: true \}\)/);
+  assert.match(store, /await writeFile\(tempFile, "", \{ mode: 0o600 \}\)/);
+  assert.match(store, /"secret_vault_unprotected",\s*\n\s*503/);
 });
 
 test("client store write queues continue after a failed JSON write", async () => {
@@ -2423,6 +2428,41 @@ test("client store snapshots and restores profile import state", async () => {
     assert.equal(await readFile(paths.profileFile, "utf8"), oldProfile);
     assert.equal(await readFile(paths.jobsFile, "utf8"), oldJobs);
     await assert.rejects(() => readFile(paths.secretsFile, "utf8"), { code: "ENOENT" });
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("client secret vault writes are owner-only before any secret content lands on disk", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-secret-vault-acl-"));
+  const paths = {
+    profileFile: join(tempRoot, "profile.json"),
+    jobsFile: join(tempRoot, "jobs.json"),
+    secretsFile: join(tempRoot, "secrets.json")
+  };
+  try {
+    await saveJob({ id: "job-acl", secretAccessKey: "acl-secret" }, paths);
+    if (process.platform !== "win32") {
+      // The temp file is created empty with mode 0600 and the rename carries it
+      // over; the old path created the temp with default permissions and only
+      // protected the vault after the rename.
+      assert.equal((await stat(paths.secretsFile)).mode & 0o777, 0o600);
+    }
+
+    // The import snapshot must mark the vault file — and only the vault file —
+    // so a rollback also goes through the ACL-first write path.
+    const snapshot = await snapshotProfileImportState(paths);
+    assert.deepEqual(
+      snapshot.files.filter((entry) => entry.protect).map((entry) => entry.file),
+      [paths.secretsFile]
+    );
+
+    await writeFile(paths.secretsFile, "{}", "utf8");
+    await restoreProfileImportState(snapshot);
+    assert.equal((await readJobs(paths))[0].secretAccessKey, "acl-secret");
+    if (process.platform !== "win32") {
+      assert.equal((await stat(paths.secretsFile)).mode & 0o777, 0o600);
+    }
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }

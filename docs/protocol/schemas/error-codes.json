@@ -48,6 +48,7 @@
     { "code": "rclone_config_failed", "status": 500 },
     { "code": "rclone_sync_failed", "status": 500 },
     { "code": "secret_vault_missing", "status": 409 },
+    { "code": "secret_vault_unprotected", "status": 503 },
     { "code": "server_error", "status": 500 },
     { "code": "server_state_locked", "status": 409 },
     { "code": "server_singbox_config_write_failed", "status": 500 },

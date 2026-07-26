@@ -1556,6 +1556,7 @@ function formatError(error) {
     last_active_bucket_disable_blocked: "服务端至少需要保留一个启用的同步仓库。",
     last_bucket_delete_blocked: "服务端至少需要保留一个同步仓库。",
     secret_vault_missing: "本地密钥库缺少同步密钥，请重新导入 SyncKey。",
+    secret_vault_unprotected: "无法为本地密钥库设置仅限当前用户的访问权限，已拒绝保存密钥，请检查数据目录所在磁盘（需要 NTFS）后重试。",
     not_found: "请求的接口或资源不存在，请确认客户端版本是否匹配。",
     rclone_sync_failed: "同步失败，请查看日志中的 rclone 错误。",
     storage_full: "服务器存储空间不足，请联系管理员清理空间或迁移存储后重试。",

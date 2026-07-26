@@ -207,6 +207,7 @@ SyncKey payload：
 | `rclone_config_failed` | 500 | rclone remote 配置写入失败 |
 | `rclone_sync_failed` | 500 | rclone 同步进程异常退出 |
 | `secret_vault_missing` | 409 | 客户端本地 secret vault 缺少 profile/job 引用的密钥 |
+| `secret_vault_unprotected` | 503 | Windows 上无法为本地 secret vault 应用仅限当前用户的 ACL，运行时拒绝把密钥明文写入磁盘 |
 | `server_error` | 500 | 服务端通用兜底错误 |
 | `server_singbox_config_write_failed` | 500 | 服务端 sing-box 配置文件写入失败 |
 | `server_state_corrupt` | 500 | 服务端 `sfsc-state.json` 损坏，启动时不得静默覆盖 |

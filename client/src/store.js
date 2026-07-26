@@ -165,14 +165,20 @@ export async function saveJobs(jobs, paths = getClientPaths()) {
 
 export async function snapshotProfileImportState(paths = getClientPaths()) {
   return withClientStateLock(paths, async () => {
+    const vaultFile = paths.secretsFile || secretStoreFile(paths);
     const files = [
       paths.profileFile,
       paths.jobsFile,
-      paths.secretsFile || secretStoreFile(paths)
+      vaultFile
     ].filter(Boolean);
     return {
       type: "profile-import-state-snapshot",
-      files: await Promise.all(files.map(snapshotStateFile))
+      files: await Promise.all(files.map(async (file) => ({
+        ...(await snapshotStateFile(file)),
+        // Restoring the vault must go through the ACL-first write path; the
+        // snapshot is the only place that still knows which file that is.
+        protect: file === vaultFile
+      })))
     };
   });
 }
@@ -189,7 +195,15 @@ export async function restoreProfileImportState(snapshot) {
       }
       await withFileWriteLock(entry.file, async () => {
         if (entry.exists) {
-          await writeTextFileUnlocked(entry.file, typeof entry.content === "string" ? entry.content : "");
+          const content = typeof entry.content === "string" ? entry.content : "";
+          if (entry.protect) {
+            // Vault content restores best-effort: the pre-import state must come
+            // back even if ACL tooling fails, and this content was already on
+            // disk before the import began.
+            await writeProtectedTextFileUnlocked(entry.file, content, { failClosed: false });
+          } else {
+            await writeTextFileUnlocked(entry.file, content);
+          }
         } else {
           await rm(entry.file, { force: true });
         }
@@ -333,9 +347,41 @@ async function writeSecret(paths, key, value) {
   return withFileWriteLock(file, async () => {
     const secrets = await readSecrets(paths);
     secrets[key] = String(value);
-    await writeJsonFileUnlocked(file, secrets);
-    await protectSecretVaultFile(file);
+    await writeProtectedTextFileUnlocked(file, JSON.stringify(secrets, null, 2), { failClosed: true });
   });
+}
+
+// Atomic write for files holding cleartext secrets. The generic
+// writeJsonFileUnlocked writes the temp file with default inherited permissions
+// and only the caller's *post-rename* protectSecretVaultFile locked it down —
+// so on every save the vault briefly sat on disk world-readable (temp write,
+// rename, then ACL). NTFS renames carry the source security descriptor, so
+// locking down the still-empty temp file closes that window completely; the
+// 0600 mode does the same on POSIX.
+// failClosed: refuse the write when the ACL cannot be applied on Windows.
+// Refusing beats persisting a cleartext secret with default ACLs and reporting
+// it later in a status field nobody watches. The rollback path passes false:
+// restoring the pre-import state matters more there, and the restored content
+// is what was already on disk before.
+async function writeProtectedTextFileUnlocked(file, text, options = {}) {
+  await mkdir(dirname(file), { recursive: true });
+  const tempFile = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    await writeFile(tempFile, "", { mode: 0o600 });
+    const protection = await protectSecretVaultFile(tempFile);
+    if (options.failClosed && !protection.protected && protection.mode === "windows-acl") {
+      throw createHttpError(
+        "secret_vault_unprotected",
+        503,
+        `Refusing to write the local secret vault without an owner-only ACL (${protection.errorCode || "acl_failed"})`
+      );
+    }
+    await writeFile(tempFile, text, "utf8");
+    await rename(tempFile, file);
+  } catch (error) {
+    await rm(tempFile, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 async function readSecret(paths, key) {

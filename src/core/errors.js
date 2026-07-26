@@ -38,6 +38,7 @@ const DEFAULT_STATUS_BY_CODE = {
   rclone_config_failed: 500,
   rclone_sync_failed: 500,
   secret_vault_missing: 409,
+  secret_vault_unprotected: 503,
   server_error: 500,
   server_state_locked: 409,
   server_singbox_config_write_failed: 500,
