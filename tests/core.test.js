@@ -2154,6 +2154,103 @@ test("protocol request schemas normalize key client and server request envelopes
   );
 });
 
+test("protocol request schemas whitelist nested objects and reject smuggled structures", () => {
+  // CORE-3: nested-object whitelists drop unknown nested fields.
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_CLAIM_CREATE, {
+    clientName: "pc-1",
+    defaults: {
+      transfers: 6,
+      chunkSize: "32M",
+      bandwidthLimit: "08:00,10M 18:00,off",
+      schedule: { mode: "daily", time: "02:00", injected: "drop-me" },
+      injected: { nested: true }
+    }
+  }), {
+    clientName: "pc-1",
+    defaults: {
+      transfers: 6,
+      chunkSize: "32M",
+      bandwidthLimit: "08:00,10M 18:00,off",
+      schedule: { mode: "daily", time: "02:00" }
+    }
+  });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_TUNNEL_GENERATE, {
+    reality: { serverName: "www.microsoft.com", privateKey: "***", injected: "drop-me" }
+  }), {
+    reality: { serverName: "www.microsoft.com", privateKey: "***" }
+  });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_JOB_SAVE, {
+    job: {
+      schedule: { mode: "interval", intervalMinutes: 30, injected: "drop-me" },
+      safety: {
+        recoveryRetentionDays: 30,
+        deleteLimit: { maxFiles: 100, maxPercent: 10, injected: "drop-me" },
+        bidirectional: { initialMode: "newer", injected: "drop-me" },
+        injected: { nested: true }
+      }
+    }
+  }), {
+    job: {
+      schedule: { mode: "interval", intervalMinutes: 30 },
+      safety: {
+        recoveryRetentionDays: 30,
+        deleteLimit: { maxFiles: 100, maxPercent: 10 },
+        bidirectional: { initialMode: "newer" }
+      }
+    }
+  });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_PROFILE_ENCODE, {
+    uri: "vless://example",
+    heartbeat: { scheme: "sfsc-hmac-sha256-v1", secret: "hb-secret", injected: "drop-me" },
+    bandwidthLimit: { enabled: true, mode: "fixed", value: 20, unit: "M", injected: "drop-me" },
+    defaults: { localProxyPort: 18082, schedule: { mode: "manual", injected: "drop-me" }, injected: true }
+  }), {
+    uri: "vless://example",
+    heartbeat: { scheme: "sfsc-hmac-sha256-v1", secret: "hb-secret" },
+    bandwidthLimit: { enabled: true, mode: "fixed", value: 20, unit: "M" },
+    defaults: { localProxyPort: 18082, schedule: { mode: "manual" } }
+  });
+
+  // Scalar slots must reject smuggled objects/arrays.
+  for (const [name, body] of [
+    [PROTOCOL_REQUESTS.SERVER_CLAIM_CREATE, { clientName: "pc", defaults: { transfers: { valueOf: 1 } } }],
+    [PROTOCOL_REQUESTS.SERVER_CLAIM_CREATE, { clientName: "pc", expiresInHours: [1] }],
+    [PROTOCOL_REQUESTS.SERVER_CLAIM_CREATE, { clientName: "pc", defaults: [] }],
+    [PROTOCOL_REQUESTS.SERVER_ADMIN_TUNNEL_GENERATE, { publicPort: { port: 443 } }],
+    [PROTOCOL_REQUESTS.CLIENT_JOB_SAVE, { job: { transfers: { nested: true } } }],
+    [PROTOCOL_REQUESTS.CLIENT_JOB_SAVE, { job: { safety: { deleteLimit: [] } } }],
+    [PROTOCOL_REQUESTS.SERVER_JOBS_PREVIEW, { job: { retries: ["3"] } }],
+    [PROTOCOL_REQUESTS.SERVER_PROFILE_ENCODE, { uri: "vless://x", bandwidthLimit: [] }],
+    [PROTOCOL_REQUESTS.SERVER_PROFILE_ENCODE, { uri: "vless://x", localProxyPort: { port: 18081 } }]
+  ]) {
+    assert.throws(
+      () => parseProtocolRequest(name, body),
+      (error) => error.code === "validation_failed",
+      `${name} must reject smuggled non-scalar: ${JSON.stringify(body)}`
+    );
+  }
+
+  // Negative control: device heartbeat nested payloads pass through in
+  // arrival form because the heartbeat HMAC signature covers the whole body.
+  const heartbeat = parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_DEVICE_HEARTBEAT, {
+    clientName: "pc-1",
+    sync: { state: "syncing", currentJob: { direction: "upload" } },
+    scheduler: { enabled: true, jobs: [{ id: "job-1" }] },
+    lastRun: { job: { direction: "upload" } },
+    currentJob: { name: "job" },
+    lastExit: { ok: true },
+    conflicts: { count: 0, files: [] },
+    auth: { scheme: "sfsc-hmac-sha256-v1", nonce: "nonce-value", timestamp: "t", signature: "s" }
+  });
+  assert.deepEqual(heartbeat.sync, { state: "syncing", currentJob: { direction: "upload" } });
+  assert.deepEqual(heartbeat.scheduler, { enabled: true, jobs: [{ id: "job-1" }] });
+  assert.deepEqual(heartbeat.lastRun, { job: { direction: "upload" } });
+  assert.deepEqual(heartbeat.currentJob, { name: "job" });
+  assert.deepEqual(heartbeat.lastExit, { ok: true });
+  assert.deepEqual(heartbeat.conflicts, { count: 0, files: [] });
+  assert.deepEqual(heartbeat.auth, { scheme: "sfsc-hmac-sha256-v1", nonce: "nonce-value", timestamp: "t", signature: "s" });
+});
+
 test("shared JSON body reader preserves split UTF-8 and enforces the byte limit", async () => {
   const payload = Buffer.from(JSON.stringify({ clientName: "同步😀电脑" }), "utf8");
   const emoji = Buffer.from("😀", "utf8");

@@ -140,6 +140,26 @@ const SERVER_JOBS_PREVIEW_JOB_BOOLEAN_FIELDS = [
 const SERVER_SINGBOX_CLIENT_CONFIG_OPTIONS_JSON_FIELDS = [
   "localProxyPort"
 ];
+// Nested-object whitelists (CORE-3). Envelope-level nested objects must be
+// field-whitelisted here so unknown nested fields are dropped at the schema
+// boundary, per docs/INTERFACE_CONTRACT.md. Device heartbeat payloads are the
+// deliberate exception (see parseServerDeviceHeartbeatRequest).
+const SCHEDULE_OBJECT_FIELDS = ["mode", "intervalMinutes", "time"];
+const REALITY_OBJECT_FIELDS = ["serverName", "fingerprint", "publicKey", "privateKey", "shortId"];
+const PROFILE_ENCODE_HEARTBEAT_FIELDS = ["scheme", "secret"];
+const PROFILE_DEFAULTS_SCALAR_FIELDS = [
+  "localProxyPort",
+  "transfers",
+  "streams",
+  "checkers",
+  "chunkSize",
+  "retries",
+  "lowLevelRetries"
+];
+const BANDWIDTH_LIMIT_OBJECT_FIELDS = ["enabled", "mode", "value", "unit", "startTime", "endTime"];
+const CLIENT_JOB_SAFETY_SCALAR_FIELDS = ["version", "recoveryRetentionDays"];
+const CLIENT_JOB_SAFETY_DELETE_LIMIT_FIELDS = ["maxFiles", "maxPercent"];
+const CLIENT_JOB_SAFETY_BIDIRECTIONAL_FIELDS = ["initialized", "initialMode"];
 
 export function parseProtocolRequest(name, body = {}) {
   switch (name) {
@@ -274,8 +294,8 @@ function parseClientJobPayload(body, label) {
   for (const field of CLIENT_JOB_BOOLEAN_FIELDS) {
     copyOptionalBooleanField(input, output, field);
   }
-  copyOptionalObjectField(input, output, "schedule");
-  copyOptionalObjectField(input, output, "safety");
+  copyOptionalObjectField(input, output, "schedule", SCHEDULE_OBJECT_FIELDS);
+  parseClientJobSafetyField(input, output);
   return output;
 }
 
@@ -346,7 +366,7 @@ function parseServerAdminTunnelGenerateRequest(body) {
   copyOptionalStringFields(input, output, ["protocol", "publicHost", "transportPath", "remark"]);
   copyOptionalJsonFields(input, output, ["publicPort", "listenPort"]);
   copyOptionalBooleanField(input, output, "confirmGenerateTunnel");
-  copyOptionalObjectField(input, output, "reality");
+  copyOptionalObjectField(input, output, "reality", REALITY_OBJECT_FIELDS);
   return output;
 }
 
@@ -440,7 +460,7 @@ function parseServerClaimCreateRequest(body) {
     "userId"
   ]);
   copyOptionalBooleanField(input, output, "confirmCompatibilityWarning");
-  copyOptionalObjectField(input, output, "defaults");
+  parseProfileDefaultsField(input, output);
   copyOptionalJsonFields(input, output, ["expiresAt", "expiresInHours"]);
   return output;
 }
@@ -472,11 +492,16 @@ function parseServerDeviceHeartbeatRequest(body) {
   if (!hasAnyNonEmptyString(output, ["clientName", "deviceName"])) {
     throw createHttpError("validation_failed", 400, "device heartbeat request requires clientName");
   }
+  // Heartbeat nested payloads must pass through in arrival form: the HMAC
+  // signature covers the whole body, and normalizeDeviceSync /
+  // normalizeRuntimeDiagnostics deep-normalize them after verification.
+  // Mutating or whitelisting nested content here would break signatures of
+  // legitimate clients without adding a security boundary.
   copyOptionalObjectField(input, output, "diagnostics");
   copyOptionalObjectField(input, output, "storage");
   copyOptionalObjectField(input, output, "sync");
   copyOptionalObjectField(input, output, "auth");
-  copyOptionalJsonFields(input, output, HEARTBEAT_LEGACY_SYNC_FIELDS);
+  copyOptionalUncheckedJsonFields(input, output, HEARTBEAT_LEGACY_SYNC_FIELDS);
   return output;
 }
 
@@ -499,11 +524,11 @@ function parseServerProfileEncodeRequest(body) {
     "uri",
     "vlessUri"
   ]);
-  copyOptionalObjectField(input, output, "defaults");
-  copyOptionalObjectField(input, output, "heartbeat");
-  copyOptionalObjectField(input, output, "schedule");
+  parseProfileDefaultsField(input, output);
+  copyOptionalObjectField(input, output, "heartbeat", PROFILE_ENCODE_HEARTBEAT_FIELDS);
+  copyOptionalObjectField(input, output, "schedule", SCHEDULE_OBJECT_FIELDS);
+  parseBandwidthLimitField(input, output);
   copyOptionalJsonFields(input, output, [
-    "bandwidthLimit",
     "checkers",
     "localProxyPort",
     "lowLevelRetries",
@@ -543,7 +568,7 @@ function parseServerJobsPreviewJob(body) {
   for (const field of SERVER_JOBS_PREVIEW_JOB_BOOLEAN_FIELDS) {
     copyOptionalBooleanField(input, output, field);
   }
-  copyOptionalObjectField(input, output, "schedule");
+  copyOptionalObjectField(input, output, "schedule", SCHEDULE_OBJECT_FIELDS);
   return output;
 }
 
@@ -597,20 +622,89 @@ function copyOptionalBooleanField(input, output, field) {
   output[field] = input[field];
 }
 
-function copyOptionalObjectField(input, output, field) {
+function copyOptionalObjectField(input, output, field, allowedFields = null) {
   if (!Object.hasOwn(input, field)) {
     return;
   }
-  output[field] = requirePlainObject(input[field], `${field}`);
+  const value = requirePlainObject(input[field], `${field}`);
+  if (!allowedFields) {
+    output[field] = value;
+    return;
+  }
+  output[field] = {};
+  copyOptionalJsonFields(value, output[field], allowedFields);
 }
 
+// JSON fields declared in schema whitelists are scalars by contract: nested
+// objects and arrays must never ride through a scalar slot into deep sync or
+// state logic (CORE-3). Deep normalizers still do range/format validation.
 function copyOptionalJsonFields(input, output, fields) {
+  for (const field of fields) {
+    if (!Object.hasOwn(input, field)) {
+      continue;
+    }
+    const value = input[field];
+    if (value !== null && (typeof value === "object" || typeof value === "function")) {
+      throw createHttpError("validation_failed", 400, `${field} must be a JSON scalar value`);
+    }
+    output[field] = value;
+  }
+}
+
+// Device heartbeat legacy sync fields carry versioned nested objects
+// (scheduler, currentJob, lastRun, lastExit, conflicts, ...). Their arrival
+// form is bound by the heartbeat HMAC signature and they are deep-normalized
+// by normalizeDeviceSync before persistence, so they intentionally bypass the
+// scalar guard above. Do not reuse this helper for new fields.
+function copyOptionalUncheckedJsonFields(input, output, fields) {
   for (const field of fields) {
     if (!Object.hasOwn(input, field)) {
       continue;
     }
     output[field] = input[field];
   }
+}
+
+function parseProfileDefaultsField(input, output) {
+  if (!Object.hasOwn(input, "defaults")) {
+    return;
+  }
+  const value = requirePlainObject(input.defaults, "defaults");
+  const defaults = {};
+  copyOptionalJsonFields(value, defaults, PROFILE_DEFAULTS_SCALAR_FIELDS);
+  parseBandwidthLimitField(value, defaults);
+  copyOptionalObjectField(value, defaults, "schedule", SCHEDULE_OBJECT_FIELDS);
+  output.defaults = defaults;
+}
+
+// bandwidthLimit is the one dual-typed field: either an rclone --bwlimit
+// compatible string ("off", "20M", timetable) or the UI widget object form.
+function parseBandwidthLimitField(input, output, field = "bandwidthLimit") {
+  if (!Object.hasOwn(input, field)) {
+    return;
+  }
+  const value = input[field];
+  if (value && typeof value === "object") {
+    if (Array.isArray(value)) {
+      throw createHttpError("validation_failed", 400, `${field} must be a bandwidth limit string or object`);
+    }
+    output[field] = {};
+    copyOptionalJsonFields(value, output[field], BANDWIDTH_LIMIT_OBJECT_FIELDS);
+    return;
+  }
+  output[field] = value;
+}
+
+function parseClientJobSafetyField(input, output) {
+  if (!Object.hasOwn(input, "safety")) {
+    return;
+  }
+  const value = requirePlainObject(input.safety, "safety");
+  const safety = {};
+  copyOptionalJsonFields(value, safety, CLIENT_JOB_SAFETY_SCALAR_FIELDS);
+  copyOptionalObjectField(value, safety, "deleteLimit", CLIENT_JOB_SAFETY_DELETE_LIMIT_FIELDS);
+  copyOptionalObjectField(value, safety, "bidirectional", CLIENT_JOB_SAFETY_BIDIRECTIONAL_FIELDS);
+  output.safety = safety;
 }
 
 function readPort(value, label) {
