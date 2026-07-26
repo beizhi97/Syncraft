@@ -318,7 +318,7 @@ GET /api/health
 
 响应中的 `adminAuth.enabled` 表示服务端是否启用了管理 token；`adminAuth.enabled` 必须是布尔值，未启用时必须返回 `false`，不得省略 `adminAuth` 或返回字符串/数字等兼容形态。
 
-响应中的 `serviceHealth` 是未认证、脱敏的服务健康摘要，只能包含 `ok`、`apiReachable`、`restartRequired`、`enabledDeviceCount`、`onlineDeviceCount`、`bucketCount` 和 `activeBucketCount`。`apiReachable` 必须为 `true`，`restartRequired` 必须是布尔值，`ok` 必须等于 `!restartRequired`。服务端控制台健康灯必须把 HTTP/API 可达和运行配置待应用分开展示：API 可达但 `serviceHealth.restartRequired: true` 时应显示待重启/需处理，而不是“服务正常”。
+响应中的 `serviceHealth` 是未认证、脱敏的服务健康摘要，只能包含 `ok`、`apiReachable` 和 `restartRequired`。`apiReachable` 必须为 `true`，`restartRequired` 必须是布尔值，`ok` 必须等于 `!restartRequired`。该摘要不得包含设备数量、在线数量或存储桶数量等运营规模信息：未认证调用方无需知晓部署规模，且这些计数没有任何消费方；控制台需要计数时必须从已认证的 `/api/admin/state` 的 `devices[]` 与 `storage.buckets[]` 自行统计。服务端控制台健康灯必须把 HTTP/API 可达和运行配置待应用分开展示：API 可达但 `serviceHealth.restartRequired: true` 时应显示待重启/需处理，而不是“服务正常”。
 
 ### 管理鉴权
 

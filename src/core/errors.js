@@ -203,6 +203,43 @@ const MESSAGE_RULES = [
   }
 ];
 
+// Public error messages for codes whose natural message embeds server-side
+// internals: absolute state/config paths, the internal MinIO/S3 endpoint, or a
+// raw fs/network error string ("getaddrinfo ENOTFOUND minio-internal",
+// "connect ECONNREFUSED 172.18.0.5:9000"). The stable code already tells the
+// caller what happened and both UIs map codes to their own copy, so the raw
+// message adds nothing for callers while handing an attacker a map of the
+// internal network and filesystem. The raw detail is not lost — it stays on the
+// server-side error chain, and startup failures log it to the operator's own
+// stderr rather than the sanitized public message.
+// local_state_corrupt is deliberately absent: it names the user's own file over
+// a loopback-only API, so sanitizing it would cost the user a useful diagnostic
+// without withholding anything from an attacker.
+const SANITIZED_MESSAGE_BY_CODE = {
+  storage_request_failed: "Storage backend request failed",
+  server_state_corrupt: "Server state file is corrupt",
+  server_state_write_failed: "Server state could not be written",
+  server_singbox_config_write_failed: "sing-box config could not be written",
+  server_error: "Internal server error"
+};
+
+// Even a sanitized message must not carry a network address if a caller passed an
+// explicit publicMessage built from raw error text. Filesystem paths are
+// deliberately NOT matched here: client-local errors such as
+// missing_rclone_binary legitimately name the user's own file, the local API is
+// loopback-only behind a Host allowlist, and server-side path leaks are already
+// covered by SANITIZED_MESSAGE_BY_CODE above.
+const LEAKY_MESSAGE_PATTERN = /(?:getaddrinfo|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH|ECONNRESET)\b|(?:\d{1,3}\.){3}\d{1,3}/i;
+
+// Errors carrying relayedPublicMessage opt out of the code-to-message map above.
+// The map exists to stop *this* process from echoing its own paths and endpoints;
+// a message that arrived over the wire from a peer is not this process's internal
+// detail, the peer already applied the same sanitizing rules before sending it,
+// and INTERFACE_CONTRACT.md requires the client to preserve the server's
+// structured errorCode, HTTP status and message when relaying a redeem failure.
+// LEAKY_MESSAGE_PATTERN still applies, so a peer that leaks an address anyway is
+// reduced to the bare code.
+
 export function createHttpError(code, status = DEFAULT_STATUS_BY_CODE[code] || 400, publicMessage = code) {
   const error = new Error(code);
   error.code = code;
@@ -222,14 +259,28 @@ export function normalizeHttpError(error, fallbackCode = "server_error") {
     : DEFAULT_STATUS_BY_CODE[code] || rule?.status || DEFAULT_STATUS_BY_CODE[fallbackCode] || 400;
 
   const fallbackMessage = code === "client_error" ? "Client request failed" : "Internal server error";
-  const publicMessage = error?.publicMessage
+  const rawMessage = error?.publicMessage
     || (explicitCode || messageCode || rule ? message || code : fallbackMessage);
 
   return {
     status,
     code,
-    message: publicMessage
+    message: sanitizePublicMessage(code, rawMessage, Boolean(error?.relayedPublicMessage))
   };
+}
+
+// Keeps deployment internals (internal hostnames, container IPs, absolute paths)
+// out of responses while preserving the stable code callers actually branch on.
+function sanitizePublicMessage(code, rawMessage, relayed = false) {
+  const sanitized = relayed ? "" : SANITIZED_MESSAGE_BY_CODE[code];
+  if (sanitized) {
+    return sanitized;
+  }
+  const text = String(rawMessage || "");
+  if (LEAKY_MESSAGE_PATTERN.test(text)) {
+    return code;
+  }
+  return text;
 }
 
 function isHttpErrorStatus(value) {

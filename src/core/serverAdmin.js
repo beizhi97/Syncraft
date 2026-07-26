@@ -8,6 +8,7 @@ import { normalizeDeviceSync, summarizeDeviceSync } from "./syncRun.js";
 import { isUuid, parseVlessUri } from "./vless.js";
 import { createHttpError } from "./errors.js";
 import { PROFILE_VERSION } from "./profileProtocol.js";
+import { sanitizeRemoteName } from "./storage.js";
 
 const DEFAULTS = {
   publicServerUrl: "https://pass.971223.xyz:2025",
@@ -1716,11 +1717,7 @@ function sanitizeClientName(input) {
 }
 
 function cleanRemoteName(input) {
-  const text = String(input || "").trim();
-  if (!/^[A-Za-z0-9_-]+$/.test(text)) {
-    throw validationError("Remote name can only contain letters, numbers, _ and -");
-  }
-  return text;
+  return sanitizeRemoteName(input, validationError);
 }
 
 function cleanBucket(input) {
@@ -1971,10 +1968,15 @@ function cleanRequiredCredential(input, field) {
   return input.trim();
 }
 
-function maskSecret(secret) {
-  const text = String(secret || "");
-  if (text.length <= 6) return "***";
-  return `${text.slice(0, 3)}***${text.slice(-3)}`;
+// Masked secrets must not leak any plaintext. The previous form kept the first
+// and last three characters, which is a meaningful disclosure for short or
+// low-entropy secrets and lets an observer confirm a guessed value. The mask is
+// always the literal "***": it is the documented sentinel meaning "keep the
+// existing secret" on write paths (see preserveExistingMasked* below and
+// docs/INTERFACE_CONTRACT.md), it satisfies the masked-secret contract for
+// absent values too, and a fixed width hides the real secret length.
+function maskSecret() {
+  return "***";
 }
 
 function maskRealityConfig(reality = {}) {

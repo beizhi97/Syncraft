@@ -1,3 +1,5 @@
+import { sanitizeRemoteName } from "./storage.js";
+
 export function buildServerFolderRemotePath(job) {
   const remoteName = sanitizeRemoteName(job.remoteName || "server-folder");
   const clientName = sanitizePathSegment(job.clientName || "default-client");
@@ -22,14 +24,6 @@ export function sanitizeServerSubdir(input) {
 
   const parts = text.split("/").filter(Boolean).map(sanitizePathSegment);
   return parts.join("/");
-}
-
-function sanitizeRemoteName(input) {
-  const text = String(input || "").trim();
-  if (!/^[A-Za-z0-9_-]+$/.test(text)) {
-    throw new Error("Remote name can only contain letters, numbers, _ and -");
-  }
-  return text;
 }
 
 function sanitizePathSegment(input) {

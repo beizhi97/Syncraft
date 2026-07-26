@@ -227,26 +227,20 @@ export function assertServerHealthResponseContract(response, label = "serverHeal
   assertNoRawDiagnosticSecrets(response, label);
 }
 
+// The unauthenticated health probe must stay limited to liveness/readiness.
+// Device and bucket counts are deliberately absent: exposing operational scale
+// to anonymous callers is needless disclosure, and no consumer read them.
 function assertServerServiceHealthContract(serviceHealth, label = "serviceHealth") {
   assertObject(serviceHealth, label);
   assertExactKeys(serviceHealth, [
-    "activeBucketCount",
     "apiReachable",
-    "bucketCount",
-    "enabledDeviceCount",
     "ok",
-    "onlineDeviceCount",
     "restartRequired"
   ], label);
   assertEqual(typeof serviceHealth.ok, "boolean", `${label}.ok`);
   assertEqual(serviceHealth.apiReachable, true, `${label}.apiReachable`);
   assertEqual(typeof serviceHealth.restartRequired, "boolean", `${label}.restartRequired`);
   assertEqual(serviceHealth.ok, !serviceHealth.restartRequired, `${label}.ok`);
-  for (const field of ["enabledDeviceCount", "onlineDeviceCount", "bucketCount", "activeBucketCount"]) {
-    assertNonNegativeInteger(serviceHealth[field], `${label}.${field}`);
-  }
-  assert(serviceHealth.onlineDeviceCount <= serviceHealth.enabledDeviceCount, `${label}.onlineDeviceCount`);
-  assert(serviceHealth.activeBucketCount <= serviceHealth.bucketCount, `${label}.activeBucketCount`);
 }
 
 export function assertAdminAuthCheckResponseContract(response, label = "adminAuthCheck") {

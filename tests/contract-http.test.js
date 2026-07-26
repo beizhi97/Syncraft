@@ -2505,12 +2505,12 @@ test("HTTP contract: server-issued SyncKey imports into client profile and accep
   assert.deepEqual(health.serviceHealth, {
     ok: !stateForHealthContract.tunnel.restartRequired,
     apiReachable: true,
-    restartRequired: stateForHealthContract.tunnel.restartRequired,
-    enabledDeviceCount: stateForHealthContract.devices.filter((device) => device.enabled !== false).length,
-    onlineDeviceCount: stateForHealthContract.devices.filter((device) => device.enabled !== false && device.online).length,
-    bucketCount: stateForHealthContract.storage.buckets.length,
-    activeBucketCount: stateForHealthContract.storage.buckets.filter((bucket) => !bucket.disabledAt).length
+    restartRequired: stateForHealthContract.tunnel.restartRequired
   });
+  // The public probe must not disclose operational scale.
+  for (const field of ["enabledDeviceCount", "onlineDeviceCount", "bucketCount", "activeBucketCount"]) {
+    assert.equal(field in health.serviceHealth, false, `serviceHealth.${field} must not be exposed`);
+  }
   assertAdminStateSummaryContract(stateForHealthContract, "stateForHealthContract");
   assert.equal(stateForHealthContract.tunnel.id, "vless-main");
   assert.equal(stateForHealthContract.tunnel.protocol, "vless-tcp-none");

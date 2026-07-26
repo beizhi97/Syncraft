@@ -152,6 +152,11 @@ async function redeemClaim(claim, options = {}) {
       payload?.message || payload?.errorCode || payload?.error || `SyncKey redemption failed with HTTP ${response.status}`
     );
     error.claimRedeemRemoteResponse = true;
+    // The message came from the remote server, which already sanitized it. Marking
+    // it as relayed stops the local error normalizer from replacing it with its own
+    // generic copy, which INTERFACE_CONTRACT.md forbids: a redeem failure must
+    // preserve the server's errorCode, HTTP status and message.
+    error.relayedPublicMessage = true;
     throw error;
   }
 

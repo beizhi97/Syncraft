@@ -1034,11 +1034,7 @@ test("runtime contracts enforce admin state summary shape", () => {
     serviceHealth: {
       ok: true,
       apiReachable: true,
-      restartRequired: false,
-      enabledDeviceCount: 0,
-      onlineDeviceCount: 0,
-      bucketCount: 1,
-      activeBucketCount: 1
+      restartRequired: false
     },
     adminAuth: { enabled: false }
   }, "serverHealth"));
@@ -1365,11 +1361,7 @@ test("runtime contracts enforce admin state summary shape", () => {
       serviceHealth: {
         ok: true,
         apiReachable: true,
-        restartRequired: false,
-        enabledDeviceCount: 0,
-        onlineDeviceCount: 0,
-        bucketCount: 1,
-        activeBucketCount: 1
+        restartRequired: false
       },
       adminAuth: { enabled: false },
       state: summary
@@ -1400,11 +1392,7 @@ test("runtime contracts enforce admin state summary shape", () => {
       serviceHealth: {
         ok: true,
         apiReachable: true,
-        restartRequired: false,
-        enabledDeviceCount: 0,
-        onlineDeviceCount: 0,
-        bucketCount: 1,
-        activeBucketCount: 1
+        restartRequired: false
       },
       adminAuth: { enabled: false }
     }, "serverHealth"),
@@ -10764,6 +10752,67 @@ test("storage paths reject traversal, invalid buckets, and absolute drive paths"
   }), /Bucket name/);
 });
 
+test("remote names cannot inject rclone flags through the positional path", () => {
+  // `name:bucket/prefix` is a positional argument. rclone parses any positional
+  // starting with `-` as flags, so a server-supplied name like `-P` or `--config`
+  // would smuggle CLI options into the client's own rclone invocation.
+  for (const remoteName of ["-P", "--config", "-", "-vv", "--dry-run"]) {
+    assert.throws(() => buildStorageRemotePath({
+      remoteName,
+      clientName: "company-pc1",
+      remoteFolder: "projects"
+    }), /Remote name must start with a letter or number/, `remoteName ${JSON.stringify(remoteName)}`);
+  }
+
+  // Legitimate names containing - and _ in non-leading positions still work.
+  assert.equal(
+    buildStorageRemotePath({ remoteName: "home-minio-v2", clientName: "company-pc1", remoteFolder: "projects" }),
+    "home-minio-v2:home-sync/devices/company-pc1/projects"
+  );
+  assert.equal(
+    buildStorageRemotePath({ remoteName: "9lives_remote", clientName: "company-pc1", remoteFolder: "projects" }),
+    "9lives_remote:home-sync/devices/company-pc1/projects"
+  );
+});
+
+test("rclone preview refuses flag-like positional arguments", () => {
+  // Defense in depth: if any future path bypasses remote-name/local-path
+  // validation, building the command must fail instead of handing rclone flags.
+  assert.throws(() => buildRclonePreview({
+    name: "job",
+    localPath: "--config",
+    direction: "upload",
+    clientName: "company-pc1",
+    remoteFolder: "projects"
+  }), /flag-like path argument/);
+
+  // This case is load-bearing rather than defensive: remotePath is a
+  // server-supplied field (SERVER_JOBS_PREVIEW_JOB_STRING_FIELDS) and
+  // resolveRemotePath returns it verbatim, bypassing sanitizeRemoteName. A
+  // malicious or compromised server must not be able to add rclone flags.
+  for (const remotePath of ["--config=/tmp/evil.conf", "-P", "--dump-bodies"]) {
+    assert.throws(() => buildRclonePreview({
+      name: "job",
+      localPath: "D:\\Work\\Projects",
+      direction: "download",
+      clientName: "company-pc1",
+      remotePath
+    }), /flag-like path argument/, `remotePath ${JSON.stringify(remotePath)}`);
+  }
+
+  // A server-supplied remotePath containing spaces is still a single argv
+  // element: no shell is used anywhere (spawn without shell:true), so it cannot
+  // split into extra arguments and must be passed through unchanged.
+  const spaced = buildRclonePreview({
+    name: "job",
+    localPath: "D:\\Work\\Projects",
+    direction: "download",
+    clientName: "company-pc1",
+    remotePath: "home-minio:bucket/a b --config /tmp/evil.conf"
+  });
+  assert.equal(spaced.args[1], "home-minio:bucket/a b --config /tmp/evil.conf");
+});
+
 test("claim redeem passthrough error codes are centralized in core", () => {
   assert.deepEqual(CLAIM_REDEEM_ERROR_CODES, [
     "claim_not_found",
@@ -10860,16 +10909,22 @@ test("normalizeHttpError maps product-facing error codes", () => {
     message: "Profile source server must use http or https"
   });
 
-  assert.deepEqual(normalizeHttpError(new Error("http://minio:9000: fetch failed"), "server_error"), {
+  // Storage backend failures must not echo the internal MinIO/S3 endpoint, host
+  // name or resolver error back to the caller: the public message is a stable
+  // sanitized string and the raw detail stays in the server-side error chain.
+  const storageEndpointFailure = normalizeHttpError(new Error("http://minio:9000: fetch failed"), "server_error");
+  assert.deepEqual(storageEndpointFailure, {
     status: 502,
     code: "storage_request_failed",
-    message: "http://minio:9000: fetch failed"
+    message: "Storage backend request failed"
   });
+  assert.equal(storageEndpointFailure.message.includes("minio"), false);
+  assert.equal(storageEndpointFailure.message.includes("9000"), false);
 
   assert.deepEqual(normalizeHttpError(new Error("getaddrinfo ENOTFOUND minio"), "server_error"), {
     status: 502,
     code: "storage_request_failed",
-    message: "getaddrinfo ENOTFOUND minio"
+    message: "Storage backend request failed"
   });
 
   assert.deepEqual(normalizeHttpError(createHttpError(
@@ -10892,22 +10947,38 @@ test("normalizeHttpError maps product-facing error codes", () => {
     message: "Failed to write rclone remote config: invalid credentials"
   });
 
-  assert.deepEqual(normalizeHttpError(new Error("Server state file is not valid JSON: sfsc-state.json"), "server_error"), {
+  // Server-side state/config failures embed absolute paths and raw fs error
+  // strings, so the public message is a stable sanitized string. The absolute
+  // path stays in the operator's own stderr at startup.
+  const corruptState = normalizeHttpError(new Error("Server state file is not valid JSON: /srv/sfsc/data/sfsc-state.json"), "server_error");
+  assert.deepEqual(corruptState, {
     status: 500,
     code: "server_state_corrupt",
-    message: "Server state file is not valid JSON: sfsc-state.json"
+    message: "Server state file is corrupt"
   });
+  assert.equal(corruptState.message.includes("/srv/sfsc"), false);
 
   assert.deepEqual(normalizeHttpError(new Error("Failed to write server sing-box config: EACCES"), "server_error"), {
     status: 500,
     code: "server_singbox_config_write_failed",
-    message: "Failed to write server sing-box config: EACCES"
+    message: "sing-box config could not be written"
   });
 
   assert.deepEqual(normalizeHttpError(new Error("Failed to write server state: ENOSPC"), "server_error"), {
     status: 500,
     code: "server_state_write_failed",
-    message: "Failed to write server state: ENOSPC"
+    message: "Server state could not be written"
+  });
+
+  // A client-local corrupt state file is reported over a loopback-only API and
+  // names only the basename, so it stays verbatim to remain diagnosable.
+  assert.deepEqual(normalizeHttpError(
+    createHttpError("local_state_corrupt", 409, "Local state file is not valid JSON: jobs.json"),
+    "client_error"
+  ), {
+    status: 409,
+    code: "local_state_corrupt",
+    message: "Local state file is not valid JSON: jobs.json"
   });
 });
 
@@ -12056,8 +12127,12 @@ test("admin summary masks REALITY private key without changing generated config"
 
   const summary = summarizeAdminState(state);
   assert.equal(summary.tunnel.reality.publicKey, REALITY_PUBLIC_KEY);
-  assert.equal(summary.tunnel.reality.privateKey, "BBB***BBB");
+  assert.equal(summary.tunnel.reality.privateKey, "***");
   assert.equal(JSON.stringify(summary).includes(REALITY_PRIVATE_KEY), false);
+  // The mask must not carry any plaintext fragment of the real key: leaking the
+  // leading/trailing characters is a meaningful disclosure for short secrets.
+  assert.equal(summary.tunnel.reality.privateKey.includes(REALITY_PRIVATE_KEY.slice(0, 3)), false);
+  assert.equal(summary.tunnel.reality.privateKey.includes(REALITY_PRIVATE_KEY.slice(-3)), false);
 
   const config = buildSingboxServerConfig(state);
   assert.equal(config.inbounds[0].tls.reality.private_key, REALITY_PRIVATE_KEY);

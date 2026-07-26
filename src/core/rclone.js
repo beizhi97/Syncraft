@@ -87,6 +87,15 @@ export function buildRclonePreview(job, options = {}) {
   }
 
   const remoteConfig = buildRcloneRemoteConfig(storage, job, rcloneBin, rcloneConfigPath);
+  // Positional arguments are the one place a leading `-` turns data into flags.
+  // sanitizeRemoteName and validateSyncLocalPath both prevent it upstream; this
+  // assertion makes a future regression in either fail loudly instead of
+  // silently handing rclone extra options.
+  for (const positional of [source, target]) {
+    if (String(positional || "").startsWith("-")) {
+      throw new Error(`Refusing to run rclone with a flag-like path argument: ${positional}`);
+    }
+  }
   const env = {
     HTTP_PROXY: proxyUrl,
     HTTPS_PROXY: proxyUrl,

@@ -44,10 +44,18 @@ export function sanitizeRemoteFolder(input) {
   return text.split("/").filter(Boolean).map(sanitizePathSegment).join("/");
 }
 
-function sanitizeRemoteName(input) {
+// A remote name becomes the leading part of the positional `name:bucket/prefix`
+// argument passed to rclone. rclone (cobra/pflag) parses any positional starting
+// with `-` as flags, so a name like `-P` would inject CLI options into the
+// client's own rclone invocation. Requiring an alphanumeric first character
+// closes that off. Single source of truth for every caller that builds a remote.
+export const REMOTE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+export const REMOTE_NAME_MESSAGE = "Remote name must start with a letter or number and can only contain letters, numbers, _ and -";
+
+export function sanitizeRemoteName(input, makeError = (message) => new Error(message)) {
   const text = String(input || "").trim();
-  if (!/^[A-Za-z0-9_-]+$/.test(text)) {
-    throw new Error("Remote name can only contain letters, numbers, _ and -");
+  if (!REMOTE_NAME_PATTERN.test(text)) {
+    throw makeError(REMOTE_NAME_MESSAGE);
   }
   return text;
 }

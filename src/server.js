@@ -70,6 +70,13 @@ const CLAIM_REDEEM_FAILURE_WINDOW_MS = Number(process.env.SFSC_CLAIM_REDEEM_FAIL
 const CLAIM_REDEEM_RATE_LIMIT_MS = Number(process.env.SFSC_CLAIM_REDEEM_RATE_LIMIT_MS || 10 * 60 * 1000);
 let adminToken;
 let trustProxyConfig;
+
+// createHttpError stores the human-readable detail on publicMessage and leaves
+// error.message as the bare code; plain Errors carry the detail on message.
+function startupErrorDetail(error) {
+  return error?.publicMessage || error?.message || "";
+}
+
 try {
   adminToken = resolveAdminToken(process.env);
   trustProxyConfig = resolveTrustProxyConfig(process.env);
@@ -90,11 +97,22 @@ try {
     staleAfterMs: Number(process.env.SFSC_STATE_LOCK_STALE_MS || 30_000),
     onStaleLock: (owner) => {
       console.warn(`[sfsc] server_state_stale_lock_removed: previous owner ${owner?.hostname || "unknown"}:${owner?.pid || "unknown"}`);
+    },
+    onLockLost: (error) => {
+      // Another instance reclaimed our lock, so it is now the state writer.
+      // Continuing would mean two processes writing sfsc-state.json.
+      console.error(`[sfsc] server_state_lock_lost: ${error.message}`);
+      process.exit(1);
     }
   });
 } catch (error) {
   const normalized = normalizeHttpError(error, "server_error");
-  console.error(`[sfsc] ${normalized.code}: ${normalized.message}`);
+  // Startup failures are written to the operator's own stderr, not to a remote
+  // caller, so log the unsanitized detail: the sanitized public message
+  // deliberately drops the absolute state/config path this operator needs.
+  // createHttpError keeps that detail on publicMessage (error.message is the
+  // bare code); plain Errors carry it on message.
+  console.error(`[sfsc] ${normalized.code}: ${startupErrorDetail(error) || normalized.message}`);
   process.exit(1);
 }
 let adminState;
@@ -102,7 +120,7 @@ try {
   adminState = await loadAdminState();
 } catch (error) {
   const normalized = normalizeHttpError(error, "server_error");
-  console.error(`[sfsc] ${normalized.code}: ${normalized.message}`);
+  console.error(`[sfsc] ${normalized.code}: ${startupErrorDetail(error) || normalized.message}`);
   process.exit(1);
 }
 adminState.appVersion = appVersion;
@@ -690,21 +708,20 @@ function summarizeAdminSyncSpace(state, syncSpace) {
   };
 }
 
+// This summary is returned by the unauthenticated /api/health probe, so it is
+// limited to liveness/readiness. Device and bucket counts used to be included
+// here, which handed an unauthenticated observer the deployment's operational
+// scale (how many devices exist, how many are online) for no functional gain:
+// nothing consumed those fields. The admin console derives any counts it needs
+// from the authenticated /api/admin/state, which already returns the full
+// devices[] and storage.buckets[] lists.
 function buildServiceHealthSummary(state) {
   const summary = summarizeAdminState(state);
-  const enabledDevices = summary.devices.filter((device) => device.enabled !== false);
-  const onlineDevices = enabledDevices.filter((device) => device.online);
-  const buckets = Array.isArray(summary.storage?.buckets) ? summary.storage.buckets : [];
-  const activeBuckets = buckets.filter((bucket) => !bucket.disabledAt);
   const restartRequired = Boolean(summary.tunnel?.restartRequired);
   return {
     ok: !restartRequired,
     apiReachable: true,
-    restartRequired,
-    enabledDeviceCount: enabledDevices.length,
-    onlineDeviceCount: onlineDevices.length,
-    bucketCount: buckets.length,
-    activeBucketCount: activeBuckets.length
+    restartRequired
   };
 }
 
@@ -984,6 +1001,13 @@ function requireDangerFlag(body = {}, options = {}) {
   }
 }
 
+// Only the REALITY private key is masked here. Inbound user uuids are
+// deliberately returned in full: docs/INTERFACE_CONTRACT.md requires the config
+// preview to map state.users[] onto sing-box users by clientName/uuid, the admin
+// state summary already exposes uuid, and the admin surface can reveal the whole
+// VLESS URI via GET /api/admin/devices/{id}/vless-uri. All of those routes sit
+// behind the admin token, so masking uuid in this one spot would break the
+// documented contract without closing any unauthenticated exposure.
 function maskSingboxConfig(config) {
   const masked = JSON.parse(JSON.stringify(config || {}));
   for (const inbound of masked.inbounds || []) {
@@ -995,10 +1019,11 @@ function maskSingboxConfig(config) {
   return masked;
 }
 
-function maskSecret(secret) {
-  const text = String(secret || "");
-  if (text.length <= 6) return "***";
-  return `${text.slice(0, 3)}***${text.slice(-3)}`;
+// Keep in sync with maskSecret in src/core/serverAdmin.js: no plaintext is
+// retained, the literal "***" stays as the documented "keep existing secret"
+// sentinel, and the fixed width hides the real secret length.
+function maskSecret() {
+  return "***";
 }
 
 async function loadAdminState() {
@@ -1224,7 +1249,13 @@ async function s3RequestWithFallback(state, method, path) {
       secretAccessKey: state.storage.secretAccessKey
     });
   } catch (error) {
-    throw new Error(`${endpoint}: ${error.message}`);
+    // Keep the endpoint in the server-side error chain for operators, but mark a
+    // stable code so normalizeHttpError returns a sanitized public message
+    // instead of echoing the internal MinIO/S3 host back to the caller.
+    const wrapped = new Error(`${endpoint}: ${error.message}`);
+    wrapped.code = "storage_request_failed";
+    wrapped.cause = error;
+    throw wrapped;
   }
 }
 

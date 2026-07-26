@@ -38,7 +38,13 @@ export function acquireServerStateLock(options = {}) {
         rmSync(lockPath, { recursive: true, force: true });
         throw createHttpError("server_state_write_failed", 500, `Failed to write server state lock owner: ${error.message}`);
       }
-      return registerRelease({ lockPath, ownerPath, owner, heartbeatMs });
+      // mkdir only proves nobody held the directory at creation time. Re-read the
+      // owner file so a concurrent stale-lock reclaim that moved this directory
+      // away is detected here instead of producing a second live writer.
+      if (!isCurrentOwner(ownerPath, owner)) {
+        throw createHttpError("server_state_locked", 409, `Server state lock was taken over during acquisition: ${lockPath}`);
+      }
+      return registerRelease({ lockPath, ownerPath, owner, heartbeatMs, onLockLost: options.onLockLost });
     } catch (error) {
       if (error?.code === "EEXIST" && attempt === 0) {
         const existing = readOwner(ownerPath);
@@ -53,7 +59,7 @@ export function acquireServerStateLock(options = {}) {
         });
         if (stale) {
           options.onStaleLock?.(existing);
-          rmSync(lockPath, { recursive: true, force: true });
+          reclaimStaleLock({ lockPath, ownerPath, existing, owner });
           continue;
         }
       }
@@ -65,6 +71,46 @@ export function acquireServerStateLock(options = {}) {
     }
   }
   throw createHttpError("server_state_locked", 409, `Server state directory is already locked: ${lockPath}`);
+}
+
+// Removing a stale lock with rmSync is not safe: two processes can both read the
+// same stale owner, both delete, and both then believe they hold the lock — one
+// of them deleting the *live* directory the other just created. rename is atomic
+// and single-winner, so exactly one process moves the stale directory aside; the
+// loser sees ENOENT and simply retries mkdir.
+function reclaimStaleLock({ lockPath, ownerPath, existing, owner }) {
+  const reclaimPath = `${lockPath}.reclaim.${process.pid}.${randomBytes(6).toString("hex")}`;
+  try {
+    renameSync(lockPath, reclaimPath);
+  } catch (error) {
+    // ENOENT/EEXIST/EPERM/EACCES/ENOTEMPTY all mean another process got there
+    // first. The retry re-reads whatever owner now holds the lock.
+    if (["ENOENT", "EEXIST", "EPERM", "EACCES", "ENOTEMPTY", "EBUSY"].includes(error?.code)) return;
+    throw createHttpError("server_state_write_failed", 500, `Failed to reclaim stale server state lock: ${error.message}`);
+  }
+
+  // We won the rename, but the directory we moved may no longer be the stale one
+  // we judged: another process could have reclaimed it and written a live owner
+  // between our read and our rename. Put it back if so.
+  const moved = readOwner(join(reclaimPath, "owner.json"));
+  if (!sameLockOwner(moved, existing)) {
+    try {
+      renameSync(reclaimPath, lockPath);
+      return;
+    } catch {
+      // A third process already created a fresh lock at lockPath, so the
+      // directory we hold is an orphan. Whoever owned it will notice via the
+      // heartbeat ownership check and exit rather than keep writing state.
+      rmSync(reclaimPath, { recursive: true, force: true });
+      throw createHttpError("server_state_locked", 409, `Server state directory is already locked: ${lockPath}`);
+    }
+  }
+  rmSync(reclaimPath, { recursive: true, force: true });
+}
+
+function sameLockOwner(left, right) {
+  if (!left || !right) return left === right || (!left && !right);
+  return left.token === right.token && left.pid === right.pid && left.hostname === right.hostname && left.instanceId === right.instanceId;
 }
 
 export function isServerStateLockOwnerStale(owner, current = {}) {
@@ -92,10 +138,23 @@ export function isServerStateLockOwnerStale(owner, current = {}) {
   return !(current.isProcessAlive || isProcessAlive)(owner.pid);
 }
 
-function registerRelease({ lockPath, ownerPath, owner, heartbeatMs }) {
+function registerRelease({ lockPath, ownerPath, owner, heartbeatMs, onLockLost }) {
   let released = false;
   const heartbeat = setInterval(() => {
-    if (!isCurrentOwner(ownerPath, owner)) return;
+    // Losing ownership means another process reclaimed the lock and is now also
+    // writing the same state file. Silently skipping the heartbeat used to leave
+    // both writers running; surface it so the caller can stop this one.
+    if (!isCurrentOwner(ownerPath, owner)) {
+      clearInterval(heartbeat);
+      released = true;
+      const lost = createHttpError("server_state_locked", 409, `Server state lock ownership was lost: ${lockPath}`);
+      if (onLockLost) {
+        onLockLost(lost);
+        return;
+      }
+      console.error(`[sfsc] server_state_lock_lost: ${lost.message}`);
+      process.exit(1);
+    }
     owner.heartbeatAt = new Date().toISOString();
     try {
       writeOwner(ownerPath, owner);

@@ -33,7 +33,7 @@ export {
   summarizeDeviceSync
 } from "./syncRun.js";
 export { buildServerFolderRemotePath, sanitizeServerSubdir } from "./serverFolder.js";
-export { buildStorageRemotePath, describeStorageTarget, sanitizeRemoteFolder } from "./storage.js";
+export { buildStorageRemotePath, describeStorageTarget, sanitizeRemoteFolder, sanitizeRemoteName } from "./storage.js";
 export {
   HEARTBEAT_AUTH_MAX_SKEW_MS,
   HEARTBEAT_AUTH_SCHEME,

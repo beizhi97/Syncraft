@@ -3,6 +3,7 @@ import { normalizeBandwidthLimit } from "./bandwidth.js";
 import { normalizeSyncSafety } from "./syncSafety.js";
 import { normalizeSchedule } from "./scheduler.js";
 import { createHttpError } from "./errors.js";
+import { sanitizeRemoteName } from "./storage.js";
 import { normalizePositiveInteger, normalizeTcpPort } from "./numbers.js";
 
 export const PROFILE_VERSION = 1;
@@ -227,14 +228,6 @@ function sanitizeName(input) {
   }
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(text)) {
     throw new Error("Client name can only contain letters, numbers, _ and -");
-  }
-  return text;
-}
-
-function sanitizeRemoteName(input) {
-  const text = String(input || "").trim();
-  if (!/^[A-Za-z0-9_-]+$/.test(text)) {
-    throw new Error("Remote name can only contain letters, numbers, _ and -");
   }
   return text;
 }
