@@ -51,18 +51,18 @@ Syncraft 的安全基线**明显高于同类 MVP 平均水平**，值得肯定�
 | S-7 | 服务端 | `server.js:453-455` | 签发 SyncKey 顺带永久改写全局 `publicServerUrl`（意外副作用）| ☑️ 按设计接受（见 §七）|
 | CORE-1 | core | `serverStateLock.js:44-58` | 陈旧锁回收 TOCTOU，可致双实例同时持锁、并发写坏 state | ✅ 已修复 |
 | CORE-2 | core | `rclone.js:33-52`, `storage.js:49` | 位置参数缺 `--` 终止符 + remoteName 允许 `-` 开头，参数注入 | ✅ 已修复 |
-| CORE-3 | core | `protocolSchemas.js:600-614` | 嵌套对象/JSON 字段不做白名单与类型校验 | ⏳ 未处理 |
-| CORE-4 | core | `profileProtocol.js:82-85`, `rclone.js:143-144` | 硬编码弱默认密钥、默认允许 http 端点 | ⏳ 未处理 |
+| CORE-3 | core | `protocolSchemas.js:600-614` | 嵌套对象/JSON 字段不做白名单与类型校验 | ✅ 已修复（心跳透传为设计例外，见 §七）|
+| CORE-4 | core | `profileProtocol.js:82-85`, `rclone.js:143-144` | 硬编码弱默认密钥、默认允许 http 端点 | ✅ 可利用半条已修复；其余按设计接受（见 §七）|
 | CORE-5 | core | `heartbeatAuth.js:32` | 无 nonce 重放缓存，5 分钟时窗内可重放心跳 | ✅ 条目为误报；真实残留已修复（见 §七）|
 | C-5 | 客户端 | `clientServer.js` 全局 | 无鉴权令牌，任意本地进程可全量调用 API | ⏳ 未处理 |
 | C-6 | 客户端 | `store.js:331-338,369` | secrets.json 写入 TOCTOU 明文窗口 + icacls 失败静默 | ✅ 已修复 |
-| C-7 | 客户端 | `clientServer.js:521-547` | GET /api/client/status 泄露本地绝对路径 | ⏳ 未处理（有开放问题）|
-| E-1 | Electron | `main.cjs:117-147,181-203` | 缺 will-navigate / setWindowOpenHandler 导航限制 | ⏳ 未处理 |
-| E-2 | Electron | `index.html`, `main.cjs` | 全应用无 Content-Security-Policy | ⏳ 未处理 |
+| C-7 | 客户端 | `clientServer.js:521-547` | GET /api/client/status 泄露本地绝对路径 | ✅ 诊断包已修复；status 字段属合同（见 §七）|
+| E-1 | Electron | `main.cjs:117-147,181-203` | 缺 will-navigate / setWindowOpenHandler 导航限制 | ✅ 已修复 |
+| E-2 | Electron | `index.html`, `main.cjs` | 全应用无 Content-Security-Policy | ✅ 已修复 |
 | D-2 | 供应链 | `download-binaries.ps1:81-94,130` | 版本覆盖参数（含 `latest`）绕过 SHA-256 校验 | ✅ 已修复 |
 | D-3 | 供应链 | `build-fingerprint.ps1:87` | 第三方二进制及 lock 文件被排除在 buildId 指纹之外 | ✅ 已修复 |
 | D-4 | 供应链 | `apply-beta-singbox.ps1:3-6` 等 | 生产主机 IP / SSH 私钥路径硬编码入库，私钥位于全用户可读目录 | ⏳ 未处理（需用户轮换已入库私钥）|
-| D-5 | 供应链 | `server/*.Dockerfile` | 服务端镜像按可变 tag 而非 digest 固定；客户端/服务端 rclone 版本不一致 | ⏳ 未处理 |
+| D-5 | 供应链 | `server/*.Dockerfile` | 服务端镜像按可变 tag 而非 digest 固定；客户端/服务端 rclone 版本不一致 | ✅ 已修复 |
 | Q-1 | 全局 | server.js / serverAdmin.js / clientServer.js / app.js | 超大 god 文件，职责过载 | ⏳ 未处理 |
 | Q-2 | 全局 | `maskSecret`、`summarizeAdminSyncSpace` 等 | 重复代码与死代码/死导入 | ⏳ 未处理 |
 
@@ -185,10 +185,25 @@ S-2 `/api/server/service/health` 收窄为 `ok`/`apiReachable`/`restartRequired`
 ### D-2 / D-3 ✅ 供应链钉定
 D-2 版本覆盖（含 `latest`）默认拒绝执行，必须显式 `-AllowUnverified`，所有未校验路径带 `UNVERIFIED` 警告并打印实际 SHA256 便于回填 lock。D-3 `binaries.lock.json` 纳入 buildId 指纹（exe 本体仍排除，其身份由 lock 记录）。
 
+### CORE-3 ✅ 入口 schema 嵌套白名单（第二批，2026-07-26）
+`copyOptionalObjectField` 支持嵌套字段白名单（`schedule`/`reality`/`defaults`/`safety`/`heartbeat` 各自登记允许字段，未知字段丢弃）；`copyOptionalJsonFields` 按合同把白名单槽位视为标量，塞进对象/数组/函数一律 `400 validation_failed`（防经 `transfers`、`publicPort`、`expiresAt` 等槽位走私嵌套结构）；`bandwidthLimit` 保留字符串与 UI 对象双形态。**设计例外**：`/api/devices/heartbeat` 的 `diagnostics`/`storage`/`sync`/`auth` 与 legacy sync 字段按到达形态透传——HMAC 签名覆盖整个请求体，schema 层改写会破坏合法客户端签名；深层校验由验签后的 `normalizeDeviceSync`/`normalizeRuntimeDiagnostics` 承担，代码中以 `copyOptionalUncheckedJsonFields` 显式标注。合同、回归（含心跳透传负向对照）同步登记。
+
+### CORE-4 ✅ 弱占位 MinIO 密码；其余按设计接受
+可利用的半条是 compose 的 `:-change-this-minio-root-password` 兜底（6 处）：运维忘设 `.env` 时生产 MinIO 静默拿到公开可猜 root 凭据。三层 fail-closed 修复：compose 改 `:?` 强制注入；`SFSC_REQUIRE_ADMIN_TOKEN=1` 下服务端启动拒绝占位存储密钥（与管理 token 占位检查同门槛）；composeAudit 禁止该占位串回归。**按设计接受**：`CHANGE_ME_CLIENT_SECRET` 是合同登记的手工/历史离线 profile 兼容填充，服务端签发 profile 缺凭据必须返回 `profile_storage_required` 不会落到它；`http://minio:9000` 是容器内地址，客户端流量走 VLESS 隧道内进程级 SOCKS5 代理、宿主侧 MinIO 绑 loopback，明文 http 不过公网。两处已补契约注释防漂移。
+
+### C-7 ✅ 诊断包路径截断；status 字段属合同
+根因是平台差异 bug：诊断包对 `path` 字段用平台默认 `basename()`，POSIX 上反斜杠是普通字符，`C:\Tools\rclone.exe` 原样穿透——这正是 `client.test.js` 该断言自首个提交起一直红的原因（合同早已正确，实现是错的）。改用 `path.win32.basename` 同时剥离 `\` 与 `/`。**范围裁定**：出机器的工件只有诊断包（已修复+既有双层脱敏）；`GET /api/client/status` 的 `paths.*` 与 `binaries.*.path` 是 `INTERFACE_CONTRACT.md` 登记的合同字段，本地状态页直接展示，接口仅监听 loopback 且 C-1 已加 Host 白名单，按设计保留。
+
+### E-1 / E-2 ✅ Electron 加固与 CSP
+E-1：主窗口 `setWindowOpenHandler` 一律 deny，`will-navigate` 仅放行 `http://127.0.0.1:<port>` 同源；启动错误窗口（data: 页面）全 deny。刻意不接 `shell.openExternal`——本应用无合法外链。E-2：双端静态层对 HTML 下发 `default-src 'none'` 起步的 CSP（`script-src 'self'`、样式因内联 style 属性允许 `'unsafe-inline'`、`connect-src 'self'` 阻断外传），全部静态响应加 `nosniff`。回归钉定"index.html 不得引入内联脚本/内联事件"作为 `script-src 'self'` 的前提守卫。
+
+### D-5 ✅ 镜像 tag@digest 双钉定 + rclone 版本对齐
+三份 Dockerfile 与两份 compose 的全部基础镜像（node/caddy/minio/mc/sing-box/baseimage-alpine）改为 `tag@digest` 双钉定（digest 为实取的 manifest-list digest，可经 `.env` 的 `*_IMAGE_DIGEST` 覆盖）；appliance 内置 rclone 从 1.71.1 升到 1.74.3 与客户端 `binaries.lock.json` 对齐（审查条目后半条），composeAudit 强制校验两者一致，lock 升级而 appliance 忘改会直接审计失败。**限制**：沙箱无 docker，镜像可拉取性与 appliance rclone 1.74.3 运行行为需部署机/N1 冒烟确认。
+
 ### 仍待处理
-CORE-3、CORE-4、C-5、C-7、E-1、E-2、D-4、D-5、Q-1、Q-2。其中 **D-4 需用户本人处理**：已入库的 SSH 私钥必须轮换，代码层面无法修复。
+C-5（本地鉴权 token，涉及产品交互决策）、D-4、Q-1、Q-2（重构类，建议单独排期）。其中 **D-4 需用户本人处理**：已入库的 SSH 私钥必须轮换，代码层面无法修复。
 
 ---
 
-*本报告为静态白盒审查结论，行号基于 2026-07-25 审查时的代码状态（修复后行号已变动，修复情况见 §六、§七）。剩余 P2 项建议逐条评估后排期。PowerShell 相关修复（D-2/D-3）在 Linux 沙箱只能审读+源码钉定，建议在 Windows CI 上跑一次完整套件确认。*
+*本报告为静态白盒审查结论，行号基于 2026-07-25 审查时的代码状态（修复后行号已变动，修复情况见 §六、§七）。PowerShell 相关修复（D-2/D-3）与 Docker 镜像钉定（D-5）在 Linux 沙箱只能审读+源码钉定，建议在 Windows CI / 部署机上各跑一次完整验证。*
 
