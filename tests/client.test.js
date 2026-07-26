@@ -164,6 +164,46 @@ test("Electron desktop shows a startup error window instead of silently quitting
   assert.doesNotMatch(main, /await startClientServer\(layout\);\s+if \(process\.env\.SFSC_PACKAGE_SMOKE === "1"\)/);
 });
 
+test("Electron desktop blocks foreign navigation and popups, and both UIs ship a CSP", async () => {
+  const main = await readFile(join(projectRoot, "client", "electron", "main.cjs"), "utf8");
+  const clientServer = await readFile(join(projectRoot, "client", "src", "clientServer.js"), "utf8");
+  const server = await readFile(join(projectRoot, "src", "server.js"), "utf8");
+  const clientIndex = await readFile(join(projectRoot, "client", "public", "index.html"), "utf8");
+  const serverIndex = await readFile(join(projectRoot, "public", "index.html"), "utf8");
+
+  // E-1: window hardening in the Electron shell.
+  assert.match(main, /function isTrustedShellUrl\(target\)/);
+  assert.match(main, /url\.origin === `http:\/\/127\.0\.0\.1:\$\{port\}`/);
+  assert.match(main, /function hardenWindowNavigation\(window\)/);
+  assert.match(main, /setWindowOpenHandler\(\(\{ url \}\) => \{[\s\S]*?return \{ action: "deny" \};/);
+  assert.match(main, /webContents\.on\("will-navigate", \(event, url\) => \{[\s\S]*?event\.preventDefault\(\);/);
+  assert.match(main, /hardenWindowNavigation\(mainWindow\);/);
+  // The startup error window denies everything (data: URL page).
+  assert.match(main, /setWindowOpenHandler\(\(\) => \(\{ action: "deny" \}\)\)/);
+  // Nothing may be forwarded to the OS browser (comment mentions are fine,
+  // actual calls are not).
+  assert.doesNotMatch(main, /shell\.openExternal\(/);
+
+  // E-2: both UIs serve a CSP on HTML documents plus nosniff everywhere.
+  for (const [label, source] of [["client", clientServer], ["server", server]]) {
+    assert.match(source, /const UI_CONTENT_SECURITY_POLICY = \[/, `${label} defines a CSP`);
+    assert.match(source, /"default-src 'none'"/, `${label} default-src`);
+    assert.match(source, /"script-src 'self'"/, `${label} script-src`);
+    assert.match(source, /"connect-src 'self'"/, `${label} connect-src`);
+    assert.match(source, /"frame-ancestors 'none'"/, `${label} frame-ancestors`);
+    assert.match(source, /headers\["content-security-policy"\] = UI_CONTENT_SECURITY_POLICY;/, `${label} sends the CSP`);
+    assert.match(source, /"x-content-type-options": "nosniff"/, `${label} nosniff`);
+  }
+
+  // script-src 'self' is only sound while the documents have no inline
+  // scripts or inline event handlers; fail loudly if one is introduced.
+  for (const [label, html] of [["client index", clientIndex], ["server index", serverIndex]]) {
+    assert.doesNotMatch(html, /<script>[^<]/, `${label} must not use inline scripts`);
+    assert.doesNotMatch(html, /\son[a-z]+\s*=/i, `${label} must not use inline event handlers`);
+    assert.match(html, /<script src="\/app\.js"><\/script>/, `${label} loads app.js externally`);
+  }
+});
+
 test("Electron desktop stays resident in the tray until the user explicitly quits", async () => {
   const main = await readFile(join(projectRoot, "client", "electron", "main.cjs"), "utf8");
   const clientServer = await readFile(join(projectRoot, "client", "src", "clientServer.js"), "utf8");

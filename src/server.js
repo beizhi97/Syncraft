@@ -618,6 +618,21 @@ server.listen(port, host, () => {
   }
 });
 
+// E-2: served with every HTML document. Keep in sync with the client copy in
+// client/src/clientServer.js.
+const UI_CONTENT_SECURITY_POLICY = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "font-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+  "object-src 'none'"
+].join("; ");
+
 async function serveStatic(pathname, res) {
   let fullPath;
   try {
@@ -637,10 +652,20 @@ async function serveStatic(pathname, res) {
 
   try {
     const body = await readFile(fullPath);
-    res.writeHead(200, {
-      "content-type": contentType(fullPath),
-      "cache-control": "no-store"
-    });
+    const type = contentType(fullPath);
+    const headers = {
+      "content-type": type,
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff"
+    };
+    if (type.startsWith("text/html")) {
+      // E-2: admin console CSP; see UI_CONTENT_SECURITY_POLICY. The console
+      // renders untrusted admin-state strings (device names, remarks) via
+      // innerHTML templates, so blocking foreign script/connect origins is the
+      // backstop if an escaping bug slips in.
+      headers["content-security-policy"] = UI_CONTENT_SECURITY_POLICY;
+    }
+    res.writeHead(200, headers);
     res.end(body);
   } catch {
     jsonError(res, createHttpError("not_found", 404, "Not found"));

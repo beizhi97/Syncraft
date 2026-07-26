@@ -114,6 +114,33 @@ function shutdownClientAndQuit() {
   });
 }
 
+// E-1: the desktop shell only ever renders the local client UI. Same-origin
+// navigation stays inside the window; everything else (remote URLs in crafted
+// content, target=_blank, window.open) is blocked. Nothing is passed to
+// shell.openExternal on purpose: this app has no legitimate external links,
+// and forwarding attacker-influenced URLs to the OS is its own risk.
+function isTrustedShellUrl(target) {
+  try {
+    const url = new URL(target);
+    return url.origin === `http://127.0.0.1:${port}`;
+  } catch {
+    return false;
+  }
+}
+
+function hardenWindowNavigation(window) {
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    log(`blocked window.open to ${url}`);
+    return { action: "deny" };
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (!isTrustedShellUrl(url)) {
+      log(`blocked navigation to ${url}`);
+      event.preventDefault();
+    }
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -130,6 +157,8 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs")
     }
   });
+
+  hardenWindowNavigation(mainWindow);
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -193,6 +222,13 @@ function createStartupErrorWindow(error) {
       nodeIntegration: false,
       sandbox: true
     }
+  });
+
+  // The startup error page is a static data: URL; any navigation away from it
+  // (or popup) would have to come from injected content, so deny everything.
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("will-navigate", (event) => {
+    event.preventDefault();
   });
 
   mainWindow.on("closed", () => {
