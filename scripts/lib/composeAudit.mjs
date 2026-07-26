@@ -71,7 +71,9 @@ const EXPECTED_COMPOSE_SNIPPETS = [
       "- \"443:443\"",
       "VLESS_PORT: ${VLESS_PORT:-45678}",
       "S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}",
-      "S3_CLIENT_ENDPOINT: ${S3_CLIENT_ENDPOINT:-http://minio:9000}"
+      "S3_CLIENT_ENDPOINT: ${S3_CLIENT_ENDPOINT:-http://minio:9000}",
+      "S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD before starting the server}",
+      "MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD before starting the server}"
     ]
   },
   {
@@ -84,9 +86,18 @@ const EXPECTED_COMPOSE_SNIPPETS = [
       "S3_CLIENT_ENDPOINT: http://n1-minio.sfsc:9000",
       "extra_hosts:",
       "- \"n1-minio.sfsc:127.0.0.1\"",
-      "- /ssd/sfsc-test/minio:/data"
+      "- /ssd/sfsc-test/minio:/data",
+      "S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD before starting the server}",
+      "MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD before starting the server}"
     ]
   }
+];
+
+// CORE-4: compose files must never fall back to the weak placeholder password.
+// A `:-change-this-minio-root-password` default silently gives production
+// MinIO a guessable root credential when the operator forgets the env value.
+const FORBIDDEN_COMPOSE_SNIPPETS = [
+  "change-this-minio-root-password"
 ];
 
 export async function auditComposeConfig(root) {
@@ -123,6 +134,11 @@ export async function auditComposeConfig(root) {
     for (const snippet of item.snippets) {
       if (!composeText.includes(snippet)) {
         issues.push(`${item.file} must include ${snippet}`);
+      }
+    }
+    for (const forbidden of FORBIDDEN_COMPOSE_SNIPPETS) {
+      if (composeText.includes(forbidden)) {
+        issues.push(`${item.file} must not fall back to the placeholder MinIO password ${forbidden}`);
       }
     }
   }

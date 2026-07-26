@@ -64,6 +64,10 @@ const statePath = join(dataDir, "sfsc-state.json");
 const singboxConfigPath = process.env.SINGBOX_CONFIG_PATH || join(root, "server", "sing-box", "config.json");
 const singboxControlDir = process.env.SINGBOX_CONTROL_DIR || "";
 const PLACEHOLDER_ADMIN_TOKENS = new Set(["change-this-admin-token"]);
+// CORE-4: the storage secret placeholder must never survive into a production
+// start. Compose now refuses to interpolate without MINIO_ROOT_PASSWORD, and
+// this guard catches direct/manual launches that bypass compose.
+const PLACEHOLDER_STORAGE_SECRETS = new Set(["change-this-minio-root-password"]);
 const CLAIM_REDEEM_AUDIT_UNAVAILABLE = "unavailable";
 const CLAIM_REDEEM_FAILURE_LIMIT = Number(process.env.SFSC_CLAIM_REDEEM_FAILURE_LIMIT || 8);
 const CLAIM_REDEEM_FAILURE_WINDOW_MS = Number(process.env.SFSC_CLAIM_REDEEM_FAILURE_WINDOW_MS || 10 * 60 * 1000);
@@ -94,6 +98,7 @@ function startupErrorDetail(error) {
 try {
   adminToken = resolveAdminToken(process.env);
   trustProxyConfig = resolveTrustProxyConfig(process.env);
+  assertStorageSecretNotPlaceholder(process.env);
 } catch (error) {
   console.error(`[sfsc] server_config_invalid: ${error.message}`);
   process.exit(1);
@@ -777,6 +782,20 @@ function resolveAdminToken(env = {}) {
     throw new Error("SFSC_ADMIN_TOKEN must be changed from the placeholder before production startup.");
   }
   return token;
+}
+
+// Placeholder storage secrets are rejected under the same conditions that
+// force an admin token (SFSC_REQUIRE_ADMIN_TOKEN=1, i.e. production compose):
+// local no-auth development keeps working, production cannot boot with the
+// well-known MinIO root password baked into old .env files.
+function assertStorageSecretNotPlaceholder(env = {}) {
+  if (String(env.SFSC_REQUIRE_ADMIN_TOKEN || "").trim() !== "1") {
+    return;
+  }
+  const secret = String(env.S3_SECRET_ACCESS_KEY || env.MINIO_ROOT_PASSWORD || "").trim();
+  if (PLACEHOLDER_STORAGE_SECRETS.has(secret)) {
+    throw new Error("S3_SECRET_ACCESS_KEY / MINIO_ROOT_PASSWORD must be changed from the placeholder before production startup.");
+  }
 }
 
 function resolveTrustProxyConfig(env = {}) {

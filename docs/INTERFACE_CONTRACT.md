@@ -336,7 +336,7 @@ Authorization: Bearer {token}
 X-SFSC-Admin-Token: {token}
 ```
 
-生产 compose/N1 部署必须设置 `SFSC_REQUIRE_ADMIN_TOKEN=1`。该模式下服务端启动时要求 `SFSC_ADMIN_TOKEN` 或 `ADMIN_TOKEN` 非空且不能是 `change-this-admin-token` 占位值；本地开发直跑可以不设置该开关以保持开发兼容。
+生产 compose/N1 部署必须设置 `SFSC_REQUIRE_ADMIN_TOKEN=1`。该模式下服务端启动时要求 `SFSC_ADMIN_TOKEN` 或 `ADMIN_TOKEN` 非空且不能是 `change-this-admin-token` 占位值；本地开发直跑可以不设置该开关以保持开发兼容。同一模式下，`S3_SECRET_ACCESS_KEY` / `MINIO_ROOT_PASSWORD` 不能是 `change-this-minio-root-password` 占位值，服务端必须拒绝启动；compose 文件不得为 `MINIO_ROOT_PASSWORD` 提供占位默认值，必须使用 `:?` 强制注入。
 
 受保护接口：
 

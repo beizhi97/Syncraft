@@ -6747,6 +6747,21 @@ test("compose config audit enforces fixed image tags", async () => {
     assert.notEqual(adminRequireDrift.code, 0);
     assert.match(adminRequireDrift.stderr, /server\/docker-compose\.yml must include SFSC_REQUIRE_ADMIN_TOKEN: "1"/);
 
+    // CORE-4: reintroducing the weak placeholder MinIO password default must fail.
+    await writeComposeAuditFixture(tempRoot);
+    await writeFile(
+      join(tempRoot, "server", "docker-compose.yml"),
+      (await readFile(join(tempRoot, "server", "docker-compose.yml"), "utf8"))
+        .replaceAll(
+          "MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD before starting the server}",
+          "MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-this-minio-root-password}"
+        ),
+      "utf8"
+    );
+    const weakMinioDefaultDrift = await runComposeAudit(tempRoot);
+    assert.notEqual(weakMinioDefaultDrift.code, 0);
+    assert.match(weakMinioDefaultDrift.stderr, /server\/docker-compose\.yml must not fall back to the placeholder MinIO password/);
+
     await writeComposeAuditFixture(tempRoot);
     await writeFile(
       join(tempRoot, "server", "docker-compose.n1.yml"),

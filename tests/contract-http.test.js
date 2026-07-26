@@ -4706,6 +4706,17 @@ test("HTTP contract: production server startup rejects missing or placeholder ad
       label: "placeholder",
       env: { SFSC_ADMIN_TOKEN: "change-this-admin-token", ADMIN_TOKEN: "" },
       message: /must be changed from the placeholder/
+    },
+    {
+      // CORE-4: the well-known MinIO root password placeholder must not
+      // survive into a production start even when compose is bypassed.
+      label: "storage-placeholder",
+      env: {
+        SFSC_ADMIN_TOKEN: "strong-production-token",
+        ADMIN_TOKEN: "",
+        S3_SECRET_ACCESS_KEY: "change-this-minio-root-password"
+      },
+      message: /S3_SECRET_ACCESS_KEY \/ MINIO_ROOT_PASSWORD must be changed from the placeholder/
     }
   ]) {
     const tempRoot = await mkdtemp(join(tmpdir(), `sfsc-auth-required-${item.label}-`));
