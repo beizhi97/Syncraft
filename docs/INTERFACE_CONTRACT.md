@@ -184,6 +184,7 @@ SyncKey payload：
 | `device_disabled` | 409 | 设备已停用 |
 | `heartbeat_auth_invalid` | 401 | 设备心跳签名无效、过期或与请求体不匹配 |
 | `heartbeat_auth_required` | 401 | 新 profile 设备心跳缺少 HMAC 认证字段 |
+| `heartbeat_rate_limited` | 429 | 同一来源在窗口内心跳失败次数过多，服务端临时限速 |
 | `import_code_invalid` | 400 | SyncKey/profile 载荷无法解析 |
 | `import_code_required` | 400 | 客户端导入时未填写 SyncKey |
 | `invalid_vless_uri` | 400 | VLESS URI 格式错误 |
@@ -952,6 +953,7 @@ Content-Type: application/json
 - `404 device_not_found`：`clientName` 未在服务端登记，通常表示客户端导入了错误服务端的 SyncKey、服务端状态被重置，或设备已被删除。
 - `401 heartbeat_auth_required`：设备拥有 heartbeat secret，但请求没有携带 `auth`。
 - `401 heartbeat_auth_invalid`：`auth` 的 scheme、timestamp、nonce、signature、请求体签名校验失败，或同一 nonce 在有效窗口内被重复使用。
+- `429 heartbeat_rate_limited`：同一来源地址在窗口内心跳失败次数过多，服务端临时限速。限速窗口内该来源的心跳请求在业务处理前直接拒绝。计数在一次成功心跳后清零；`device_disabled` 不计入失败（停用设备按客户端默认间隔重试心跳属于登记行为，必须持续收到 `409 device_disabled` 以驱动客户端 UI 显示停用状态），服务端自身 5xx 也不计入。限速状态只保存在内存中，不写入 `sfsc-state.json`，服务端重启即清零；阈值和窗口可通过 `SFSC_HEARTBEAT_FAILURE_LIMIT`（默认 60 次）、`SFSC_HEARTBEAT_FAILURE_WINDOW_MS`（默认 5 分钟）和 `SFSC_HEARTBEAT_RATE_LIMIT_MS`（默认 5 分钟）调整，默认值对按 `SFSC_HEARTBEAT_MS` 默认 15 秒间隔上报的正常设备留有充足余量。
 
 客户端本地心跳失败摘要应同时显示本地 `heartbeat_failed` 和服务端返回的 `remoteErrorCode` 对应中文原因，不能只把 `device_not_found` 这类内部码直接展示给用户。
 

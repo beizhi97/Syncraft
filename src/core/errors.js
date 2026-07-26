@@ -16,6 +16,7 @@ const DEFAULT_STATUS_BY_CODE = {
   device_not_found: 404,
   heartbeat_auth_invalid: 401,
   heartbeat_auth_required: 401,
+  heartbeat_rate_limited: 429,
   import_code_required: 400,
   import_code_invalid: 400,
   invalid_json: 400,

@@ -26,6 +26,7 @@
     { "code": "device_not_found", "status": 404 },
     { "code": "heartbeat_auth_invalid", "status": 401 },
     { "code": "heartbeat_auth_required", "status": 401 },
+    { "code": "heartbeat_rate_limited", "status": 429 },
     { "code": "import_code_required", "status": 400 },
     { "code": "import_code_invalid", "status": 400 },
     { "code": "invalid_json", "status": 400 },

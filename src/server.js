@@ -68,6 +68,15 @@ const CLAIM_REDEEM_AUDIT_UNAVAILABLE = "unavailable";
 const CLAIM_REDEEM_FAILURE_LIMIT = Number(process.env.SFSC_CLAIM_REDEEM_FAILURE_LIMIT || 8);
 const CLAIM_REDEEM_FAILURE_WINDOW_MS = Number(process.env.SFSC_CLAIM_REDEEM_FAILURE_WINDOW_MS || 10 * 60 * 1000);
 const CLAIM_REDEEM_RATE_LIMIT_MS = Number(process.env.SFSC_CLAIM_REDEEM_RATE_LIMIT_MS || 10 * 60 * 1000);
+// The heartbeat limiter is deliberately in-memory only, unlike the claim redeem
+// limiter above. Persisting it would hand an attacker a way to convert every
+// probe into a state-file write under the global write lock, which is exactly
+// the amplification S-6 is about. Losing the counters on restart is fine: the
+// limiter only throttles guessing, it is not the authentication boundary.
+const HEARTBEAT_FAILURE_LIMIT = Number(process.env.SFSC_HEARTBEAT_FAILURE_LIMIT || 60);
+const HEARTBEAT_FAILURE_WINDOW_MS = Number(process.env.SFSC_HEARTBEAT_FAILURE_WINDOW_MS || 5 * 60 * 1000);
+const HEARTBEAT_RATE_LIMIT_MS = Number(process.env.SFSC_HEARTBEAT_RATE_LIMIT_MS || 5 * 60 * 1000);
+const heartbeatFailureWindows = new Map();
 let adminToken;
 let trustProxyConfig;
 
@@ -499,17 +508,25 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/devices/heartbeat") {
-      const body = parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_DEVICE_HEARTBEAT, await readJson(req));
-      const user = recordDeviceHeartbeat(adminState, {
-        ...body,
-        remoteAddress: req.socket.remoteAddress
-      });
-      await saveAdminState();
-      return json(res, {
-        ok: true,
-        diagnostics,
-        device: summarizeDevice(adminState, user, { includeVlessUri: false })
-      });
+      const heartbeatRemoteAddress = readRemoteAddress(req);
+      assertHeartbeatRateLimit(heartbeatRemoteAddress);
+      try {
+        const body = parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_DEVICE_HEARTBEAT, await readJson(req));
+        const user = recordDeviceHeartbeat(adminState, {
+          ...body,
+          remoteAddress: req.socket.remoteAddress
+        });
+        await saveAdminState();
+        clearHeartbeatFailures(heartbeatRemoteAddress);
+        return json(res, {
+          ok: true,
+          diagnostics,
+          device: summarizeDevice(adminState, user, { includeVlessUri: false })
+        });
+      } catch (error) {
+        recordHeartbeatFailure(heartbeatRemoteAddress, error);
+        throw error;
+      }
     }
 
     if (req.method === "POST" && url.pathname === "/api/vless/parse") {
@@ -820,6 +837,50 @@ function buildClaimRedeemAudit(req, body = {}) {
     codeHash: hashClaimRedeemAuditCode(body),
     remoteAddress: readRemoteAddress(req)
   };
+}
+
+function assertHeartbeatRateLimit(remoteAddress) {
+  pruneHeartbeatFailureWindows(Date.now());
+  const window = heartbeatFailureWindows.get(remoteAddress);
+  if (window?.limitedUntil && window.limitedUntil > Date.now()) {
+    throw httpError("heartbeat_rate_limited", 429, "Too many failed heartbeat attempts from this address; try again later");
+  }
+}
+
+function recordHeartbeatFailure(remoteAddress, error) {
+  const normalized = normalizeHttpError(error, "server_error");
+  // device_disabled is excluded on purpose: a disabled device keeps heartbeating
+  // on its normal interval, and the contract requires it to keep receiving 409
+  // device_disabled so the client UI can show the disabled state. Counting it
+  // would convert that documented behaviour into a 429 within minutes. 5xx are
+  // the server's own failures, not evidence of guessing.
+  if (normalized.code === "heartbeat_rate_limited" || normalized.code === "device_disabled" || normalized.status >= 500) {
+    return;
+  }
+  const now = Date.now();
+  pruneHeartbeatFailureWindows(now);
+  const current = heartbeatFailureWindows.get(remoteAddress);
+  const windowActive = Boolean(current?.resetAt && current.resetAt > now);
+  const failures = windowActive ? current.failures + 1 : 1;
+  heartbeatFailureWindows.set(remoteAddress, {
+    failures,
+    resetAt: windowActive ? current.resetAt : now + HEARTBEAT_FAILURE_WINDOW_MS,
+    limitedUntil: failures >= HEARTBEAT_FAILURE_LIMIT
+      ? now + HEARTBEAT_RATE_LIMIT_MS
+      : (windowActive && current.limitedUntil) || 0
+  });
+}
+
+function clearHeartbeatFailures(remoteAddress) {
+  heartbeatFailureWindows.delete(remoteAddress);
+}
+
+function pruneHeartbeatFailureWindows(nowMs) {
+  for (const [key, window] of heartbeatFailureWindows) {
+    if ((window?.resetAt || 0) <= nowMs && (window?.limitedUntil || 0) <= nowMs) {
+      heartbeatFailureWindows.delete(key);
+    }
+  }
 }
 
 function assertClaimRedeemRateLimit(audit = {}) {

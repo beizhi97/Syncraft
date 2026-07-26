@@ -1538,6 +1538,7 @@ function formatError(error) {
     device_not_found: "当前客户端未在服务端登记，请重新生成并导入 SyncKey。",
     heartbeat_auth_invalid: "心跳签名无效，请重新导入 SyncKey。",
     heartbeat_auth_required: "心跳缺少签名，请重新导入 SyncKey。",
+    heartbeat_rate_limited: "心跳失败次数过多，服务端已临时限速，稍后会自动重试。",
     profile_heartbeat_required: "服务端下发配置缺少心跳密钥，请重新生成 SyncKey。",
     profile_not_imported: "请先导入服务端生成的 SyncKey。",
     profile_storage_required: "服务端下发配置缺少存储凭据，请重新生成 SyncKey。",

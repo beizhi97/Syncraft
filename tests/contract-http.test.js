@@ -2323,6 +2323,120 @@ test("HTTP contract: failed heartbeat persistence does not update device presenc
   assert.ok(heartbeat.device.lastSeenAt);
 });
 
+test("HTTP contract: heartbeat failures are rate limited per source without counting disabled devices", async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-heartbeat-rate-limit-"));
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const child = spawn(process.execPath, [serverEntry], {
+    cwd: projectRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      HOST: "127.0.0.1",
+      PORT: String(port),
+      PUBLIC_SERVER_URL: baseUrl,
+      SERVER_DATA_ROOT: join(tempRoot, "data"),
+      SINGBOX_CONFIG_PATH: join(tempRoot, "sing-box", "config.json"),
+      SFSC_HEARTBEAT_FAILURE_LIMIT: "3",
+      SFSC_HEARTBEAT_FAILURE_WINDOW_MS: "60000",
+      SFSC_HEARTBEAT_RATE_LIMIT_MS: "1500"
+    }
+  });
+
+  t.after(async () => {
+    if (!child.killed) {
+      child.kill();
+      await Promise.race([
+        once(child, "exit"),
+        new Promise((resolve) => setTimeout(resolve, 1000))
+      ]).catch(() => {});
+    }
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await waitForHealth(baseUrl, child);
+  const claim = await postJson(`${baseUrl}/api/claims/create`, {
+    clientName: "heartbeat-limit-pc",
+    server: baseUrl
+  });
+  const profile = await postJson(`${baseUrl}/api/claims/redeem`, {
+    tKey: claim.tKey
+  });
+  assertClaimRedeemResponseContract(profile, "heartbeatRateLimit.redeemedProfile", {
+    expectedClientName: "heartbeat-limit-pc"
+  });
+  const buildHeartbeatPayload = () => signHeartbeatPayload({
+    clientName: profile.clientName,
+    profileId: profile.profileId,
+    clientVersion: "contract-test",
+    sync: { syncState: "idle" }
+  }, profile);
+  const adminState = await getJson(`${baseUrl}/api/admin/state`);
+  const device = adminState.devices.find((item) => item.clientName === "heartbeat-limit-pc");
+
+  // A disabled device keeps retrying on its normal interval; the contract says it
+  // must keep receiving 409 device_disabled so the client UI can show the state.
+  // Five straight disabled heartbeats exceed the limit of 3, so if they counted,
+  // the re-enabled heartbeat below would already be 429.
+  await postJson(`${baseUrl}/api/admin/users/disable`, { userId: device.id });
+  for (let i = 0; i < 5; i += 1) {
+    const disabledHeartbeat = await fetch(`${baseUrl}/api/devices/heartbeat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(buildHeartbeatPayload())
+    });
+    assert.equal(disabledHeartbeat.status, 409);
+    assertHttpErrorResponseContract(await disabledHeartbeat.json(), `heartbeatRateLimit.disabled.${i}`, {
+      errorCode: "device_disabled"
+    });
+  }
+  await postJson(`${baseUrl}/api/admin/users/enable`, { userId: device.id });
+  const afterDisabled = await postJson(`${baseUrl}/api/devices/heartbeat`, buildHeartbeatPayload());
+  assertServerHeartbeatResponseContract(afterDisabled, "heartbeatRateLimit.afterDisabled");
+
+  // Unregistered clientName probes are the enumeration vector; they must count.
+  for (let i = 0; i < 3; i += 1) {
+    const probe = await fetch(`${baseUrl}/api/devices/heartbeat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ clientName: `probe-pc-${i}` })
+    });
+    assert.equal(probe.status, 404);
+    assertHttpErrorResponseContract(await probe.json(), `heartbeatRateLimit.probe.${i}`, {
+      errorCode: "device_not_found"
+    });
+  }
+
+  // Once limited, even a valid signed heartbeat from the same source is refused
+  // before business processing.
+  const limited = await fetch(`${baseUrl}/api/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(buildHeartbeatPayload())
+  });
+  assert.equal(limited.status, 429);
+  assertHttpErrorResponseContract(await limited.json(), "heartbeatRateLimit.limited", {
+    errorCode: "heartbeat_rate_limited"
+  });
+
+  // The limit window expires (1.5s here); a successful heartbeat then clears the
+  // failure counter so the next probes start from zero instead of instantly
+  // re-triggering the limiter.
+  await new Promise((resolve) => setTimeout(resolve, 1600));
+  const recovered = await postJson(`${baseUrl}/api/devices/heartbeat`, buildHeartbeatPayload());
+  assertServerHeartbeatResponseContract(recovered, "heartbeatRateLimit.recovered");
+  const afterRecovery = await fetch(`${baseUrl}/api/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ clientName: "probe-pc-after-recovery" })
+  });
+  assert.equal(afterRecovery.status, 404);
+  assertHttpErrorResponseContract(await afterRecovery.json(), "heartbeatRateLimit.afterRecovery", {
+    errorCode: "device_not_found"
+  });
+});
+
 test("HTTP contract: server smoke can exercise the real claim lifecycle when opted in", async (t) => {
   const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-smoke-lifecycle-"));
   const port = await getFreePort();

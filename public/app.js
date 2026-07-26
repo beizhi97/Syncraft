@@ -801,6 +801,7 @@ function formatError(error) {
     device_not_found: "当前客户端未在服务端登记，请重新生成并导入 SyncKey。",
     heartbeat_auth_invalid: "客户端心跳签名无效，请重新导入 SyncKey。",
     heartbeat_auth_required: "客户端心跳缺少签名，请重新导入 SyncKey。",
+    heartbeat_rate_limited: "该来源心跳失败次数过多，服务端已临时限速，请稍后再试。",
     heartbeat_failed: "无法接收客户端心跳，设备在线状态可能延迟。",
     import_code_required: "请先填写服务端生成的 SyncKey。",
     import_code_invalid: "SyncKey 格式不正确，请重新复制。",
