@@ -41,30 +41,30 @@ Syncraft 的安全基线**明显高于同类 MVP 平均水平**，值得肯定�
 
 ### P2（次要 / 纵深加固）
 
-| 编号 | 模块 | 位置 | 问题 |
-|------|------|------|------|
-| S-2 | 服务端 | `server.js:134-161` | `/api/health` 未鉴权，泄露运营信息并暴露 `adminAuth.enabled` |
-| S-3 | 服务端 | `serverAdmin.js:1364-1377` | 心跳端点 404/401 差异可枚举设备名，且无限速 |
-| S-4 | 服务端 | `server.js:968-983`, `serverAdmin.js:1959-1963` | `maskSecret` 首尾明文泄露；`maskSingboxConfig` 未遮蔽用户 UUID |
-| S-5 | 服务端/core | `server.js:1208,1019`, `errors.js:154-157,217-225` | 错误信息回显内部 endpoint URL / fs 路径 / 内网主机名 |
-| S-6 | 服务端 | `server.js:167-169, 1140-1155` | 全局写锁在长耗时 S3 操作期间持有，阻塞心跳/核销 |
-| S-7 | 服务端 | `server.js:453-455` | 签发 SyncKey 顺带永久改写全局 `publicServerUrl`（意外副作用）|
-| CORE-1 | core | `serverStateLock.js:44-58` | 陈旧锁回收 TOCTOU，可致双实例同时持锁、并发写坏 state |
-| CORE-2 | core | `rclone.js:33-52`, `storage.js:49` | 位置参数缺 `--` 终止符 + remoteName 允许 `-` 开头，参数注入 |
-| CORE-3 | core | `protocolSchemas.js:600-614` | 嵌套对象/JSON 字段不做白名单与类型校验 |
-| CORE-4 | core | `profileProtocol.js:82-85`, `rclone.js:143-144` | 硬编码弱默认密钥、默认允许 http 端点 |
-| CORE-5 | core | `heartbeatAuth.js:32` | 无 nonce 重放缓存，5 分钟时窗内可重放心跳 |
-| C-5 | 客户端 | `clientServer.js` 全局 | 无鉴权令牌，任意本地进程可全量调用 API |
-| C-6 | 客户端 | `store.js:331-338,369` | secrets.json 写入 TOCTOU 明文窗口 + icacls 失败静默 |
-| C-7 | 客户端 | `clientServer.js:521-547` | GET /api/client/status 泄露本地绝对路径 |
-| E-1 | Electron | `main.cjs:117-147,181-203` | 缺 will-navigate / setWindowOpenHandler 导航限制 |
-| E-2 | Electron | `index.html`, `main.cjs` | 全应用无 Content-Security-Policy |
-| D-2 | 供应链 | `download-binaries.ps1:81-94,130` | 版本覆盖参数（含 `latest`）绕过 SHA-256 校验 |
-| D-3 | 供应链 | `build-fingerprint.ps1:87` | 第三方二进制及 lock 文件被排除在 buildId 指纹之外 |
-| D-4 | 供应链 | `apply-beta-singbox.ps1:3-6` 等 | 生产主机 IP / SSH 私钥路径硬编码入库，私钥位于全用户可读目录 |
-| D-5 | 供应链 | `server/*.Dockerfile` | 服务端镜像按可变 tag 而非 digest 固定；客户端/服务端 rclone 版本不一致 |
-| Q-1 | 全局 | server.js / serverAdmin.js / clientServer.js / app.js | 超大 god 文件，职责过载 |
-| Q-2 | 全局 | `maskSecret`、`summarizeAdminSyncSpace` 等 | 重复代码与死代码/死导入 |
+| 编号 | 模块 | 位置 | 问题 | 状态 |
+|------|------|------|------|------|
+| S-2 | 服务端 | `server.js:134-161` | `/api/health` 未鉴权，泄露运营信息并暴露 `adminAuth.enabled` | ✅ 已修复 |
+| S-3 | 服务端 | `serverAdmin.js:1364-1377` | 心跳端点 404/401 差异可枚举设备名，且无限速 | ✅ 限速已修复；枚举按设计接受（见 §七）|
+| S-4 | 服务端 | `server.js:968-983`, `serverAdmin.js:1959-1963` | `maskSecret` 首尾明文泄露；`maskSingboxConfig` 未遮蔽用户 UUID | ✅ 已修复（UUID 按设计保留，见 §七）|
+| S-5 | 服务端/core | `server.js:1208,1019`, `errors.js:154-157,217-225` | 错误信息回显内部 endpoint URL / fs 路径 / 内网主机名 | ✅ 已修复 |
+| S-6 | 服务端 | `server.js:167-169, 1140-1155` | 全局写锁在长耗时 S3 操作期间持有，阻塞心跳/核销 | ✅ 已修复（有界超时；残留见 §七）|
+| S-7 | 服务端 | `server.js:453-455` | 签发 SyncKey 顺带永久改写全局 `publicServerUrl`（意外副作用）| ☑️ 按设计接受（见 §七）|
+| CORE-1 | core | `serverStateLock.js:44-58` | 陈旧锁回收 TOCTOU，可致双实例同时持锁、并发写坏 state | ✅ 已修复 |
+| CORE-2 | core | `rclone.js:33-52`, `storage.js:49` | 位置参数缺 `--` 终止符 + remoteName 允许 `-` 开头，参数注入 | ✅ 已修复 |
+| CORE-3 | core | `protocolSchemas.js:600-614` | 嵌套对象/JSON 字段不做白名单与类型校验 | ⏳ 未处理 |
+| CORE-4 | core | `profileProtocol.js:82-85`, `rclone.js:143-144` | 硬编码弱默认密钥、默认允许 http 端点 | ⏳ 未处理 |
+| CORE-5 | core | `heartbeatAuth.js:32` | 无 nonce 重放缓存，5 分钟时窗内可重放心跳 | ✅ 条目为误报；真实残留已修复（见 §七）|
+| C-5 | 客户端 | `clientServer.js` 全局 | 无鉴权令牌，任意本地进程可全量调用 API | ⏳ 未处理 |
+| C-6 | 客户端 | `store.js:331-338,369` | secrets.json 写入 TOCTOU 明文窗口 + icacls 失败静默 | ✅ 已修复 |
+| C-7 | 客户端 | `clientServer.js:521-547` | GET /api/client/status 泄露本地绝对路径 | ⏳ 未处理（有开放问题）|
+| E-1 | Electron | `main.cjs:117-147,181-203` | 缺 will-navigate / setWindowOpenHandler 导航限制 | ⏳ 未处理 |
+| E-2 | Electron | `index.html`, `main.cjs` | 全应用无 Content-Security-Policy | ⏳ 未处理 |
+| D-2 | 供应链 | `download-binaries.ps1:81-94,130` | 版本覆盖参数（含 `latest`）绕过 SHA-256 校验 | ✅ 已修复 |
+| D-3 | 供应链 | `build-fingerprint.ps1:87` | 第三方二进制及 lock 文件被排除在 buildId 指纹之外 | ✅ 已修复 |
+| D-4 | 供应链 | `apply-beta-singbox.ps1:3-6` 等 | 生产主机 IP / SSH 私钥路径硬编码入库，私钥位于全用户可读目录 | ⏳ 未处理（需用户轮换已入库私钥）|
+| D-5 | 供应链 | `server/*.Dockerfile` | 服务端镜像按可变 tag 而非 digest 固定；客户端/服务端 rclone 版本不一致 | ⏳ 未处理 |
+| Q-1 | 全局 | server.js / serverAdmin.js / clientServer.js / app.js | 超大 god 文件，职责过载 | ⏳ 未处理 |
+| Q-2 | 全局 | `maskSecret`、`summarizeAdminSyncSpace` 等 | 重复代码与死代码/死导入 | ⏳ 未处理 |
 
 ---
 
@@ -154,5 +154,41 @@ Syncraft 的安全基线**明显高于同类 MVP 平均水平**，值得肯定�
 
 ---
 
-*本报告为静态白盒审查结论，行号基于 2026-07-25 审查时的代码状态（P1 修复后行号已变动，修复情况见 §六）。P2 项尚未处理，建议逐条评估后排期。*
+## 七、P2 修复实施记录（2026-07-26）
+
+P2 首批已实施并提交。每项独立提交、附回归测试与负向对照，`node scripts/audit-release.mjs` 通过。
+
+### CORE-1 ✅ 状态锁双写窗口
+过期锁的抢占从 `rmSync` 改为原子的 `renameSync`（单赢者，失败方见 ENOENT 后重试 mkdir）；`mkdir` 成功后补一次 owner 复检以捕获并发抢占；心跳发现所有权丢失不再静默跳过，改为经 `onLockLost` 上报，`server.js` 收到后直接退出，避免两个进程同写 `sfsc-state.json`。回归测试新增用 `spawn` + 共同起跑点的真实并发用例：旧实现 6 轮中 5 轮双持锁，新实现 0 轮。
+
+### CORE-2 ✅ rclone 位置参数注入
+remote 名校验收敛到 `storage.js` 的 `REMOTE_NAME_PATTERN` 单一来源，删除三处重复实现；`rclone.js` 在构造命令前断言位置参数不以 `-` 开头作为纵深防御。
+
+### CORE-5 ☑️ 条目为误报，真实残留已修复
+重放缓存并非缺失——`serverAdmin.js` 的 `rememberHeartbeatAuthNonce` 自首个提交起就拒绝重放。真实残留是数量上限用 `slice(-200)` 截断，被挤掉的 nonce 仍在时窗内可重放。改为上限 512、超限抛 401 `fail-closed`（不驱逐）。
+
+### S-2 / S-4 / S-5 ✅ 信息泄露
+S-2 `/api/server/service/health` 收窄为 `ok`/`apiReachable`/`restartRequired`，不再回传设备数与 bucket 数。S-4 `maskSecret` 不再保留首尾字符；`maskSingboxConfig` 保留入站用户 UUID 属**设计**——`INTERFACE_CONTRACT.md` 要求 config 预览按 clientName/uuid 映射，管理态本就暴露 uuid 与完整 VLESS URI。S-5 `normalizeHttpError` 对会带出内部路径/端点的错误码返回固定文案，并用 `LEAKY_MESSAGE_PATTERN` 兜住网络错误码与 IPv4 字面量；同时新增连带修复：中继错误带 `relayedPublicMessage` 标记跳过按 code 的文案覆盖，否则违反第 745 行「客户端中继兑换失败必须保留服务端 errorCode/status/message」。
+
+### S-3 ✅ 心跳限速；枚举按设计接受
+心跳按来源地址失败计数，超限前置拒绝，新增稳定码 429 `heartbeat_rate_limited`（默认 5 分钟 60 次）。`device_disabled` 与 5xx 不计数；限速器**刻意只放内存**——落盘会让每次探测变成全局写锁下的磁盘写入，正是 S-6 的放大路径。**枚举半条不改**：`INTERFACE_CONTRACT.md` 登记了 404/401 的诊断语义，客户端顶部状态依赖 `device_disabled` 与 `device_not_found` 区分展示；设备名低熵且不含凭据，接受该风险。
+
+### S-6 ✅ 全局写锁持有时间
+`signedS3Request` 加 `AbortController` + `SFSC_S3_TIMEOUT_MS`（默认 15 秒，与 `minioProvisioner` 的 mc 超时对齐），限定每次远端 I/O 的持锁时间。**残留**：未做锁收窄重构（挪出锁外需快照-重验证语义，与出错回滚用的 `adminStateSnapshot` 冲突）；`bucket clear` 这类多请求操作的累计持锁时间仍可能到分钟级，属已接受残留。
+
+### S-7 ☑️ 按设计接受
+`/api/claims/create` 显式传 `server` 时改写 `settings.publicServerUrl` 是 `INTERFACE_CONTRACT.md` 第 409/707 行登记的合同行为（同一创建事务，失败时随状态一起回滚），非意外副作用。审查条目基于误读，不改。
+
+### C-6 ✅ secrets.json 明文窗口 + ACL 静默失败
+新增 `writeProtectedTextFileUnlocked`：先建空临时文件（POSIX `0600`）、写入任何内容前先对空文件应用 icacls、再写内容再 rename（NTFS rename 携带源描述符），彻底关闭明文窗口。`writeSecret` `fail-closed`，Windows 上 ACL 失败抛新增稳定码 503 `secret_vault_unprotected` 拒绝写入；导入回滚走同一路径但不 fail-closed（恢复导入前状态优先）。
+
+### D-2 / D-3 ✅ 供应链钉定
+D-2 版本覆盖（含 `latest`）默认拒绝执行，必须显式 `-AllowUnverified`，所有未校验路径带 `UNVERIFIED` 警告并打印实际 SHA256 便于回填 lock。D-3 `binaries.lock.json` 纳入 buildId 指纹（exe 本体仍排除，其身份由 lock 记录）。
+
+### 仍待处理
+CORE-3、CORE-4、C-5、C-7、E-1、E-2、D-4、D-5、Q-1、Q-2。其中 **D-4 需用户本人处理**：已入库的 SSH 私钥必须轮换，代码层面无法修复。
+
+---
+
+*本报告为静态白盒审查结论，行号基于 2026-07-25 审查时的代码状态（修复后行号已变动，修复情况见 §六、§七）。剩余 P2 项建议逐条评估后排期。PowerShell 相关修复（D-2/D-3）在 Linux 沙箱只能审读+源码钉定，建议在 Windows CI 上跑一次完整套件确认。*
 
