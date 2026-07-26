@@ -12664,6 +12664,46 @@ test("device heartbeat rejects replayed auth nonce", () => {
   assert.equal(summarizeAdminState(state).users[0].heartbeatAuthNonces, undefined);
 });
 
+test("device heartbeat nonce window rejects saturation instead of evicting live nonces", () => {
+  const state = createDefaultAdminState();
+  createClaim(state, { clientName: "company-pc1" });
+  const user = state.users[0];
+
+  // Fill the window with distinct in-window nonces, then confirm the first one is
+  // still refused as a replay. Evicting to make room would have accepted it.
+  const first = signHeartbeatForState(state, { clientName: "company-pc1" });
+  recordDeviceHeartbeat(state, first);
+  const limit = 512;
+  for (let i = user.heartbeatAuthNonces.length; i < limit; i += 1) {
+    recordDeviceHeartbeat(state, signHeartbeatForState(state, { clientName: "company-pc1" }));
+  }
+  // A cap that evicts instead of rejecting never reaches the limit, so this also
+  // pins that no still-valid nonce was dropped along the way.
+  assert.equal(user.heartbeatAuthNonces.length, limit);
+
+  assert.throws(() => recordDeviceHeartbeat(state, signHeartbeatForState(state, { clientName: "company-pc1" })), (error) => {
+    assert.equal(error.code, "heartbeat_auth_invalid");
+    assert.equal(error.status, 401);
+    assert.match(error.publicMessage, /saturated/);
+    return true;
+  });
+  assert.throws(() => recordDeviceHeartbeat(state, first), (error) => {
+    assert.equal(error.code, "heartbeat_auth_invalid");
+    assert.match(error.publicMessage, /already used/);
+    return true;
+  });
+  assert.equal(user.heartbeatAuthNonces.length, limit);
+
+  // Once the window ages out, pruning frees the slots again.
+  user.heartbeatAuthNonces = user.heartbeatAuthNonces.map((item) => ({
+    ...item,
+    timestamp: "2026-05-01T00:00:00.000Z",
+    seenAt: "2026-05-01T00:00:00.000Z"
+  }));
+  recordDeviceHeartbeat(state, signHeartbeatForState(state, { clientName: "company-pc1" }));
+  assert.equal(user.heartbeatAuthNonces.length, 1);
+});
+
 test("device heartbeat appears as an online device in the admin summary", () => {
   const state = createDefaultAdminState({
     VLESS_PUBLIC_HOST: "pass.971223.xyz",

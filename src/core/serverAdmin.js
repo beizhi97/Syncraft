@@ -820,6 +820,11 @@ function ensureHeartbeatSecret(user) {
   return user.heartbeatSecret;
 }
 
+// Bounds the per-device nonce set that gets persisted into sfsc-state.json. The
+// default heartbeat interval (SFSC_HEARTBEAT_MS, 15s) puts ~20 entries in the
+// skew window, so this leaves 25x headroom while capping worst-case state growth.
+const HEARTBEAT_AUTH_NONCE_LIMIT = 512;
+
 function rememberHeartbeatAuthNonce(user, auth, options = {}) {
   const nowMs = options.nowMs ?? Date.now();
   const nonce = String(auth?.nonce || "");
@@ -827,14 +832,19 @@ function rememberHeartbeatAuthNonce(user, auth, options = {}) {
   if (user.heartbeatAuthNonces.some((item) => item.nonce === nonce)) {
     throw createHttpError("heartbeat_auth_invalid", 401, "Heartbeat authentication nonce was already used");
   }
+  // Overflow must reject, not evict. Dropping the oldest entries while they are
+  // still inside the skew window would silently reopen the replay hole this cache
+  // exists to close, and only a client heartbeating far faster than any sane
+  // interval can reach the limit. A 401 makes that misconfiguration visible
+  // instead of trading it for a replay window.
+  if (user.heartbeatAuthNonces.length >= HEARTBEAT_AUTH_NONCE_LIMIT) {
+    throw createHttpError("heartbeat_auth_invalid", 401, "Heartbeat authentication nonce window is saturated");
+  }
   user.heartbeatAuthNonces.push({
     nonce,
     timestamp: String(auth?.timestamp || ""),
     seenAt: new Date(nowMs).toISOString()
   });
-  if (user.heartbeatAuthNonces.length > 200) {
-    user.heartbeatAuthNonces = user.heartbeatAuthNonces.slice(-200);
-  }
 }
 
 function pruneHeartbeatAuthNonces(user, nowMs = Date.now()) {
