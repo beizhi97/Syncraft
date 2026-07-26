@@ -1,5 +1,10 @@
 import { redactLogText } from "./processRunner.js";
-import { basename } from "node:path";
+// win32.basename, not the platform default: it strips both \ and / separators,
+// so a Windows path like C:\Tools\rclone.exe is reduced to its filename even
+// when the bundle is built (or tested) on a POSIX host. The platform-default
+// basename() treats backslashes as ordinary characters on POSIX and leaked the
+// full local path into diagnostic bundles (C-7).
+import { win32 } from "node:path";
 
 const SENSITIVE_KEY_RE = /^(secret|secretAccessKey|secret_access_key|heartbeatSecret|heartbeatAuthNonces|password|privateKey|private_key|authorization|adminToken|token|tKey|claimCode|vlessUri)$/i;
 const LOCAL_PATH_KEY_RE = /^(cwd|appRoot|root|dataRoot|binRoot|localPath|rcloneConfigScope|currentFile|heartbeatDeviceCurrentFile)$/i;
@@ -404,7 +409,7 @@ function redactDiagnosticField(key, value) {
     return redactSupportPrivateValue(value);
   }
   if (key === "path") {
-    return typeof value === "string" && value ? basename(value) : value;
+    return typeof value === "string" && value ? win32.basename(value) : value;
   }
   if (LOCAL_PATH_KEY_RE.test(key)) {
     return typeof value === "string" && value ? "redacted" : value;
