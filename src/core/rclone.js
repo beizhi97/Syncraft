@@ -154,6 +154,12 @@ function renderCommand(executable, args, env) {
 }
 
 function buildRcloneRemoteConfig(storage, job, rcloneBin, rcloneConfigPath) {
+  // These fallbacks only serve the stateless server-side /api/jobs/preview
+  // compatibility endpoint, where a caller may omit credentials and gets a
+  // display-safe preview back. Client execution paths never rely on them:
+  // buildJobFromProfile() fills accessKeyId/secretAccessKey from the hydrated
+  // profile (vault-missing throws secret_vault_missing first), and the
+  // CHANGE_ME placeholder cannot authenticate against a provisioned MinIO.
   const accessKeyId = job.accessKeyId || job.s3AccessKeyId || "company-pc1";
   const secretAccessKey = job.secretAccessKey || job.s3SecretAccessKey || "CHANGE_ME_CLIENT_SECRET";
   // Keep the secret out of process argv. rclone reads it from
