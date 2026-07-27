@@ -1,0 +1,280 @@
+name: Publish delivery repositories
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing signed main-repository tag to publish (for example v0.3.0-rc.1)"
+        required: true
+        type: string
+
+# GITHUB_TOKEN only reads this source repository. Cross-repository writes use
+# SYNCRAFT_DELIVERY_REPOS_TOKEN, a dedicated fine-grained token restricted to
+# Syncraft-client and Syncraft-server Contents/Releases permissions.
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-delivery-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+env:
+  CLIENT_REPOSITORY: beizhi97/Syncraft-client
+  SERVER_REPOSITORY: beizhi97/Syncraft-server
+
+jobs:
+  validate-source:
+    name: Validate immutable source tag
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - name: Check out requested tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+
+      - name: Verify tag and version
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git describe --exact-match --tags HEAD)" = "${{ inputs.release_tag }}"
+          version="$(node -p "require('./package.json').version")"
+          expected="v${version}"
+          test "$expected" = "${{ inputs.release_tag }}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build-client:
+    name: Build and verify Windows client artifacts
+    needs: validate-source
+    runs-on: windows-latest
+    steps:
+      - name: Check out immutable source tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download hash-pinned client binaries
+        shell: pwsh
+        run: pnpm run client:download-binaries
+
+      - name: Build desktop and portable packages
+        shell: pwsh
+        run: |
+          pnpm run client:desktop-package
+          pnpm run client:package
+
+      - name: Run strict release preflight
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/preflight-release.ps1 -ReportPath reports/release/preflight.txt -JsonReportPath reports/release/preflight.json
+
+      - name: Assert release-ready evidence
+        shell: pwsh
+        run: |
+          $report = Get-Content -LiteralPath reports/release/preflight.json -Raw | ConvertFrom-Json
+          if ($report.releaseOk -ne $true -or $report.summary.failed -ne 0 -or $report.summary.skipped -ne 0) {
+            throw "Strict preflight did not produce release-ready evidence."
+          }
+
+      - name: Upload immutable client artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-release-${{ inputs.release_tag }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/SyncraftDesktop.zip
+            dist/SyncraftDesktop.zip.sha256
+            dist/SyncraftDesktop/release-manifest.json
+            dist/SyncraftClient.zip
+            dist/SyncraftClient.zip.sha256
+            dist/SyncraftClient/release-manifest.json
+
+  publish-server:
+    name: Export generated server delivery tree
+    needs: validate-source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out immutable source tag
+        uses: actions/checkout@v4
+        with:
+          path: source
+          ref: ${{ inputs.release_tag }}
+
+      - name: Check out server delivery repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SERVER_REPOSITORY }}
+          token: ${{ secrets.SYNCRAFT_DELIVERY_REPOS_TOKEN }}
+          path: delivery
+          fetch-depth: 0
+
+      - name: Rebuild allowed server delivery tree
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+          VERSION: ${{ needs.validate-source.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd delivery
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p docs
+          cp ../source/.gitattributes . 2>/dev/null || true
+          cp ../source/.gitignore .
+          cp ../source/package.json ../source/pnpm-lock.yaml ../source/pnpm-workspace.yaml .
+          cp -R ../source/server ../source/src ../source/public .
+          cp ../source/docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md docs/
+          cp ../source/docs/INTERFACE_CONTRACT.md docs/
+          cat > README.md <<EOF
+          # Syncraft Server Delivery
+
+          Generated server delivery for \\`${RELEASE_TAG}\\` from [beizhi97/Syncraft](https://github.com/beizhi97/Syncraft) commit \\`${SOURCE_SHA}\\`.
+
+          This repository is a generated deployment view. Do not edit application code here; make changes in the source repository, validate them, tag the source version, then republish.
+
+          Start with [server/README.md](server/README.md) and copy \\`server/.env.example\\` to \\`server/.env\\`. Runtime files such as \\`.env\\`, \\`server/data/\\`, and \\`server/sing-box/config.json\\` are deliberately excluded.
+          EOF
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const source = {
+            schemaVersion: 1,
+            releaseTag: process.env.RELEASE_TAG,
+            version: process.env.VERSION,
+            sourceRepository: 'beizhi97/Syncraft',
+            sourceCommit: process.env.SOURCE_SHA,
+            generatedAt: new Date().toISOString()
+          };
+          fs.writeFileSync('SOURCE_RELEASE.json', `${JSON.stringify(source, null, 2)}\n`);
+          NODE
+          git add -A
+          if ! git diff --cached --quiet; then
+            git config user.name "syncraft-release-bot"
+            git config user.email "syncraft-release-bot@users.noreply.github.com"
+            git commit -m "release(server): ${RELEASE_TAG} from ${SOURCE_SHA}"
+          fi
+          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)"
+          else
+            git tag -a "$RELEASE_TAG" -m "Syncraft server delivery $RELEASE_TAG"
+          fi
+          git push origin HEAD:main
+          git push origin "refs/tags/$RELEASE_TAG"
+
+  publish-client:
+    name: Publish client Release and provenance
+    needs: [validate-source, build-client]
+    runs-on: windows-latest
+    steps:
+      - name: Check out client delivery repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CLIENT_REPOSITORY }}
+          token: ${{ secrets.SYNCRAFT_DELIVERY_REPOS_TOKEN }}
+          path: delivery
+          fetch-depth: 0
+
+      - name: Download verified client artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: client-release-${{ inputs.release_tag }}
+          path: assets
+
+      - name: Write provenance index
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+          VERSION: ${{ needs.validate-source.outputs.version }}
+        run: |
+          $desktop = Get-Content -LiteralPath assets/SyncraftDesktop/release-manifest.json -Raw | ConvertFrom-Json
+          $portable = Get-Content -LiteralPath assets/SyncraftClient/release-manifest.json -Raw | ConvertFrom-Json
+          $assets = Get-ChildItem -LiteralPath assets -File -Recurse | ForEach-Object {
+            [ordered]@{ name = $_.Name; size = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+          }
+          $metadata = [ordered]@{
+            schemaVersion = 1
+            releaseTag = $env:RELEASE_TAG
+            version = $env:VERSION
+            sourceRepository = "beizhi97/Syncraft"
+            sourceCommit = $env:SOURCE_SHA
+            buildId = $desktop.buildId
+            sourceTreeHash = $desktop.sourceTreeHash
+            protocolVersions = $desktop.protocolVersions
+            packages = [ordered]@{ desktop = $desktop; portable = $portable }
+            assets = @($assets)
+            generatedAt = (Get-Date).ToUniversalTime().ToString("o")
+          }
+          New-Item -ItemType Directory -Force -Path delivery/releases | Out-Null
+          $metadata | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath "delivery/releases/$($env:RELEASE_TAG).json" -Encoding utf8
+
+      - name: Commit immutable client provenance
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+        run: |
+          Set-Location delivery
+          git add releases
+          git diff --cached --quiet
+          $hasChanges = $LASTEXITCODE -ne 0
+          if ($hasChanges) {
+            git config user.name "syncraft-release-bot"
+            git config user.email "syncraft-release-bot@users.noreply.github.com"
+            git commit -m "release(client): $env:RELEASE_TAG from $env:SOURCE_SHA"
+          }
+          if (git rev-parse -q --verify "refs/tags/$env:RELEASE_TAG") {
+            if ((git rev-list -n 1 $env:RELEASE_TAG) -ne (git rev-parse HEAD)) {
+              throw "Existing client delivery tag does not point to the generated release commit."
+            }
+          } else {
+            git tag -a $env:RELEASE_TAG -m "Syncraft client delivery $env:RELEASE_TAG"
+          }
+          git push origin HEAD:main
+          git push origin "refs/tags/$env:RELEASE_TAG"
+
+      - name: Create or update client GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.SYNCRAFT_DELIVERY_REPOS_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+        run: |
+          $notes = @"
+          Source repository: https://github.com/beizhi97/Syncraft
+          Source commit: $env:SOURCE_SHA
+          Release tag: $env:RELEASE_TAG
+
+          Verify each ZIP against its accompanying `.sha256` file before extracting. `SyncraftDesktop.zip` is the default desktop package; `SyncraftClient.zip` is the portable compatibility fallback.
+          "@
+          $notePath = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          Set-Content -LiteralPath $notePath -Value $notes -Encoding utf8
+          $files = Get-ChildItem -LiteralPath assets -File -Recurse | ForEach-Object { $_.FullName }
+          $repo = "${{ env.CLIENT_REPOSITORY }}"
+          $existing = gh release view $env:RELEASE_TAG --repo $repo --json targetCommitish --jq .targetCommitish 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if ($existing -ne $env:RELEASE_TAG) {
+              throw "Existing client Release has a different target commitish: $existing"
+            }
+            gh release upload $env:RELEASE_TAG $files --clobber --repo $repo
+          } else {
+            gh release create $env:RELEASE_TAG $files --repo $repo --target $env:RELEASE_TAG --title $env:RELEASE_TAG --notes-file $notePath
+          }
