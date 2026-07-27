@@ -99,7 +99,7 @@ jobs:
         with:
           name: client-release-${{ inputs.release_tag }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 2
           path: |
             dist/SyncraftDesktop.zip
             dist/SyncraftDesktop.zip.sha256

@@ -1,5 +1,9 @@
 name: Release
 
+# Manual only. Day-to-day pushes never build packages; this workflow runs when
+# you deliberately cut a downloadable Windows client for an immutable version
+# tag. The built ZIPs are the delivery, not CI evidence, so they are retained
+# only briefly here as a hand-off buffer to the client-release publish step.
 on:
   workflow_dispatch:
 
@@ -71,7 +75,11 @@ jobs:
         with:
           name: sfsc-windows-client-release
           if-no-files-found: error
-          retention-days: 14
+          # Short retention: these are a transient build hand-off, not archival
+          # storage. The durable copies live in the Syncraft-client GitHub
+          # Release. Keeping this small avoids exhausting the account's Actions
+          # storage quota with every build.
+          retention-days: 2
           path: |
             dist/SyncraftDesktop.zip
             dist/SyncraftDesktop.zip.sha256
@@ -79,5 +87,3 @@ jobs:
             dist/SyncraftClient.zip
             dist/SyncraftClient.zip.sha256
             dist/SyncraftClient/release-manifest.json
-            dist/release-bundles/**
-            reports/release/**

@@ -16,7 +16,17 @@ Syncraft 采用“一源码主仓、两受众交付仓”的模型。`beizhi97/S
 4. 客户端二进制只能作为 GitHub Release 资产存在。每个版本同时上传 `SyncraftDesktop.zip`、其 `.sha256`、desktop `release-manifest.json`，并上传 `SyncraftClient.zip`、其 `.sha256`、portable manifest 作为兼容回退；不得把 ZIP、EXE 或运行态目录提交进 Git。
 5. 发布工作流所用的跨仓库凭据必须是专用最小权限 fine-grained PAT 或 GitHub App token，仅授予两个交付仓的 Contents read/write 与 Releases write；它只能保存为主仓的 `SYNCRAFT_DELIVERY_REPOS_TOKEN` Actions secret，不能放入源码、`.env`、报告或命令行日志。
 
-## 发布职责与顺序
+## 日常开发与发布的分工
+
+主仓的日常循环只做验证，不产出交付物：改代码 → 推 `Syncraft` → CI 跑测试、合同审计、Compose 审计 → 通过即可继续。CI 绝不构建 Windows 包、不同步交付仓、不上传大体积 Artifact。
+
+打包发布是独立、手动、按版本触发的动作，只在你确认某一版要交付给用户时才做，而不是每次 push。发布产物（客户端 ZIP、服务端部署快照）是交付物本身，不是 CI 证据。GitHub Actions 的 Artifact 只作为构建 job 到发布 job 的短期中转（保留期设为 2 天），长期权威副本是 `Syncraft-client` 的 GitHub Release 与 `Syncraft-server` 的仓库快照。
+
+## 版本 tag 不可变
+
+每次发布对应一个全新且此后不再移动的版本 tag（例如 `v0.3.0-rc.2`、`v0.3.0`）。已发布的 tag 不得为了追加改动而重新指向新提交——那会破坏交付物与来源的一一对应。需要交付新内容时，创建新 tag 重新走发布流程。
+
+
 
 1. 在主仓完成代码修改、合同测试、`audit:release`、严格预检和版本 tag。主仓 tag 是三仓版本的锚点。
 2. 主仓 Release workflow 在 Windows runner 构建 desktop 与 portable 客户端包，校验 SHA-256、release manifest、严格 preflight 与 package smoke。
