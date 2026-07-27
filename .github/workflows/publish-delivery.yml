@@ -139,11 +139,41 @@ jobs:
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           mkdir -p docs
           cp ../source/.gitattributes . 2>/dev/null || true
-          cp ../source/.gitignore .
+          cat > .gitignore <<'EOF'
+          node_modules/
+          data/
+          .env
+          .env.*
+          !.env.example
+          sing-box/config.json
+          sing-box/*.key
+          sing-box/*.pem
+          reports/
+          dist/
+          .tmp/
+          *.log
+          EOF
           cp ../source/package.json ../source/pnpm-lock.yaml ../source/pnpm-workspace.yaml .
-          cp -R ../source/server ../source/src ../source/public .
+          cp -R ../source/src ../source/public .
+          cp -R ../source/server/. .
+          mkdir -p scripts
+          cp ../source/scripts/smoke-server.mjs scripts/
+          cp -R ../source/scripts/lib scripts/
           cp ../source/docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md docs/
           cp ../source/docs/INTERFACE_CONTRACT.md docs/
+          # The source repository keeps server files under server/ so that its
+          # Docker build context can be the project root. The generated admin
+          # repository flattens only that server slice; rewrite paths without
+          # weakening the source image or compose settings.
+          sed -i \
+            -e 's#COPY server/sing-box-supervisor\.sh#COPY sing-box-supervisor.sh#' \
+            -e 's#COPY server/rootfs#COPY rootfs#' \
+            appliance.Dockerfile
+          sed -i \
+            -e 's#context: \.\.#context: .#' \
+            -e 's#dockerfile: server/Dockerfile#dockerfile: Dockerfile#' \
+            -e 's#dockerfile: server/sing-box\.Dockerfile#dockerfile: sing-box.Dockerfile#' \
+            docker-compose.yml docker-compose.n1.yml
           cat > README.md <<EOF
           # Syncraft Server Delivery
 
