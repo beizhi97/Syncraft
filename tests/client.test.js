@@ -2243,6 +2243,33 @@ test("managed processes preserve startup error codes on non-zero exits", async (
   }
 });
 
+test("managed processes buffer output until asynchronous startup bookkeeping finishes", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-managed-process-buffered-output-"));
+  const managed = new ManagedProcess("buffered-output-process", join(tempRoot, "process.log"));
+
+  try {
+    const output = [];
+    let resolveExit;
+    const exited = new Promise((resolve) => {
+      resolveExit = resolve;
+    });
+    const started = managed.start(globalThis.process.execPath, ["-e", "process.stdout.write('early-output\\n'); setTimeout(() => process.exit(0), 25)"], {
+      onStarted: async () => new Promise((resolve) => setTimeout(resolve, 100)),
+      onOutput: (item) => output.push(item.text),
+      onExit: resolveExit
+    });
+
+    await started;
+    await Promise.race([
+      exited,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("buffered output exit timed out")), 1000))
+    ]);
+    assert.deepEqual(output, ["early-output\n"]);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("managed processes report a fast exit after asynchronous startup bookkeeping", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-managed-process-fast-exit-"));
   const managed = new ManagedProcess("fast-exit-process", join(tempRoot, "process.log"));

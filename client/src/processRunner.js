@@ -91,6 +91,18 @@ export class ManagedProcess {
     await appendLog(this.logFile, `\n[${new Date().toISOString()}] start ${this.name}: ${executable} ${args.join(" ")}\n`);
     let readySettled = false;
     let spawned = false;
+    const pendingOutput = [];
+    let stdoutEnded = false;
+    let stderrEnded = false;
+    let resolveOutputDrained;
+    const outputDrained = new Promise((resolve) => {
+      resolveOutputDrained = resolve;
+    });
+    const markOutputEnded = (stream) => {
+      if (stream === "stdout") stdoutEnded = true;
+      if (stream === "stderr") stderrEnded = true;
+      if (stdoutEnded && stderrEnded) resolveOutputDrained();
+    };
     let resolveReady;
     let rejectReady;
     const ready = new Promise((resolve, reject) => {
@@ -101,6 +113,29 @@ export class ManagedProcess {
       if (readySettled) return;
       readySettled = true;
       handler(value);
+    };
+    const deliverOutput = (output) => {
+      if (typeof options.onOutput === "function") {
+        options.onOutput(output);
+      }
+    };
+    const flushPendingOutput = () => {
+      for (const output of pendingOutput.splice(0)) {
+        deliverOutput(output);
+      }
+    };
+    const handleOutput = (stream, chunk) => {
+      const output = { stream, text: chunk.toString() };
+      appendLog(this.logFile, output.text);
+      // A child can write before an asynchronous onStarted callback has
+      // established the consumer's run context. Preserve output ordering and
+      // replay it immediately after startup bookkeeping instead of dropping
+      // direction-sensitive parsers (notably bisync conflict detection).
+      if (!readySettled) {
+        pendingOutput.push(output);
+        return;
+      }
+      deliverOutput(output);
     };
     const notifyExit = (exit) => {
       const waiters = this.exitWaiters.splice(0);
@@ -138,19 +173,13 @@ export class ManagedProcess {
     }
 
     this.child.stdout.on("data", (chunk) => {
-      const text = chunk.toString();
-      appendLog(this.logFile, text);
-      if (typeof options.onOutput === "function") {
-        options.onOutput({ stream: "stdout", text });
-      }
+      handleOutput("stdout", chunk);
     });
     this.child.stderr.on("data", (chunk) => {
-      const text = chunk.toString();
-      appendLog(this.logFile, text);
-      if (typeof options.onOutput === "function") {
-        options.onOutput({ stream: "stderr", text });
-      }
+      handleOutput("stderr", chunk);
     });
+    this.child.stdout.on("end", () => markOutputEnded("stdout"));
+    this.child.stderr.on("end", () => markOutputEnded("stderr"));
     this.child.on("spawn", async () => {
       spawned = true;
       this.startedAt = new Date();
@@ -170,6 +199,7 @@ export class ManagedProcess {
             intervalMs: options.readyIntervalMs || 100
           });
         }
+        flushPendingOutput();
         settleReady(resolveReady, this.status());
       } catch (error) {
         this.lastExit = { ok: false, errorCode, error: error.message, at: new Date().toISOString() };
@@ -191,6 +221,16 @@ export class ManagedProcess {
       }
     });
     this.child.on("close", (exitCode, signalCode) => {
+      finalizeCloseAfterOutput(exitCode, signalCode).catch(() => {});
+    });
+
+    const finalizeCloseAfterOutput = async (exitCode, signalCode) => {
+      // child_process 'close' usually follows stream end, but Windows pipe
+      // scheduling can make the final data event observable just after the
+      // process exit notification. Finish the consumer-facing exit lifecycle
+      // only once both output streams have ended, so onExit snapshots include
+      // every output-derived metric (including split bisync conflicts).
+      await outputDrained;
       this.lastExit = {
         ok: exitCode === 0,
         exitCode,
@@ -203,7 +243,7 @@ export class ManagedProcess {
       if (spawned) {
         notifyExit(this.lastExit);
       }
-    });
+    };
 
     return ready;
   }

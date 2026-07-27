@@ -191,7 +191,10 @@ const HEARTBEAT_SYNC_STATES = new Set(["idle", "syncing", "error", "stopping", "
 const singboxProcess = new ManagedProcess("sing-box", paths.singboxLog);
 const syncProcess = new ManagedProcess("rclone-sync", paths.rcloneLog);
 let syncMetrics = createSyncMetrics();
-let syncOutputContext = "";
+let syncOutputContexts = {
+  stdout: "",
+  stderr: ""
+};
 let lastHeartbeat = null;
 let lastSuccessfulHeartbeat = await readLastSuccessfulHeartbeat(paths).catch((error) => {
   if (error?.code === "local_state_corrupt") return null;
@@ -1684,7 +1687,10 @@ function markSyncStarting(job, run = {}) {
   const now = run.startedAt || new Date().toISOString();
   activeSyncJobFingerprint = syncJobFingerprint(job);
   stoppingSyncReplay = null;
-  syncOutputContext = "";
+  syncOutputContexts = {
+    stdout: "",
+    stderr: ""
+  };
   syncMetrics = createSyncMetrics({
     syncState: "syncing",
     phase: "scanning",
@@ -1744,11 +1750,17 @@ function currentStoppingSyncReplay(now = Date.now()) {
 }
 
 function updateSyncMetricsFromOutput(output = {}) {
-  syncOutputContext = appendRcloneOutputContext(syncOutputContext, output.text);
-  const outputStats = parseRcloneStats(syncOutputContext, {
+  const stream = output.stream === "stderr" ? "stderr" : "stdout";
+  // stdout and stderr are independent byte streams. Joining their chunks into
+  // one buffer can splice a stderr diagnostic into the middle of a stdout
+  // line when writes are split across pipes, destroying a real bisync conflict
+  // record before rcloneStats gets to parse it. Keep a bounded context per
+  // stream and combine parsed metrics only after each stream is decoded.
+  syncOutputContexts[stream] = appendRcloneOutputContext(syncOutputContexts[stream], output.text);
+  const outputStats = parseRcloneStats(syncOutputContexts[stream], {
     direction: syncMetrics.currentJob?.direction
   });
-  const failure = parseRcloneFailure(syncOutputContext);
+  const failure = parseRcloneFailure(syncOutputContexts[stream]);
   const parsed = outputStats || failure
     ? {
         ...(outputStats || {}),
@@ -1790,7 +1802,10 @@ function markSyncExited(exit = {}) {
       ...finishPatch
     }
   };
-  syncOutputContext = "";
+  syncOutputContexts = {
+    stdout: "",
+    stderr: ""
+  };
   activeSyncJobFingerprint = "";
   if (historyRunId) {
     return recordSyncRunFinished(historyRunId, finishPatch, paths)
