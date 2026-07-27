@@ -3428,9 +3428,14 @@ test("client maps MinIO storage-full failures split across output chunks", async
   assert.equal(failure.errorCode, "storage_full");
 
   const server = await readFile(join(projectRoot, "client", "src", "clientServer.js"), "utf8");
-  assert.match(server, /syncOutputContext = appendRcloneOutputContext\(syncOutputContext, output\.text\)/);
-  assert.match(server, /parseRcloneStats\(syncOutputContext/);
-  assert.match(server, /parseRcloneFailure\(syncOutputContext\)/);
+  // stdout/stderr are independent streams. Assert their isolated rolling
+  // contexts instead of pinning the obsolete shared buffer: joining streams
+  // could splice stderr into a partial stdout failure/conflict line.
+  assert.match(server, /let syncOutputContexts = \{\s*stdout: "",\s*stderr: ""\s*\}/);
+  assert.match(server, /const stream = output\.stream === "stderr" \? "stderr" : "stdout"/);
+  assert.match(server, /syncOutputContexts\[stream\] = appendRcloneOutputContext\(syncOutputContexts\[stream\], output\.text\)/);
+  assert.match(server, /parseRcloneStats\(syncOutputContexts\[stream\]/);
+  assert.match(server, /parseRcloneFailure\(syncOutputContexts\[stream\]\)/);
 });
 
 test("client UI treats a successful zero-transfer run as already up to date", async () => {
