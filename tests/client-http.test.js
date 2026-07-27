@@ -263,7 +263,7 @@ test("client local API rejects non-loopback Host headers on reads and writes", a
   }
 });
 
-test("client shuts down sing-box and rclone when the process is signalled", async (t) => {
+test("client shuts down managed processes through its platform-supported shutdown trigger", async (t) => {
   const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-client-signal-"));
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -293,14 +293,30 @@ test("client shuts down sing-box and rclone when the process is signalled", asyn
   });
 
   await waitForClient(baseUrl, child, tempRoot);
-  child.kill("SIGTERM");
+  if (process.platform === "win32") {
+    // Node's SIGTERM emulation on Windows is not a graceful-process signal:
+    // the OS may terminate the parent before its JS handler begins awaiting
+    // managed child exits. Exercise the supported loopback shutdown endpoint
+    // there; POSIX still verifies the real signal-handler path below.
+    const shutdown = await fetch(`${baseUrl}/api/client/shutdown`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: "{}"
+    });
+    assert.equal(shutdown.status, 200);
+    assertClientShutdownResponseContract(await shutdown.json(), "windowsClientShutdown");
+  } else {
+    child.kill("SIGTERM");
+  }
 
   const [exitCode] = await Promise.race([
     once(child, "exit"),
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`client ignored SIGTERM; stdout=${stdout}`)), 8000))
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`client shutdown timed out; stdout=${stdout}`)), 8000))
   ]);
   assert.equal(exitCode, 0);
-  assert.match(stdout, /stopping on SIGTERM/);
+  if (process.platform !== "win32") {
+    assert.match(stdout, /stopping on SIGTERM/);
+  }
 });
 
 test("client runtime refuses occupied port unless health belongs to SFSC client", async (t) => {
