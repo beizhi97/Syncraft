@@ -1237,6 +1237,10 @@ test("client confirms sync compatibility warnings before saving or running sync"
   assert.match(server, /function requireSyncCompatibilityConfirmation\(body = \{\}\)/);
   assert.match(server, /let lastSuccessfulHeartbeat = await readLastSuccessfulHeartbeat\(paths\)/);
   assert.match(server, /let heartbeatGeneration = 0/);
+  assert.match(server, /let heartbeatInFlight = null/);
+  assert.match(server, /function sendHeartbeat\(\) \{[\s\S]*?if \(heartbeatInFlight\) \{[\s\S]*?return heartbeatInFlight;/);
+  assert.match(server, /heartbeatInFlight = sendHeartbeatOnce\(\)\.finally\(\(\) => \{\s*heartbeatInFlight = null;/);
+  assert.match(server, /async function sendHeartbeatOnce\(\)/);
   assert.match(server, /async function resetHeartbeatState\(\)/);
   assert.match(server, /await resetHeartbeatState\(\);\s+sendHeartbeat\(\)\.catch\(\(\) => \{\}\)/);
   assert.match(server, /lastSuccessfulHeartbeat = lastHeartbeat/);

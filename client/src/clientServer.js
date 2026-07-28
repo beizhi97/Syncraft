@@ -201,6 +201,7 @@ let lastSuccessfulHeartbeat = await readLastSuccessfulHeartbeat(paths).catch((er
   throw error;
 });
 let heartbeatGeneration = 0;
+let heartbeatInFlight = null;
 let schedulerState = createSchedulerState();
 let syncRunInFlight = null;
 let syncRunInFlightJobFingerprint = "";
@@ -1901,7 +1902,21 @@ function buildHeartbeatSyncV1(sync = {}, scheduler = null, lastRun = null) {
   };
 }
 
-async function sendHeartbeat() {
+function sendHeartbeat() {
+  // A periodic tick, import reset, and sync completion can coincide. Do not
+  // let them create overlapping requests whose response order is unrelated to
+  // request order; one in-flight heartbeat is sufficient to report current
+  // client state and keeps the successful snapshot deterministic.
+  if (heartbeatInFlight) {
+    return heartbeatInFlight;
+  }
+  heartbeatInFlight = sendHeartbeatOnce().finally(() => {
+    heartbeatInFlight = null;
+  });
+  return heartbeatInFlight;
+}
+
+async function sendHeartbeatOnce() {
   const generation = heartbeatGeneration;
   const profile = await readProfile(paths);
   const serverUrl = profile?.source?.server;

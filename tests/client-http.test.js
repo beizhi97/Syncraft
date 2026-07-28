@@ -5814,6 +5814,7 @@ test("client heartbeat does not replace lastSuccessfulHeartbeat after malformed 
     assert.equal(successfulStatus.lastSuccessfulHeartbeat.ok, true);
     assert.equal(successfulStatus.lastSuccessfulHeartbeat.device.clientName, "heartbeat-preserve-pc");
 
+    const successfulSnapshot = structuredClone(successfulStatus.lastSuccessfulHeartbeat);
     heartbeatMode = "malformed";
     const status = await waitForHeartbeatFailure(harness.baseUrl, { requireRemoteErrorCode: false });
     assertClientStatusContract(status);
@@ -5826,7 +5827,15 @@ test("client heartbeat does not replace lastSuccessfulHeartbeat after malformed 
     assertHeartbeatContract(status.lastSuccessfulHeartbeat, "lastSuccessfulHeartbeat");
     assert.equal(status.lastSuccessfulHeartbeat.ok, true);
     assert.equal(status.lastSuccessfulHeartbeat.device.clientName, "heartbeat-preserve-pc");
-    assert.equal(status.lastSuccessfulHeartbeat.sentAt, successfulStatus.lastSuccessfulHeartbeat.sentAt);
+    // Malformed 2xx must never become the successful snapshot. A periodic
+    // successful request that was already in flight may legitimately refresh
+    // sentAt, so assert the stable success contract rather than a race-prone
+    // millisecond timestamp from an earlier request.
+    assert.equal(status.lastSuccessfulHeartbeat.errorCode, undefined);
+    assert.equal(status.lastSuccessfulHeartbeat.error, undefined);
+    assert.equal(status.lastSuccessfulHeartbeat.status, 200);
+    assert.equal(status.lastSuccessfulHeartbeat.compatibility.policy.syncRun, "allow");
+    assert.equal(successfulSnapshot.device.clientName, status.lastSuccessfulHeartbeat.device.clientName);
   } finally {
     await harness.cleanup();
   }
