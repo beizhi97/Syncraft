@@ -3975,8 +3975,12 @@ test("server smoke script covers deployment health and management checks", async
   assert.match(releaseWorkflow, /dist\/SyncraftClient\.zip/);
   assert.match(releaseWorkflow, /dist\/SyncraftClient\.zip\.sha256/);
   assert.match(releaseWorkflow, /dist\/SyncraftClient\/release-manifest\.json/);
-  assert.match(releaseWorkflow, /dist\/release-bundles\/\*\*/);
-  assert.match(releaseWorkflow, /reports\/release\/\*\*/);
+  assert.match(releaseWorkflow, /retention-days: 2/);
+  // release bundles and preflight reports are built for verification, but they
+  // are not Actions Artifacts: durable delivery lives in the client Release,
+  // while uploading these bulky intermediates exhausts the account quota.
+  assert.doesNotMatch(releaseWorkflow, /dist\/release-bundles\/\*\*/);
+  assert.doesNotMatch(releaseWorkflow, /reports\/release\/\*\*/);
   assert.match(buildClient, /\$nodeExe = \$env:SFSC_NODE/);
   assert.match(buildClient, /Get-Command node/);
   assert.match(buildClient, /Node\.js not found\. Install Node\.js or set SFSC_NODE to node\.exe\./);
