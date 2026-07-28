@@ -1568,6 +1568,9 @@ async function runSyncExclusive(runPlan, options = {}) {
     return await syncProcess.start(paths.rcloneExe, preview.args, {
       cwd: paths.root,
       env: preview.env,
+      // Test-only fault injection avoids relying on a platform-specific rename
+      // of an executable that is still open by the config subprocess.
+      testSpawnFailure: process.env.SFSC_TEST_RCLONE_SYNC_SPAWN_FAILURE === "1",
       errorCode: "rclone_sync_failed",
       onStarted: async () => {
         const run = createSyncRunStart(normalizedJob, options);

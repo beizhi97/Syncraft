@@ -2247,6 +2247,25 @@ test("managed processes preserve startup error codes on non-zero exits", async (
   }
 });
 
+test("managed processes reject explicit test spawn failure before starting a child", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-managed-process-test-spawn-fail-"));
+  const managed = new ManagedProcess("test-spawn-fail-process", join(tempRoot, "process.log"));
+
+  try {
+    await assert.rejects(
+      () => managed.start(globalThis.process.execPath, ["-e", "process.exit(0)"], {
+        errorCode: "rclone_sync_failed",
+        testSpawnFailure: true
+      }),
+      /test-spawn-fail-process test spawn failure/
+    );
+    assert.equal(managed.status().running, false);
+    assert.equal(managed.status().lastExit.errorCode, "rclone_sync_failed");
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("managed processes buffer output until asynchronous startup bookkeeping finishes", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-managed-process-buffered-output-"));
   const managed = new ManagedProcess("buffered-output-process", join(tempRoot, "process.log"));

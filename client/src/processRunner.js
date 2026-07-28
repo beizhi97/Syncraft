@@ -156,6 +156,9 @@ export class ManagedProcess {
     };
 
     try {
+      if (options.testSpawnFailure) {
+        throw new Error(`${this.name} test spawn failure`);
+      }
       this.child = spawn(executable, args, {
         cwd: options.cwd,
         env: { ...process.env, ...(options.env || {}) },

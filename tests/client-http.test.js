@@ -2670,7 +2670,7 @@ test("client sync run does not write history when rclone sync spawn fails after 
       SFSC_OPEN_BROWSER: "0",
       SFSC_HEARTBEAT_MS: "60000",
       SFSC_FAKE_TOOL_LOG: fakeToolLog,
-      SFSC_FAKE_REMOVE_RCLONE_AFTER_CONFIG: "1"
+      SFSC_TEST_RCLONE_SYNC_SPAWN_FAILURE: "1"
     }
   });
 
@@ -2736,7 +2736,7 @@ test("client sync run does not write history when rclone sync spawn fails after 
 
   const fakeToolEvents = (await readFile(fakeToolLog, "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line));
   assert.ok(fakeToolEvents.find((event) => event.tool === "rclone-config"));
-  assert.ok(fakeToolEvents.find((event) => event.tool === "rclone-exe-renamed"));
+  assert.equal(fakeToolEvents.some((event) => event.tool === "rclone-exe-renamed"), false);
   assert.equal(fakeToolEvents.some((event) => event.tool === "rclone-sync"), false);
 });
 
