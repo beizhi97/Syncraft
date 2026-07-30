@@ -3293,7 +3293,13 @@ async function auditCompatibilityWarningContract() {
   requireText(clientServerSource, "client/src/clientServer.js", "sendHeartbeat().catch(() => {});");
   requireText(clientServerSource, "client/src/clientServer.js", "if (generation !== heartbeatGeneration) {\n      return null;\n    }");
   requireText(clientServerSource, "client/src/clientServer.js", "lastSuccessfulHeartbeat = lastHeartbeat;");
-  requireText(clientServerSource, "client/src/clientServer.js", "await saveLastSuccessfulHeartbeat(lastSuccessfulHeartbeat, paths);");
+  requireText(clientServerSource, "client/src/clientServer.js", "await saveLastSuccessfulHeartbeat(lastHeartbeat, paths);");
+  // Durability before visibility: a published successful snapshot must already
+  // be recoverable from disk after a restart.
+  requireTextOrder(clientServerSource, "client/src/clientServer.js", [
+    "await saveLastSuccessfulHeartbeat(lastHeartbeat, paths);",
+    "lastSuccessfulHeartbeat = lastHeartbeat;"
+  ], "successful heartbeat snapshot must be persisted before it becomes observable");
   requireText(clientServerSource, "client/src/clientServer.js", "await clearLastSuccessfulHeartbeat(paths);");
   requireText(clientServerSource, "client/src/clientServer.js", "heartbeat: lastHeartbeat,\n    lastSuccessfulHeartbeat,");
   requireText(clientServerSource, "client/src/clientServer.js", "lastSuccessfulHeartbeat?.ok && lastSuccessfulHeartbeat?.compatibility?.policy?.syncRun === \"warn\" && body.confirmCompatibilityWarning !== true");

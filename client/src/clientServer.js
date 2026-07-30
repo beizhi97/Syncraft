@@ -1988,8 +1988,11 @@ async function sendHeartbeatOnce() {
         device: summarizeHeartbeatDevice(responseBody.device),
         compatibility: responseBody.device.compatibility
       };
+      // Persist before publishing: /api/client/status and the compatibility
+      // gate must never observe a successful snapshot that a restart could not
+      // recover from disk.
+      await saveLastSuccessfulHeartbeat(lastHeartbeat, paths);
       lastSuccessfulHeartbeat = lastHeartbeat;
-      await saveLastSuccessfulHeartbeat(lastSuccessfulHeartbeat, paths);
     } else {
       const remoteError = readHeartbeatError(response, responseBody);
       lastHeartbeat = {

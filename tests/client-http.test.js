@@ -931,10 +931,10 @@ test("client local HTTP API returns structured errors", async (t) => {
   assertClientStatusContract(statusAfterSavePayload);
   assert.equal(statusAfterSavePayload.ok, true);
   assert.equal(statusAfterSavePayload.mode, "client-exe-runtime");
-  assert.equal(statusAfterSavePayload.appVersion, "0.3.0-rc.1");
-  assert.equal(statusAfterSavePayload.clientVersion, "0.3.0-rc.1");
+  assert.equal(statusAfterSavePayload.appVersion, "0.3.0-rc.2");
+  assert.equal(statusAfterSavePayload.clientVersion, "0.3.0-rc.2");
   assert.equal(statusAfterSavePayload.diagnostics.role, "client");
-  assert.equal(statusAfterSavePayload.diagnostics.version, "0.3.0-rc.1");
+  assert.equal(statusAfterSavePayload.diagnostics.version, "0.3.0-rc.2");
   assert.equal(statusAfterSavePayload.diagnostics.protocols.profile, 1);
   assert.equal(statusAfterSavePayload.diagnostics.protocols.heartbeat, 1);
   assert.match(statusAfterSavePayload.paths.root, /sfsc-client-http-/);
@@ -1232,7 +1232,7 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.match(diagnosticPayload.filename, /^sfsc-client-diagnostics-.*\.json$/);
   assert.equal(diagnosticPayload.bundle.schemaVersion, 1);
   assert.equal(diagnosticPayload.bundle.role, "client");
-  assert.equal(diagnosticPayload.bundle.summary.appVersion, "0.3.0-rc.1");
+  assert.equal(diagnosticPayload.bundle.summary.appVersion, "0.3.0-rc.2");
   assert.equal(diagnosticPayload.bundle.summary.releaseManifestOk, true);
   assert.equal(diagnosticPayload.bundle.summary.releaseManifestVersion, "0.3.0-rc.1");
   assert.equal(diagnosticPayload.bundle.summary.releaseManifestBuiltAt, "2026-07-04T00:00:00.000Z");

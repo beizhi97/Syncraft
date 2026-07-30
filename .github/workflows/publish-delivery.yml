@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Existing signed main-repository tag to publish (for example v0.3.0-rc.1)"
+        description: "Existing signed main-repository tag to publish (for example v0.3.0-rc.2)"
         required: true
         type: string
 
