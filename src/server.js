@@ -26,7 +26,6 @@ import {
   compactAdminState,
   markStorageBucketCleared,
   markSingboxApplied,
-  normalizeBandwidthLimit,
   normalizeSchedule,
   normalizeImportProfile,
   normalizeAdminState,
@@ -42,7 +41,9 @@ import {
   replaceStorageBuckets,
   setManagedUserEnabled,
   setStorageBucketEnabled,
+  maskSecret,
   summarizeAdminState,
+  summarizeAdminSyncSpace,
   summarizeClaim,
   summarizeDevice,
   normalizeHttpError,
@@ -748,18 +749,6 @@ async function acquireAdminStateWriteLock() {
   };
 }
 
-function summarizeAdminSyncSpace(state, syncSpace) {
-  return {
-    id: syncSpace.id,
-    syncId: syncSpace.syncId,
-    status: syncSpace.status,
-    policy: { multiWriter: syncSpace.policy?.multiWriter === true },
-    version: syncSpace.version,
-    createdAt: syncSpace.createdAt,
-    memberCount: state.syncSpaceMemberships.filter((membership) => membership.syncSpaceId === syncSpace.id && !membership.revokedAt).length
-  };
-}
-
 // This summary is returned by the unauthenticated /api/health probe, so it is
 // limited to liveness/readiness. Device and bucket counts used to be included
 // here, which handed an unauthenticated observer the deployment's operational
@@ -1127,13 +1116,6 @@ function maskSingboxConfig(config) {
     }
   }
   return masked;
-}
-
-// Keep in sync with maskSecret in src/core/serverAdmin.js: no plaintext is
-// retained, the literal "***" stays as the documented "keep existing secret"
-// sentinel, and the fixed width hides the real secret length.
-function maskSecret() {
-  return "***";
 }
 
 async function loadAdminState() {

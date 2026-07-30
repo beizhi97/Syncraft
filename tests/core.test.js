@@ -8956,14 +8956,14 @@ test("release audit fails when compatibility warning confirmation contract drift
 
     await writeFile(
       join(tempRoot, "client", "src", "clientServer.js"),
-      clientServer.replace("      lastSuccessfulHeartbeat = lastHeartbeat;\n", ""),
+      clientServer.replace("      lastSuccessfulHeartbeat = successfulHeartbeat;\n", ""),
       "utf8"
     );
     const missingSuccessfulHeartbeatCache = await runReleaseAudit(tempRoot);
     assert.notEqual(missingSuccessfulHeartbeatCache.code, 0);
     assert.match(
       missingSuccessfulHeartbeatCache.stderr,
-      /client\/src\/clientServer\.js must mention lastSuccessfulHeartbeat = lastHeartbeat;/
+      /client\/src\/clientServer\.js must mention lastSuccessfulHeartbeat = successfulHeartbeat;/
     );
 
     await writeFile(

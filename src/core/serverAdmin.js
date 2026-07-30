@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { normalizeBandwidthLimit } from "./bandwidth.js";
-import { CLAIM_CODE_ALPHABET, encodeClaimToken, extractClaimCode, normalizeClaimCode } from "./claimProtocol.js";
+import { CLAIM_CODE_ALPHABET, encodeClaimToken, extractClaimCode } from "./claimProtocol.js";
 import { ADMIN_STATE_VERSION, buildRuntimeDiagnostics, compareRuntimeDiagnostics, normalizeRuntimeDiagnostics } from "./diagnostics.js";
 import { HEARTBEAT_AUTH_MAX_SKEW_MS, createHeartbeatSecret, verifyHeartbeatAuth } from "./heartbeatAuth.js";
 import { normalizeSchedule } from "./scheduler.js";
@@ -1541,7 +1541,7 @@ export function summarizeAdminState(state) {
   };
 }
 
-function summarizeAdminSyncSpace(state, syncSpace) {
+export function summarizeAdminSyncSpace(state, syncSpace) {
   return {
     id: String(syncSpace.id || ""),
     syncId: String(syncSpace.syncId || ""),
@@ -1985,7 +1985,7 @@ function cleanRequiredCredential(input, field) {
 // existing secret" on write paths (see preserveExistingMasked* below and
 // docs/INTERFACE_CONTRACT.md), it satisfies the masked-secret contract for
 // absent values too, and a fixed width hides the real secret length.
-function maskSecret() {
+export function maskSecret() {
   return "***";
 }
 

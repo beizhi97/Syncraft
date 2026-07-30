@@ -18,7 +18,6 @@ import {
   decodeClaimToken,
   describeSchedule,
   isStableErrorCode,
-  normalizeBandwidthLimit,
   normalizeSchedule,
   normalizeSyncRun,
   normalizeHttpError,
@@ -1982,17 +1981,19 @@ async function sendHeartbeatOnce() {
         };
         return lastHeartbeat;
       }
-      lastHeartbeat = {
+      const successfulHeartbeat = {
         ...baseHeartbeat,
         serverDiagnostics: responseBody.diagnostics,
         device: summarizeHeartbeatDevice(responseBody.device),
         compatibility: responseBody.device.compatibility
       };
       // Persist before publishing: /api/client/status and the compatibility
-      // gate must never observe a successful snapshot that a restart could not
-      // recover from disk.
-      await saveLastSuccessfulHeartbeat(lastHeartbeat, paths);
-      lastSuccessfulHeartbeat = lastHeartbeat;
+      // gate must never observe a successful heartbeat whose snapshot a restart
+      // could not recover from disk, so both become visible together only after
+      // the durable write succeeds.
+      await saveLastSuccessfulHeartbeat(successfulHeartbeat, paths);
+      lastHeartbeat = successfulHeartbeat;
+      lastSuccessfulHeartbeat = successfulHeartbeat;
     } else {
       const remoteError = readHeartbeatError(response, responseBody);
       lastHeartbeat = {

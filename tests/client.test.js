@@ -1243,8 +1243,8 @@ test("client confirms sync compatibility warnings before saving or running sync"
   assert.match(server, /async function sendHeartbeatOnce\(\)/);
   assert.match(server, /async function resetHeartbeatState\(\)/);
   assert.match(server, /await resetHeartbeatState\(\);\s+sendHeartbeat\(\)\.catch\(\(\) => \{\}\)/);
-  assert.match(server, /lastSuccessfulHeartbeat = lastHeartbeat/);
-  assert.match(server, /await saveLastSuccessfulHeartbeat\(lastHeartbeat, paths\);\s*\n\s*lastSuccessfulHeartbeat = lastHeartbeat;/);
+  assert.match(server, /lastSuccessfulHeartbeat = successfulHeartbeat/);
+  assert.match(server, /await saveLastSuccessfulHeartbeat\(successfulHeartbeat, paths\);\s*\n\s*lastHeartbeat = successfulHeartbeat;\s*\n\s*lastSuccessfulHeartbeat = successfulHeartbeat;/);
   assert.match(server, /clearLastSuccessfulHeartbeat\(paths\)/);
   assert.match(server, /lastSuccessfulHeartbeat\?\.ok && lastSuccessfulHeartbeat\?\.compatibility\?\.policy\?\.syncRun === "warn"/);
   assert.match(server, /body\.confirmCompatibilityWarning !== true/);

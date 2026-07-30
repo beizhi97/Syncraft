@@ -2716,11 +2716,11 @@ async function auditHeartbeatSuccessContractValidation() {
   requireText(clientServerSource, "client/src/clientServer.js", "device.syncState must match device.sync.state");
   requireText(clientServerSource, "client/src/clientServer.js", "device.speedMbps must match device.sync.speedMbps");
   requireText(clientServerSource, "client/src/clientServer.js", "errorCode: \"heartbeat_failed\"");
-  requireText(clientServerSource, "client/src/clientServer.js", "lastSuccessfulHeartbeat = lastHeartbeat;");
+  requireText(clientServerSource, "client/src/clientServer.js", "lastSuccessfulHeartbeat = successfulHeartbeat;");
   requireTextOrder(clientServerSource, "client/src/clientServer.js", [
     "const responseBody = await readHeartbeatBody(response);",
     "validateHeartbeatSuccessResponse(responseBody)",
-    "lastSuccessfulHeartbeat = lastHeartbeat;"
+    "lastSuccessfulHeartbeat = successfulHeartbeat;"
   ], "heartbeat HTTP 2xx success contract validation before updating lastSuccessfulHeartbeat");
   if (clientServerSource.includes("serverDiagnostics: responseBody?.diagnostics || null")) {
     issues.push("client/src/clientServer.js must not coerce missing heartbeat success diagnostics to null on HTTP 2xx");
@@ -3292,14 +3292,15 @@ async function auditCompatibilityWarningContract() {
   requireText(clientServerSource, "client/src/clientServer.js", "await resetHeartbeatState();");
   requireText(clientServerSource, "client/src/clientServer.js", "sendHeartbeat().catch(() => {});");
   requireText(clientServerSource, "client/src/clientServer.js", "if (generation !== heartbeatGeneration) {\n      return null;\n    }");
-  requireText(clientServerSource, "client/src/clientServer.js", "lastSuccessfulHeartbeat = lastHeartbeat;");
-  requireText(clientServerSource, "client/src/clientServer.js", "await saveLastSuccessfulHeartbeat(lastHeartbeat, paths);");
+  requireText(clientServerSource, "client/src/clientServer.js", "lastSuccessfulHeartbeat = successfulHeartbeat;");
+  requireText(clientServerSource, "client/src/clientServer.js", "await saveLastSuccessfulHeartbeat(successfulHeartbeat, paths);");
   // Durability before visibility: a published successful snapshot must already
   // be recoverable from disk after a restart.
   requireTextOrder(clientServerSource, "client/src/clientServer.js", [
-    "await saveLastSuccessfulHeartbeat(lastHeartbeat, paths);",
-    "lastSuccessfulHeartbeat = lastHeartbeat;"
-  ], "successful heartbeat snapshot must be persisted before it becomes observable");
+    "await saveLastSuccessfulHeartbeat(successfulHeartbeat, paths);",
+    "lastHeartbeat = successfulHeartbeat;",
+    "lastSuccessfulHeartbeat = successfulHeartbeat;"
+  ], "successful heartbeat must be persisted before it becomes observable");
   requireText(clientServerSource, "client/src/clientServer.js", "await clearLastSuccessfulHeartbeat(paths);");
   requireText(clientServerSource, "client/src/clientServer.js", "heartbeat: lastHeartbeat,\n    lastSuccessfulHeartbeat,");
   requireText(clientServerSource, "client/src/clientServer.js", "lastSuccessfulHeartbeat?.ok && lastSuccessfulHeartbeat?.compatibility?.policy?.syncRun === \"warn\" && body.confirmCompatibilityWarning !== true");

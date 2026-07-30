@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeJsonReportSync, writeTextReportSync } from "./lib/reportSecrets.mjs";
 import { releaseBundlePaths } from "./lib/releasePaths.mjs";
