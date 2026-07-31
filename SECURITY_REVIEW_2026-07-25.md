@@ -61,7 +61,7 @@ Syncraft 的安全基线**明显高于同类 MVP 平均水平**，值得肯定�
 | E-2 | Electron | `index.html`, `main.cjs` | 全应用无 Content-Security-Policy | ✅ 已修复 |
 | D-2 | 供应链 | `download-binaries.ps1:81-94,130` | 版本覆盖参数（含 `latest`）绕过 SHA-256 校验 | ✅ 已修复 |
 | D-3 | 供应链 | `build-fingerprint.ps1:87` | 第三方二进制及 lock 文件被排除在 buildId 指纹之外 | ✅ 已修复 |
-| D-4 | 供应链 | `apply-beta-singbox.ps1:3-6` 等 | 生产主机 IP / SSH 私钥路径硬编码入库，私钥位于全用户可读目录 | ⏳ 未处理（需用户轮换已入库私钥）|
+| D-4 | 供应链 | `apply-beta-singbox.ps1:3-6` 等 | 主机 IP / SSH 私钥路径硬编码入库，私钥位于全用户可读目录 | ☑️ 已降级（目标主机仅内网可达，见 §八）|
 | D-5 | 供应链 | `server/*.Dockerfile` | 服务端镜像按可变 tag 而非 digest 固定；客户端/服务端 rclone 版本不一致 | ✅ 已修复 |
 | Q-1 | 全局 | server.js / serverAdmin.js / clientServer.js / app.js | 超大 god 文件，职责过载 | ⏳ 未处理 |
 | Q-2 | 全局 | `maskSecret`、`summarizeAdminSyncSpace` 等 | 重复代码与死代码/死导入 | ✅ 已修复（见 §八）|
@@ -201,7 +201,7 @@ E-1：主窗口 `setWindowOpenHandler` 一律 deny，`will-navigate` 仅放行 `
 三份 Dockerfile 与两份 compose 的全部基础镜像（node/caddy/minio/mc/sing-box/baseimage-alpine）改为 `tag@digest` 双钉定（digest 为实取的 manifest-list digest，可经 `.env` 的 `*_IMAGE_DIGEST` 覆盖）；appliance 内置 rclone 从 1.71.1 升到 1.74.3 与客户端 `binaries.lock.json` 对齐（审查条目后半条），composeAudit 强制校验两者一致，lock 升级而 appliance 忘改会直接审计失败。**限制**：沙箱无 docker，镜像可拉取性与 appliance rclone 1.74.3 运行行为需部署机/N1 冒烟确认。
 
 ### 仍待处理
-C-5（本地鉴权 token，涉及产品交互决策）、D-4、Q-1（god 文件拆分，建议单独排期）。其中 **D-4 需用户本人处理**：已入库的 SSH 私钥必须轮换，代码层面无法修复。Q-2 已于 2026-07-28 完成，见 §八。
+C-5（本地鉴权 token，涉及产品交互决策）、Q-1（god 文件拆分，建议单独排期）。D-4 已按实际部署形态降级为维护期事项，Q-2 已于 2026-07-28 完成，两者均见 §八。
 
 ---
 
@@ -220,6 +220,11 @@ C-5（本地鉴权 token，涉及产品交互决策）、D-4、Q-1（god 文件�
 
 ### Q-2 ✅ 重复实现与死导入
 `b3a48d4`。`maskSecret` 与 `summarizeAdminSyncSpace` 在 `src/core/serverAdmin.js` 与 `src/server.js` 各有一份独立定义，其中脱敏函数靠注释"keep in sync"维持一致——任一侧改动都会让管理响应脱敏产生分歧。已收敛为 core 单一来源并从 `core/index.js` 导出，`server.js` 改为导入。同时清理 4 处死导入：`clientServer.js` 与 `server.js` 的 `normalizeBandwidthLimit`、`serverAdmin.js` 的 `normalizeClaimCode`、`prepare-pilot-wave.mjs` 的 `dirname`。
+
+### D-4 ☑️ 按实际部署形态降级
+原报告将 D-4 列为"唯一开放的真实安全风险"，前提是硬编码的主机可从公网访问。经确认该 N1 主机**仅内网可达、无公网入口**，该前提不成立：利用这把 SSH 私钥的先决条件是攻击者已经进入内网，此时其掌握的手段通常已远超一把部署密钥。因此按实际暴露面降级为维护期事项，不再作为紧急阻塞项。
+
+仍建议在某次维护窗口完成轮换，理由不是当下风险，而是私钥引用已进入 git 历史：一旦该仓库开源、转手或被镜像，历史中的引用无法追溯收回。轮换的关键动作是**删除服务器 `~/.ssh/authorized_keys` 中的旧公钥**——只生成新密钥而不作废旧钥等于未轮换。
 
 ### 发布与 CI 分工收紧
 `ac968ea`、`34406fe`。主仓日常只跑 `ci:verify`，不构建 Windows 包；发布改为手动、按不可变 tag 触发。Actions Artifact 保留期由 14 天降为 2 天，且不再上传 release bundle 与报告目录（权威副本在 `Syncraft-client` Release），避免账号 Actions 存储被反复占满。
