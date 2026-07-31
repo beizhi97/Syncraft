@@ -64,7 +64,7 @@ Syncraft 的安全基线**明显高于同类 MVP 平均水平**，值得肯定�
 | D-4 | 供应链 | `apply-beta-singbox.ps1:3-6` 等 | 生产主机 IP / SSH 私钥路径硬编码入库，私钥位于全用户可读目录 | ⏳ 未处理（需用户轮换已入库私钥）|
 | D-5 | 供应链 | `server/*.Dockerfile` | 服务端镜像按可变 tag 而非 digest 固定；客户端/服务端 rclone 版本不一致 | ✅ 已修复 |
 | Q-1 | 全局 | server.js / serverAdmin.js / clientServer.js / app.js | 超大 god 文件，职责过载 | ⏳ 未处理 |
-| Q-2 | 全局 | `maskSecret`、`summarizeAdminSyncSpace` 等 | 重复代码与死代码/死导入 | ⏳ 未处理 |
+| Q-2 | 全局 | `maskSecret`、`summarizeAdminSyncSpace` 等 | 重复代码与死代码/死导入 | ✅ 已修复（见 §八）|
 
 ---
 
@@ -201,9 +201,30 @@ E-1：主窗口 `setWindowOpenHandler` 一律 deny，`will-navigate` 仅放行 `
 三份 Dockerfile 与两份 compose 的全部基础镜像（node/caddy/minio/mc/sing-box/baseimage-alpine）改为 `tag@digest` 双钉定（digest 为实取的 manifest-list digest，可经 `.env` 的 `*_IMAGE_DIGEST` 覆盖）；appliance 内置 rclone 从 1.71.1 升到 1.74.3 与客户端 `binaries.lock.json` 对齐（审查条目后半条），composeAudit 强制校验两者一致，lock 升级而 appliance 忘改会直接审计失败。**限制**：沙箱无 docker，镜像可拉取性与 appliance rclone 1.74.3 运行行为需部署机/N1 冒烟确认。
 
 ### 仍待处理
-C-5（本地鉴权 token，涉及产品交互决策）、D-4、Q-1、Q-2（重构类，建议单独排期）。其中 **D-4 需用户本人处理**：已入库的 SSH 私钥必须轮换，代码层面无法修复。
+C-5（本地鉴权 token，涉及产品交互决策）、D-4、Q-1（god 文件拆分，建议单独排期）。其中 **D-4 需用户本人处理**：已入库的 SSH 私钥必须轮换，代码层面无法修复。Q-2 已于 2026-07-28 完成，见 §八。
 
 ---
 
-*本报告为静态白盒审查结论，行号基于 2026-07-25 审查时的代码状态（修复后行号已变动，修复情况见 §六、§七）。PowerShell 相关修复（D-2/D-3）与 Docker 镜像钉定（D-5）在 Linux 沙箱只能审读+源码钉定，建议在 Windows CI / 部署机上各跑一次完整验证。*
+## 八、跨平台修复与 Q-2 清理（2026-07-27 至 2026-07-28）
+
+安全加固结项后，主仓 Windows CI 暴露出一批只在真实 Windows 运行时出现的问题。它们不属于原审查条目，但同属正确性缺陷，与 Q-2 一并在此记录。基线提交 `b3a48d4`，对应不可变 tag `v0.3.0-rc.2`，Windows CI 全绿（411 用例 + 合同审计 + Compose 审计）。
+
+### 子进程输出流：真实缺陷
+`3155242` 修复 bisync 冲突丢失。旧实现把 stdout 与 stderr 拼进同一解析缓冲区，当冲突行在 stdout 中被分块、期间又有 stderr 诊断写入时，`file changed on both sides - conflict` 再也无法匹配，冲突计数归零。改为按 stream 维护独立有界上下文；`ManagedProcess` 另外缓存异步 `onStarted` 建立运行上下文前到达的输出并按序回放，且两条流都结束后才向 `onExit` 提交最终指标。这是会影响真实用户冲突可见性的缺陷，不是测试问题。
+
+### 心跳并发与可见性：真实缺陷
+`2d41c23` 与 `b3a48d4` 修复两点。周期 tick、导入完成、同步收尾可能同时发心跳，旧实现允许重叠，响应顺序与请求顺序无关；现用 `heartbeatInFlight` 去重串行化。更重要的是成功心跳的发布顺序：必须先 `saveLastSuccessfulHeartbeat` 落盘，再让 `lastHeartbeat` 与 `lastSuccessfulHeartbeat` 一起可见，否则 `/api/client/status` 与同步兼容性闸门可能观察到一个重启后无法从磁盘恢复的"成功"状态。
+
+### 平台差异导致的测试不可靠：夹具问题
+三处测试依赖了 Windows 与 POSIX 行为不一致的机制，已改为确定性方式：Windows 的 Node `SIGTERM` 是不保证异步 JS 清理完成的终止模拟，改用产品支持的 loopback shutdown 端点验证受管子进程回收（`1086cb6`）；"重命名正在使用的 exe 以令下次 spawn 失败"在 Windows 不成立，改为仅测试环境显式开启的 `testSpawnFailure` 注入（`a2c591b`）；malformed 2xx 测试不再以毫秒 `sentAt` 作为成功快照身份。
+
+### Q-2 ✅ 重复实现与死导入
+`b3a48d4`。`maskSecret` 与 `summarizeAdminSyncSpace` 在 `src/core/serverAdmin.js` 与 `src/server.js` 各有一份独立定义，其中脱敏函数靠注释"keep in sync"维持一致——任一侧改动都会让管理响应脱敏产生分歧。已收敛为 core 单一来源并从 `core/index.js` 导出，`server.js` 改为导入。同时清理 4 处死导入：`clientServer.js` 与 `server.js` 的 `normalizeBandwidthLimit`、`serverAdmin.js` 的 `normalizeClaimCode`、`prepare-pilot-wave.mjs` 的 `dirname`。
+
+### 发布与 CI 分工收紧
+`ac968ea`、`34406fe`。主仓日常只跑 `ci:verify`，不构建 Windows 包；发布改为手动、按不可变 tag 触发。Actions Artifact 保留期由 14 天降为 2 天，且不再上传 release bundle 与报告目录（权威副本在 `Syncraft-client` Release），避免账号 Actions 存储被反复占满。
+
+---
+
+*本报告为静态白盒审查结论，行号基于 2026-07-25 审查时的代码状态（修复后行号已变动，修复情况见 §六、§七、§八）。PowerShell 相关修复（D-2/D-3）与 Docker 镜像钉定（D-5）在 Linux 沙箱只能审读+源码钉定，已由 Windows CI 覆盖 PowerShell 路径；D-5 的镜像可拉取性仍建议在部署机确认。*
 

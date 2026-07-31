@@ -1,10 +1,11 @@
 # Syncraft 安全加固工程结项交付报告
 
-- **项目**：Syncraft（`singbox-folder-sync` v0.3.0-rc.1）
-- **工程周期**：2026-07-25 审查 → 2026-07-26 收尾
-- **范围**：白盒安全审查（约 1.4 万行 JS）+ P1 全量修复 + P2 全量可代码修复项
-- **结项状态**：✅ 代码工程全部完成；4 项遗留均需用户决策/行动（见 §四）
-- **配套文档**：审查报告与逐项实施记录见 `SECURITY_REVIEW_2026-07-25.md`（§六 P1、§七 P2）
+- **项目**：Syncraft（`singbox-folder-sync`）
+- **工程周期**：2026-07-25 审查 → 2026-07-26 安全结项 → 2026-07-28 跨平台修复与 CI 验证
+- **范围**：白盒安全审查（约 1.4 万行 JS）+ P1 全量修复 + P2 全量可代码修复项 + Q-2 清理
+- **验证基线**：提交 `b3a48d4`，不可变 tag `v0.3.0-rc.2`，Windows CI 全绿
+- **结项状态**：✅ 代码工程全部完成；剩余遗留均需用户决策/行动（见 §四）
+- **配套文档**：审查报告与逐项实施记录见 `SECURITY_REVIEW_2026-07-25.md`（§六 P1、§七 P2、§八 跨平台与 Q-2）
 
 ---
 
@@ -63,20 +64,17 @@
 
 ---
 
-## 三、结项测试结论（2026-07-26，Linux 沙箱）
+## 三、结项测试结论
 
-全部 10 个测试文件 410 条用例逐块跑完：
+### Windows CI（权威结论，2026-07-28）
 
-| 套件 | 结果 | 失败说明 |
-|------|------|----------|
-| tests/core.test.js | 175/194 | 19 个失败全部为 `spawn powershell ENOENT`（沙箱无 PowerShell，覆盖 N1 部署/preflight/release bundle/二进制下载器/构建指纹/PS 密钥扫描器），属已知环境限制 |
-| tests/contract-http.test.js | 41/41 | — |
-| tests/client.test.js | 101/101 | 含随 C-7 转绿的历史长红诊断包用例 |
-| tests/client-http.test.js | 40/41 | 唯一失败 `bisync conflict split across real process output chunks`，已在无本工程改动的 HEAD 上复测同样红，属既有问题非回归 |
-| server-state-lock / singbox-control / appliance-health / appliance-deployment / s3-endpoint / ui-dom-contract | 33/33 | — |
-| `audit:release` / `audit:compose` | 通过 | — |
+基线提交 `b3a48d4`（tag `v0.3.0-rc.2`）在 GitHub Actions Windows runner 上 **411 条用例全部通过**，`audit:release` 与 `audit:compose` 均通过。这是唯一的全量判定依据：此前 Linux 沙箱无法覆盖 PowerShell 路径与若干 Windows 运行时行为，正是完整 CI 才暴露出 §八 记录的子进程输出流与心跳并发缺陷。
 
-**结论：390/410 通过，20 个失败全部为环境限制或既有长红，本工程零回归。**
+### Linux 沙箱（开发期辅助）
+
+沙箱缺少 PowerShell，`tests/core.test.js` 中 19 条依赖 PowerShell 的用例恒为 `spawn powershell ENOENT`；这些路径已由 Windows CI 覆盖。其余套件在沙箱内全绿，可用于修改后的快速回归，但不能替代 Windows 全量结论。
+
+**结论：Windows CI 411/411 通过，本工程零回归。**
 
 ---
 
@@ -87,13 +85,13 @@
 | **D-4 轮换已入库 SSH 私钥** | ⚠️ 唯一开放的真实安全风险 | 私钥已进 git 历史，代码不可修复。请在服务器侧作废旧钥换新钥，并考虑清理 git 历史或视该仓库为已泄露私钥的载体。**建议最优先处理** |
 | D-1 残留：Authenticode 签名 | 待决策 | 需购买代码签名证书；分离式签名（minisign 链）已落地可先行使用 |
 | C-5 客户端本地 API 鉴权 token | 待产品决策 | 核心问题是 token 如何交给浏览器 UI（Electron preload 注入 vs 纯浏览器首启配对）。方向确定后可实施 |
-| Q-1 / Q-2 重构 | 低优先级 | god 文件拆分与死代码清理，无安全收益，建议稳定后单独排期 |
+| Q-1 重构 | 低优先级 | god 文件拆分（`server.js` / `serverAdmin.js` / `clientServer.js` / `app.js`），建议单独排期。Q-2 已完成，见审查报告 §八 |
 
-## 五、待用户环境验证清单（沙箱无法覆盖的部分）
+## 五、待用户环境验证清单
 
-1. **Windows 全量测试**：`pnpm test`（或按套件跑），重点确认 19 条 PowerShell 用例（D-2/D-3 的实际执行路径）转绿。
-2. **部署机 / N1 冒烟**：确认 digest 钉定后的镜像可正常拉取构建（`docker compose build/pull`）；appliance 内 rclone 1.74.3 运行正常；升级前先在 `.env` 设置 `MINIO_ROOT_PASSWORD` 强密码（新 compose 缺失即拒绝启动）。
-3. **既有长红排查（可选）**：`client-http` 的 bisync 分块用例在真实 Windows 环境验证是否为绿；若仍红按产品 bug 单独立项。
+1. ~~**Windows 全量测试**~~：已完成。`b3a48d4` 在 Windows CI 上 411/411 通过，含 D-2/D-3 的 PowerShell 执行路径。
+2. **部署机 / N1 冒烟**（仍待确认）：确认 digest 钉定后的镜像可正常拉取构建（`docker compose build/pull`）；appliance 内 rclone 1.74.3 运行正常；升级前先在 `.env` 设置 `MINIO_ROOT_PASSWORD` 强密码（新 compose 缺失即拒绝启动）。
+3. ~~**bisync 分块用例排查**~~：已定位并修复，为 stdout/stderr 共用解析缓冲导致的真实缺陷，见审查报告 §八。
 
 ---
 
