@@ -36,6 +36,7 @@
     "trial:create-t-key": "node scripts/create-trial-t-key.mjs",
     "trial:assist": "node scripts/internal-trial-assistant.mjs",
     "trial:client-runner": "node scripts/client-trial-runner.mjs",
+    "docs:seed-screenshot": "node scripts/seed-doc-screenshot.mjs",
     "pilot:prepare": "node scripts/prepare-pilot-wave.mjs",
     "pilot:summary": "node scripts/pilot-summary.mjs",
     "test": "node --test \"tests/*.test.js\""

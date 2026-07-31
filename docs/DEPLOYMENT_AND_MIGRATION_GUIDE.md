@@ -373,7 +373,7 @@ dist/SyncraftClient.zip
 
 - 在用户可写、非临时目录解压，例如 `%LOCALAPPDATA%\Syncraft\`、`C:\Tools\Syncraft\` 或现场约定的软件目录；不要直接在 ZIP、下载临时目录或会被清理的目录中运行。
 - 保留 ZIP 内根目录结构，桌面包入口为 `SyncraftDesktop/Syncraft.exe`，旧式便携包入口为 `SyncraftClient/Syncraft.exe`。
-- 首次启动后在设置中导入服务端生成的 SyncKey，再配置本地文件夹、同步方向、计划任务、并行文件和单文件线程。
+- 首次启动后在设置中导入服务端生成的 SyncKey，再配置本地文件夹与计划任务。同步空间和远端目标由 SyncKey 绑定，同步方向由该空间授权给本设备的角色决定，客户端不提供手工选择入口；带宽限制在“高级参数”中。rclone 的并发文件数与单文件线程数不再由用户填写，改用固定默认值。
 
 升级：
 

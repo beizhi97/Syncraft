@@ -9,11 +9,13 @@
 - 客户端内置 sing-box 和 rclone。
 - 客户端可启动本地隧道并运行 rclone 同步。
 - 客户端主界面显示同步速度、进度、当前文件。
-- 支持并行文件和单文件多线程配置。
+- rclone 并发文件数与单文件多线程仍是真实参数，但已从客户端主界面移除，由 profile `defaults` 或默认值决定。
 - 客户端设置页可查看本机/服务端协议、发布包 manifest 状态、组件状态、本地状态、密钥库、心跳、同步历史和脱敏诊断包。
 - Windows 桌面包会生成目录包、ZIP、ZIP SHA256 sidecar 和 `release-manifest.json`，并由 smoke/preflight 校验关键文件、Electron 安全桥、runtime 状态排除和 manifest 哈希；旧式 Node 便携包也会生成独立 `release-manifest.json`、ZIP、ZIP SHA256 sidecar，并由同一 smoke/preflight 按便携布局校验。
 
 2026-07-08 当前验收状态：
+
+> 以下是 2026-07-08 当时的验收记录，按当时形态描述，不代表现状。其中「任务表单支持远端子目录和设备/共享空间选择」已在后续改动中移除：同步空间与远端目标改由 SyncKey 绑定，客户端不再提供选择入口。现状见 `README.md` 与 `docs/SOFTWARE_DESIGN_SPEC.md`。
 
 - 双端协议入口已扩展为 31 个机器可读请求 schema；客户端本地 `/api/binaries/check`、`/api/client/shutdown`、`/api/singbox/stop`、`/api/sync/stop` 也纳入空 JSON 信封校验。
 - 客户端状态轮询已避免后台请求堆积和旧响应覆盖新状态，并补充行为级回归覆盖 in-flight 复用和乱序响应不覆盖新 DOM。

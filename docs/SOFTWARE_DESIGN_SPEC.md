@@ -152,13 +152,14 @@ Legacy / development Docker Compose
 主界面只保留同步任务：
 
 - 本地文件夹
-- 同步方向
-- 计划任务：手动、每隔 N 分钟、每天 HH:MM
-- 并行文件
-- 单文件线程
+- 同步空间：只读，显示服务端签发的 `syncSpace.syncId` 与用途
+- 同步方向：只列出 `authorization.directions`，单一方向时置灰并说明由服务端决定
+- 计划任务：手动、每隔 N 分钟、每天 HH:MM、启动时
 - 同步速度、进度、当前文件
 - 最近一次同步结果
 - 高级参数折叠区：镜像同步、带宽限制
+
+并行文件数与单文件线程数不再出现在主界面。它们仍是 rclone 的真实参数，但由 profile 的 `defaults` 继承或使用固定默认值——这两个值需要按网络与磁盘性能调，普通用户没有判断依据，摆在必填流程里只会让人乱填。
 
 本地文件夹选择：
 
@@ -222,8 +223,7 @@ Legacy / development Docker Compose
 
 说明：
 
-- `并行文件` 对应 `--transfers`。
-- `单文件线程` 对应 `--multi-thread-streams`。
+- `--transfers` 由 `job.transfers` 决定，默认 4；`--multi-thread-streams` 由 `job.multiThreadStreams` 决定。两者不再出现在客户端主界面，值来自 profile `defaults` 或默认值。
 - 小于 `16M` 的文件不会启用单文件多线程。
 - `带宽限制` 位于高级参数区，使用开关 + 模式选择 + 正整数 + KB/s、MB/s、GB/s 单位选择；固定模式生成 `500k`、`10M`、`1G` 这类 rclone 参数，时间段模式生成 `08:00,10M 18:00,off` 这类两段式时间表。
 - `--stats-one-line` 已关闭，以便解析当前正在传输的文件。
