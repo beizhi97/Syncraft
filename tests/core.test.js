@@ -374,11 +374,11 @@ test("API matrix covers implemented routes and UI consumers", async () => {
   assert.match(matrix, /`smoke` 表示验收脚本会直接调用/);
   assert.match(
     matrix,
-    /\| POST \| `\/api\/admin\/users\/create` \| 管理 token \| 调试\/运维入口 \| 低层创建或登记设备；服务端控制台生成设备应使用 `\/api\/claims\/create` \|/
+    /\| POST \| `\/api\/admin\/users\/create` \| 管理 token \| 服务端控制台、调试\/运维入口 \|/
   );
   assert.doesNotMatch(
     matrix,
-    /\| POST \| `\/api\/admin\/users\/create` \| 管理 token \| 服务端控制台 \|/
+    /服务端控制台生成设备应使用 `\/api\/claims\/create`/
   );
   assert.match(matrix, /\| GET \| `\/api\/admin\/singbox\/config` \| 管理 token \| 服务端控制台、smoke、运维只读入口 \|/);
   assert.match(matrix, /\| POST \| `\/api\/vless\/parse` \| 管理 token \| smoke、调试\/兼容入口 \|/);
@@ -1253,8 +1253,14 @@ test("runtime contracts enforce admin state summary shape", () => {
     }, "claimRedeemProfileDefaultsExtra"),
     /claimRedeemProfileDefaultsExtra\.defaults keys/
   );
+  // /api/profile/encode 走 buildServerIssuedProfile，由请求体 + adminState 默认值构造，
+  // 全程不查同步空间成员关系，所以结构上产不出 syncSpace/authorization。
+  // 这里从 createdClaim.profile 派生只是为了复用一份合法的存储/隧道字段，
+  // 必须显式剥掉这两块——normalizeImportProfile 会原样保留它们（客户端导入时要读，
+  // 那是对的），留着就等于让 fixture 断言一个真实入口永远不会产生的形状。
+  const { syncSpace: _unusedSyncSpace, authorization: _unusedAuthorization, ...claimProfileWithoutBinding } = createdClaim.profile;
   const profileEncodeProfile = normalizeImportProfile({
-    ...createdClaim.profile,
+    ...claimProfileWithoutBinding,
     source: {
       type: "profile",
       server: "https://server.example"
@@ -3068,7 +3074,7 @@ test("runtime diagnostics expose app and protocol versions", () => {
   assert.equal(diagnostics.buildTime, "2026-07-04T00:00:00.000Z");
   assert.deepEqual(diagnostics.protocols, {
     claim: 1,
-    profile: 1,
+    profile: 2,
     adminState: 1,
     clientStatus: 1,
     heartbeat: 1
@@ -3210,6 +3216,9 @@ test("runtime diagnostics treat partial protocol diagnostics as missing", () => 
   assert.deepEqual(
     compatibility.issues.map((issue) => [issue.field, issue.type, issue.remote]),
     [
+      // profile 已升到 v2，所以这个 0.0.9 客户端除了缺三个字段之外，
+      // 还真的落后一个 profile 版本。action 仍由缺字段主导。
+      ["profile", "remote_older", 1],
       ["adminState", "remote_missing", null],
       ["clientStatus", "remote_missing", null],
       ["heartbeat", "remote_missing", null]
@@ -3279,6 +3288,8 @@ test("legacy devices migrate to private sync spaces without changing their stora
     policy: {
       multiWriter: false
     },
+    // 私有空间只有一个 owner 成员，保留双向以维持「换机恢复」。见 src/core/syncSpaceMode.js。
+    mode: "collaboration",
     status: "active",
     version: 1,
     createdAt: state.users[0].createdAt
@@ -4147,9 +4158,9 @@ test("server smoke script covers deployment health and management checks", async
   assert.match(contract, /管理摘要的 `users\[\]` 是服务端控制台管理设备凭据和 sing-box 用户的运维列表合同/);
   assert.match(contract, /admin user summary contract/);
   assert.match(contract, /`users\[\]` 可以包含已删除用户/);
-  assert.match(contract, /`POST \/api\/admin\/users\/create` 是低层调试\/运维入口/);
-  assert.match(contract, /当前服务端控制台的产品化创建设备入口是 `POST \/api\/claims\/create`/);
-  assert.match(contract, /避免出现“已登记但没有可导入 SyncKey”的半成品设备/);
+  assert.match(contract, /服务端控制台「设备 → 新建设备」是它的产品化入口/);
+  assert.match(contract, /不是建设备的正式入口/);
+  assert.match(contract, /为避免出现“已登记但没有可导入 SyncKey”的半成品设备，控制台创建设备成功后必须把设备名带入 SyncKey 签发流程并提示下一步/);
   assert.match(contract, /管理摘要的 `devices\[\]` 是服务端控制台和客户端心跳回显共同使用的设备摘要合同/);
   assert.match(contract, /顶层 `syncState` 必须与 `sync\.state` 完全一致/);
   assert.match(contract, /admin device summary contract/);
@@ -9417,9 +9428,9 @@ test("release audit fails when smoke protocol alignment docs drift", async () =>
       ["admin sing-box mark-applied response contract", "admin sing-box mark-applied response shape"],
       ["admin user write response contract", "admin user write response shape"],
       ["admin user delete response contract", "admin user delete response shape"],
-      ["`POST /api/admin/users/create` 是低层调试/运维入口", "`POST /api/admin/users/create` 是控制台入口"],
-      ["当前服务端控制台的产品化创建设备入口是 `POST /api/claims/create`", "当前服务端控制台的产品化创建设备入口是 `POST /api/admin/users/create`"],
-      ["避免出现“已登记但没有可导入 SyncKey”的半成品设备", "允许登记没有可导入 SyncKey 的设备"],
+      ["服务端控制台「设备 → 新建设备」是它的产品化入口", "服务端控制台不提供建设备入口"],
+      ["不是建设备的正式入口", "也是建设备的正式入口"],
+      ["控制台创建设备成功后必须把设备名带入 SyncKey 签发流程并提示下一步", "控制台创建设备后无需引导下一步"],
       ["`/api/vless/parse` 必须遵守 vless parse response contract", "`/api/vless/parse` 返回兼容形状"],
       ["`/api/singbox/client-config` 必须遵守 singbox client config response contract", "`/api/singbox/client-config` 返回兼容形状"],
       ["`vlessParse.*`、`singboxClientConfig.*` 或 `jobsPreview.*` 字段路径", "`jobsPreview.*` 字段路径"],
@@ -10301,9 +10312,11 @@ test("release audit fails when runtime diagnostics protocol versions are missing
     );
     const protocolBaselinePath = join(tempRoot, "docs", "protocol", "schemas", "protocol-v1-baseline.json");
     const protocolBaseline = await readFile(protocolBaselinePath, "utf8");
+    // 基线的 protocols 必须停在 1；运行时超前只能在 supersededProtocols 里声明一次。
+    // 直接把基线改成 2 会被审计拒绝，这正是这条规则要防的假陈述。
     await writeFile(
       protocolBaselinePath,
-      protocolBaseline.replace('"heartbeat": 1\n  },', '"heartbeat": 2\n  },'),
+      protocolBaseline.replace('"supersededProtocols": {\n    "profile": 2', '"supersededProtocols": {\n    "heartbeat": 2,\n    "profile": 2'),
       "utf8"
     );
     const validProtocolVersion = await runReleaseAudit(tempRoot);
@@ -10433,8 +10446,8 @@ export function auditFixtureRoute(req, url) {
     await writeFile(
       join(tempRoot, "docs", "API_MATRIX.md"),
       matrix.replace(
-        "| POST | `/api/admin/users/create` | 管理 token | 调试/运维入口 | 低层创建或登记设备；服务端控制台生成设备应使用 `/api/claims/create` |",
-        "| POST | `/api/admin/users/create` | 管理 token | 服务端控制台 | 创建或登记设备 |"
+        "| POST | `/api/admin/users/create` | 管理 token | 服务端控制台、调试/运维入口 |",
+        "| POST | `/api/admin/users/create` | 管理 token | 调试/运维入口 |"
       ),
       "utf8"
     );
@@ -10442,7 +10455,7 @@ export function auditFixtureRoute(req, url) {
     assert.notEqual(misclassifiedAdminUserCreate.code, 0);
     assert.match(
       misclassifiedAdminUserCreate.stderr,
-      /docs\/API_MATRIX\.md must mention \| POST \| `\/api\/admin\/users\/create` \| 管理 token \| 调试\/运维入口/
+      /docs\/API_MATRIX\.md must classify POST \/api\/admin\/users\/create as a server console consumer/
     );
 
     await writeFile(join(tempRoot, "docs", "API_MATRIX.md"), matrix, "utf8");
@@ -12060,7 +12073,7 @@ test("admin summary exposes runtime app version for deployment verification", ()
   assert.equal(summary.appVersion, "0.3.0-rc.1-test");
   assert.equal(summary.diagnostics.role, "server");
   assert.equal(summary.diagnostics.version, "0.3.0-rc.1-test");
-  assert.equal(summary.diagnostics.protocols.profile, 1);
+  assert.equal(summary.diagnostics.protocols.profile, 2);
   assert.equal(summary.diagnostics.protocols.heartbeat, 1);
 });
 

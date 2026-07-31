@@ -1,4 +1,5 @@
 import { createHttpError } from "./errors.js";
+import { requireSyncSpaceMode } from "./syncSpaceMode.js";
 
 export const PROTOCOL_REQUESTS = Object.freeze({
   CLIENT_BINARIES_CHECK: "client.binariesCheck",
@@ -327,6 +328,12 @@ function parseServerAdminSyncSpaceCreateRequest(body) {
   copyOptionalStringFields(input, output, ["ownerUserId", "syncId"]);
   if (!output.ownerUserId || !output.syncId) {
     throw createHttpError("validation_failed", 400, "admin sync space create request requires ownerUserId and syncId");
+  }
+  // mode 必须显式放行，否则会在到达 createSyncSpace 之前被白名单静默丢弃。
+  // 只在调用方真的给了值时才校验并带上：省略是兼容旧调用方，填错是管理员意图不明，
+  // 两者必须区分。默认值仍然只由 createSyncSpace 一处决定，这里不复制那个决定。
+  if (input.mode != null && String(input.mode).trim() !== "") {
+    output.mode = requireSyncSpaceMode(input.mode);
   }
   return output;
 }

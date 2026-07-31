@@ -3,13 +3,9 @@ const fields = {
   claimCode: $("claimCode"),
   localPath: $("localPath"),
   direction: $("direction"),
-  remoteFolder: $("remoteFolder"),
-  serverSpace: $("serverSpace"),
   scheduleMode: $("scheduleMode"),
   scheduleInterval: $("scheduleInterval"),
   scheduleTime: $("scheduleTime"),
-  transfers: $("transfers"),
-  streams: $("streams"),
   destructiveSync: $("destructiveSync"),
   bisyncInitialMode: $("bisyncInitialMode"),
   bandwidthLimitEnabled: $("bandwidthLimitEnabled"),
@@ -39,10 +35,6 @@ const clientJobDraftFields = [
   "name",
   "localPath",
   "direction",
-  "remoteFolder",
-  "serverSpace",
-  "transfers",
-  "streams",
   "dryRun",
   "destructiveSync",
   "safety",
@@ -86,8 +78,6 @@ on("shutdownBtn", "click", shutdownClient);
 on("chooseFolderBtn", "click", chooseLocalFolder);
 on("direction", "change", syncDestructiveAvailability);
 on("direction", "change", syncBidirectionalAvailability);
-on("remoteFolder", "input", updateRemoteTargetDraft);
-on("serverSpace", "change", updateRemoteTargetDraft);
 on("scheduleMode", "change", syncScheduleControls);
 on("destructiveSync", "change", handleDestructiveToggle);
 on("bandwidthLimitEnabled", "change", syncBandwidthAvailability);
@@ -170,6 +160,9 @@ async function loadStatusOnce(requestId) {
 
     renderProfileSummary(status.profileSummary, status.heartbeat);
     renderRemoteTargetSummary(status.jobs[status.jobs.length - 1] || currentJobDraft, status.profileSummary);
+    // 授权可能在导入新 SyncKey 后变化，所以每次状态刷新都重算方向可选项，
+    // 不能只在 writeJob 里做——首次导入时 writeJob 可能已经跑过了。
+    applySyncDirectionAuthorization();
 
     if (status.jobs.length && !$("localPath").dataset.loaded) {
       writeJob(status.jobs[status.jobs.length - 1]);
@@ -322,18 +315,18 @@ async function runSync() {
     if (!confirmed) return;
     if (lastPreviewJobFingerprint !== jobPreviewFingerprint(confirmed.job)) {
       const previewConfirmed = await requestConfirmation({
-        title: "确认远端目标",
+        title: "确认同步范围",
         body: [
           "当前任务尚未按最新填写内容生成预览。",
           `本地：${confirmed.job.localPath || "未选择"}`,
           `方向：${formatDirection(confirmed.job.direction)}`,
-          `远端目录：${confirmed.job.remoteFolder || "SyncKey 设备目录"}`,
-          "建议先生成 rclone 命令预览，确认最终远端路径。"
+          `同步空间：${formatSyncSpaceName(latestStatus?.profileSummary?.syncSpace)}`,
+          "建议先生成 rclone 命令预览，确认最终同步范围。"
         ].join("\n"),
         submitText: "仍然开始同步"
       });
       if (!previewConfirmed) {
-        setAction("已取消同步。请先生成预览并确认远端目录。", "bad");
+        setAction("已取消同步。请先生成预览并确认同步范围。", "bad");
         return;
       }
     }
@@ -575,15 +568,10 @@ async function chooseLocalFolder() {
 
 function readJob() {
   const base = currentJobDraft && typeof currentJobDraft === "object" ? currentJobDraft : {};
-  const remoteFolder = readRemoteFolderField();
   return {
     ...base,
-    direction: fields.direction.value,
+    direction: readDirectionField(),
     localPath: fields.localPath.value,
-    remoteFolder,
-    serverSpace: fields.serverSpace.value,
-    transfers: readPositiveIntegerField(fields.transfers, "并行文件", 32),
-    streams: readPositiveIntegerField(fields.streams, "单文件线程", 32),
     destructiveSync: fields.direction.value !== "bidirectional" && fields.destructiveSync.checked,
     safety: fields.direction.value === "bidirectional"
       ? { bidirectional: { initialMode: fields.bisyncInitialMode.value || "newer" } }
@@ -593,32 +581,29 @@ function readJob() {
   };
 }
 
-function readRemoteFolderField() {
-  const value = fields.remoteFolder.value.trim();
-  if (!value) {
-    if (fields.serverSpace.value === "shared") {
-      const error = new Error("共享空间必须填写远端子目录，避免不同设备写入同一根目录。");
-      error.code = "shared_remote_folder_required";
-      throw error;
-    }
-    return "";
-  }
-  if (/^[A-Za-z]:/.test(value) || value.startsWith("/") || value.startsWith("\\") || value.split(/[\\/]+/).includes("..")) {
-    const error = new Error("远端目录只能填写相对目录，不能使用盘符、绝对路径或 ..。");
-    error.code = "invalid_remote_folder";
+// 方向是服务端授权的一部分，不是本地偏好。这里再挡一次，避免用户改 DOM 后
+// 把一个 MinIO 一定会拒的方向送进执行链路，只留下一条难懂的 AccessDenied。
+function readDirectionField() {
+  const value = fields.direction.value;
+  const allowed = allowedSyncDirections();
+  if (allowed && !allowed.includes(value)) {
+    const error = new Error("这台设备在当前同步空间没有该方向的授权，请向管理员索取新的 SyncKey。");
+    error.code = "sync_direction_not_authorized";
     throw error;
   }
   return value;
+}
+
+// null 表示「未知授权」：legacy/离线 profile 或还没导入，此时不施加额外限制。
+function allowedSyncDirections() {
+  const directions = latestStatus?.profileSummary?.authorization?.directions;
+  return Array.isArray(directions) && directions.length > 0 ? directions : null;
 }
 
 function jobPreviewFingerprint(job = {}) {
   return JSON.stringify({
     direction: job.direction || "",
     localPath: job.localPath || "",
-    remoteFolder: job.remoteFolder || "",
-    serverSpace: job.serverSpace || "",
-    transfers: job.transfers || 0,
-    streams: job.streams || 0,
     destructiveSync: Boolean(job.destructiveSync),
     bandwidthLimit: job.bandwidthLimit || "off",
     schedule: job.schedule || {}
@@ -692,29 +677,45 @@ function writeJob(job) {
   currentJobDraft = toClientJobDraft(job);
   fields.direction.value = currentJobDraft.direction || fields.direction.value;
   fields.localPath.value = currentJobDraft.localPath || fields.localPath.value;
-  fields.remoteFolder.value = currentJobDraft.remoteFolder || "";
-  fields.serverSpace.value = currentJobDraft.serverSpace || "device";
-  fields.transfers.value = currentJobDraft.transfers || fields.transfers.value;
-  fields.streams.value = currentJobDraft.streams || fields.streams.value;
   fields.destructiveSync.checked = Boolean(currentJobDraft.destructiveSync);
   fields.bisyncInitialMode.value = currentJobDraft.safety?.bidirectional?.initialMode || "newer";
   writeBandwidthLimit(currentJobDraft.bandwidthLimit || "off");
   writeSchedule(currentJobDraft.schedule || { mode: "manual" });
   renderRemoteTargetSummary(currentJobDraft, latestStatus?.profileSummary);
+  applySyncDirectionAuthorization();
   syncDestructiveAvailability();
   syncBidirectionalAvailability();
   syncScheduleControls();
   syncBandwidthAvailability();
 }
 
-function updateRemoteTargetDraft() {
-  const base = currentJobDraft && typeof currentJobDraft === "object" ? currentJobDraft : {};
-  currentJobDraft = {
-    ...base,
-    remoteFolder: fields.remoteFolder.value.trim(),
-    serverSpace: fields.serverSpace.value
-  };
-  renderRemoteTargetSummary(currentJobDraft, latestStatus?.profileSummary);
+// 只展示服务端授权的方向；只有一个方向时不给选择器，因为那不是一个选择。
+function applySyncDirectionAuthorization() {
+  const allowed = allowedSyncDirections();
+  const hint = $("directionFixedHint");
+  for (const option of fields.direction.options) {
+    option.hidden = Boolean(allowed) && !allowed.includes(option.value);
+    option.disabled = option.hidden;
+  }
+  if (!allowed) {
+    fields.direction.disabled = false;
+    if (hint) {
+      hint.hidden = true;
+      hint.textContent = "";
+    }
+    return;
+  }
+  if (!allowed.includes(fields.direction.value)) {
+    fields.direction.value = allowed[0];
+  }
+  const single = allowed.length === 1;
+  fields.direction.disabled = single;
+  if (hint) {
+    hint.hidden = !single;
+    hint.textContent = single
+      ? `该同步空间只授权${formatDirection(allowed[0])}，方向由服务端决定。`
+      : "";
+  }
 }
 
 function toClientJobDraft(job = {}) {
@@ -1150,17 +1151,58 @@ function renderProfileSummaryFromProfile(profile) {
 function renderRemoteTargetSummary(job = {}, profileSummary = null) {
   const target = $("remoteTargetSummary");
   if (!target) return;
-  if (profileSummary || latestStatus?.profileSummary) {
+  const summary = profileSummary || latestStatus?.profileSummary;
+  if (summary) {
     renderSummaryRows(target, [
-      ["授权范围", "整个已授权同步内容"],
-      ["同步 ID", "本地安全摘要提供后显示"],
+      ["同步空间", formatSyncSpaceName(summary.syncSpace)],
+      ["用途", formatSyncSpaceMode(summary.syncSpace?.mode)],
+      ["本设备角色", formatSyncSpaceRole(summary.authorization?.role)],
+      ["授权方向", formatAuthorizedDirections(summary.authorization?.directions)],
       ["执行方式", "预览后再开始"]
     ]);
+    renderSyncSpaceLabel(summary);
     return;
   }
   renderSummaryRows(target, [
     ["状态", "导入 SyncKey 后显示授权内容"]
   ]);
+  renderSyncSpaceLabel(null);
+}
+
+function renderSyncSpaceLabel(summary) {
+  const label = $("syncSpaceSummary");
+  if (!label) return;
+  if (!summary) {
+    label.textContent = "导入 SyncKey 后由服务端决定。";
+    return;
+  }
+  const syncId = summary.syncSpace?.syncId;
+  label.textContent = syncId
+    ? `${syncId}（${formatSyncSpaceMode(summary.syncSpace?.mode)}）`
+    : formatSyncSpaceName(summary.syncSpace);
+}
+
+// 同步空间在界面上只有一个名字：服务端签发的 syncId。
+// 这里是唯一的兜底文案来源——曾经三处各写一句（「未绑定（离线配置）」
+// 「未绑定同步空间（离线配置）」「SyncKey 授权目录」），同一状态三种说法，
+// 正是「同步空间」这个概念在客户端说不清的原因。
+function formatSyncSpaceName(syncSpace) {
+  return syncSpace?.syncId || "未绑定同步空间（离线配置）";
+}
+
+function formatSyncSpaceMode(mode) {
+  return { backup: "备份", distribution: "分发", collaboration: "协作" }[mode] || "未知";
+}
+
+function formatSyncSpaceRole(role) {
+  return { owner: "所有者", writer: "写入者", reader: "只读" }[role] || "未知";
+}
+
+function formatAuthorizedDirections(directions) {
+  if (!Array.isArray(directions) || directions.length === 0) {
+    return "未知（离线配置）";
+  }
+  return directions.map(formatDirection).join("、");
 }
 
 function profileHeartbeatSummary(heartbeat = null) {
@@ -1198,15 +1240,6 @@ function destructiveSyncConfirmationBody(job = {}) {
     `方向：${formatDirection(job.direction)}`,
     "同步内容：当前 SyncKey 已授权内容"
   ].join("\n");
-}
-
-// Kept as a compatibility seam for the confirmation flow; never reveal storage routing.
-function formatRemoteTarget(job = {}) {
-  return "当前 SyncKey 已授权内容";
-}
-
-function formatServerSpace(value) {
-  return value === "shared" ? "共享空间" : "设备空间";
 }
 
 function formatDirection(value) {
@@ -1548,8 +1581,6 @@ function formatError(error) {
     missing_rclone_binary: "客户端缺少 rclone 组件，请重新解压或重新安装。",
     singbox_start_failed: "隧道启动失败，请查看诊断日志。",
     rclone_config_failed: "同步配置写入失败，请检查存储配置和权限。",
-    shared_remote_folder_required: "共享空间必须填写远端子目录，避免不同设备写入同一根目录。",
-    invalid_remote_folder: "远端目录只能填写相对目录，不能使用盘符、绝对路径或 ..。",
     local_host_forbidden: "请求的 Host 不是本机回环地址，已拒绝；请从客户端窗口内操作。",
     local_state_corrupt: "本地状态文件损坏，请先导出诊断包，备份并修复或隔离损坏 JSON 后再按需重新导入 SyncKey。",
     local_read_forbidden: "本地读取请求被拒绝，请从客户端窗口内操作。",
@@ -1571,6 +1602,11 @@ function formatError(error) {
     singbox_restart_unavailable: "服务端未配置隧道重启服务，请联系管理员检查部署。",
     storage_request_failed: "存储服务请求失败，请联系管理员检查 MinIO、地址和密钥。",
     sync_already_running: "已有其他同步任务正在运行，请等待完成后再启动这个任务。",
+    sync_direction_not_authorized: "这台设备在当前同步空间没有该方向的授权，请向管理员索取新的 SyncKey。",
+    sync_id_unavailable: "这个同步空间名称已被占用，请联系管理员。",
+    sync_space_access_denied: "这台设备没有该同步空间的授权，请向管理员索取新的 SyncKey。",
+    sync_space_membership_exists: "这台设备已经是该同步空间的成员。",
+    sync_space_role_not_allowed: "该同步空间的用途不接受这台设备的角色，请联系管理员调整。",
     validation_failed: "输入内容不符合要求，请检查后重试。",
     request_body_too_large: "请求内容过大，请减少输入内容后重试。",
     unsupported_media_type: "请求内容类型不受支持，请刷新页面后重试。",
@@ -1755,14 +1791,6 @@ function formatLocalState(localState) {
     .slice(0, 3);
   const suffix = (localState.files || []).filter((file) => file && file.ok === false).length > broken.length ? " 等" : "";
   return `损坏：${broken.join("、") || "未知"}${suffix}`;
-}
-
-function readPositiveIntegerField(input, label, max) {
-  const value = Number(input.value);
-  if (!Number.isInteger(value) || value < 1 || value > max) {
-    throw new Error(`${label}必须是 1 到 ${max} 之间的整数。`);
-  }
-  return value;
 }
 
 function validInteger(input, fallback, min, max) {

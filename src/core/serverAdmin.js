@@ -9,6 +9,13 @@ import { isUuid, parseVlessUri } from "./vless.js";
 import { createHttpError } from "./errors.js";
 import { PROFILE_VERSION } from "./profileProtocol.js";
 import { sanitizeRemoteName } from "./storage.js";
+import {
+  PRIVATE_SYNC_SPACE_MODE,
+  deriveAuthorization,
+  deriveSyncDirections,
+  normalizeSyncSpaceMode,
+  requireSyncSpaceMode
+} from "./syncSpaceMode.js";
 
 const DEFAULTS = {
   publicServerUrl: "https://pass.971223.xyz:2025",
@@ -282,6 +289,7 @@ function normalizeSyncSpaceState(inputSpaces, inputMemberships, users) {
           prefix: cleanPrefix(storageTarget.prefix)
         },
         policy: { multiWriter: false },
+        mode: normalizeSyncSpaceMode(source.mode),
         status: source.status === "disabled" ? "disabled" : "active",
         version: 1,
         createdAt: normalizeCreatedAt(source.createdAt)
@@ -335,6 +343,8 @@ function normalizeSyncSpaceState(inputSpaces, inputMemberships, users) {
         prefix: cleanPrefix(user.storage.prefix)
       },
       policy: { multiWriter: false },
+      // 既有安装的设备私有空间：保留双向能力，见 syncSpaceMode.js 的 PRIVATE_SYNC_SPACE_MODE。
+      mode: PRIVATE_SYNC_SPACE_MODE,
       status: user.deletedAt || user.enabled === false ? "disabled" : "active",
       version: 1,
       createdAt: user.createdAt
@@ -701,6 +711,11 @@ export function createClaim(state, input = {}) {
   const targetSyncSpace = requestedSyncSpaceId
     ? requireActiveSyncSpace(state, requestedSyncSpaceId)
     : null;
+  // 在创建设备之前拦截。createManagedUser 在下面几行就会写入 state.users，
+  // 若等到 addSyncSpaceMembership 才抛错，被拒绝的请求会留下一台幽灵设备。
+  if (targetSyncSpace) {
+    requireRoleAllowedInSyncSpace(targetSyncSpace, normalizeSyncSpaceRole(input.requestedRole));
+  }
   if (targetSyncSpace && hasSelectedBucket && selectedBucketName !== targetSyncSpace.storageTarget.bucket) {
     throw validationError("bucketName must match the selected sync space storage target");
   }
@@ -1061,6 +1076,7 @@ export function createSyncSpace(state, input = {}) {
       prefix: cleanPrefix(input.prefix || `${state.storage.sharedPrefix}/${id}`)
     },
     policy: { multiWriter: false },
+    mode: requireSyncSpaceMode(input.mode),
     status: "active",
     version: 1,
     createdAt: new Date().toISOString()
@@ -1084,10 +1100,17 @@ function addSyncSpaceMembership(state, syncSpaceId, deviceId, role) {
   if (existing && !existing.revokedAt) {
     throw createHttpError("sync_space_membership_exists", 409, "Device is already a sync space member");
   }
+  const normalizedRole = normalizeSyncSpaceRole(role);
+  // 单一入口的不变式：任何调用方都不能给成员留下一个空的合法方向集合。
+  // createClaim 已在建设备之前先查一次，这里兜住其余调用方。
+  const syncSpace = (state.syncSpaces || []).find((item) => item.id === syncSpaceId);
+  if (syncSpace) {
+    requireRoleAllowedInSyncSpace(syncSpace, normalizedRole);
+  }
   const membership = {
     syncSpaceId,
     deviceId,
-    role: normalizeSyncSpaceRole(role),
+    role: normalizedRole,
     credentialId: null,
     accessKeyId: null,
     secretAccessKey: null,
@@ -1100,6 +1123,19 @@ function addSyncSpaceMembership(state, syncSpaceId, deviceId, role) {
   }
   state.syncSpaceMemberships.push(membership);
   return membership;
+}
+
+// 备份用途的空间没有 reader 座位：deriveSyncDirections 对该组合返回空集合，
+// 一个没有任何合法方向的成员是无法被界面表达的非法状态，因此在入座时就拒绝。
+function requireRoleAllowedInSyncSpace(syncSpace, role) {
+  const mode = normalizeSyncSpaceMode(syncSpace?.mode);
+  if (deriveSyncDirections(mode, role).length === 0) {
+    throw createHttpError(
+      "sync_space_role_not_allowed",
+      409,
+      `Role ${role} is not allowed in a ${mode} sync space`
+    );
+  }
 }
 
 function requireActiveSyncSpaceMembership(state, syncSpaceId, deviceId) {
@@ -1129,6 +1165,7 @@ function ensureDevicePrivateSyncSpace(state, user) {
       prefix: cleanPrefix(user.storage.prefix)
     },
     policy: { multiWriter: false },
+    mode: PRIVATE_SYNC_SPACE_MODE,
     status: user.deletedAt || user.enabled === false ? "disabled" : "active",
     version: 1,
     createdAt: user.createdAt
@@ -1347,12 +1384,33 @@ function hashRedeemBinding(value) {
 
 export function buildProfileForUser(state, user, options = {}) {
   const defaults = normalizeProfileDefaults(state.defaults, options.defaults);
+  // 空间与角色此前在这里被整个丢弃，客户端因此既不知道自己在哪个空间，
+  // 也不知道自己的角色，只能把方向当成用户的一次猜测。
+  const syncSpace = options.syncSpaceId
+    ? (state.syncSpaces || []).find((item) => item.id === options.syncSpaceId)
+    : null;
+  const role = options.storageCredentials?.role
+    || (syncSpace
+      ? (state.syncSpaceMemberships || []).find((item) => item.syncSpaceId === syncSpace.id && item.deviceId === user.id && !item.revokedAt)?.role
+      : "");
   const profile = {
     version: PROFILE_VERSION,
     profileId: options.profileId || `profile-${user.clientName}-${randomBytes(3).toString("hex")}`,
     clientName: user.clientName,
     issuedAt: new Date().toISOString(),
     expiresAt: options.expiresAt || null,
+    ...(syncSpace ? {
+      syncSpace: {
+        id: syncSpace.id,
+        syncId: syncSpace.syncId,
+        mode: normalizeSyncSpaceMode(syncSpace.mode)
+      },
+      authorization: deriveAuthorization({
+        mode: syncSpace.mode,
+        role,
+        policy: syncSpace.policy
+      })
+    } : {}),
     tunnel: {
       type: "vless",
       uri: buildVlessUri(state.tunnel, user)
@@ -1547,6 +1605,7 @@ export function summarizeAdminSyncSpace(state, syncSpace) {
     syncId: String(syncSpace.syncId || ""),
     status: syncSpace.status === "disabled" ? "disabled" : "active",
     policy: { multiWriter: syncSpace.policy?.multiWriter === true },
+    mode: normalizeSyncSpaceMode(syncSpace.mode),
     version: Number(syncSpace.version || 1),
     createdAt: String(syncSpace.createdAt || ""),
     memberCount: state.syncSpaceMemberships.filter((membership) => membership.syncSpaceId === syncSpace.id && !membership.revokedAt).length

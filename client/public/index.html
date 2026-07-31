@@ -73,27 +73,19 @@
         <input id="folderPicker" type="file" webkitdirectory directory multiple style="display:none">
       </div>
 
-      <div class="form-grid-2">
-        <div class="form-row">
-            <label for="direction">同步方向</label>
-          <select id="direction">
-            <option value="upload">上传（本地 → 远端）</option>
-            <option value="download">下载（远端 → 本地）</option>
-            <option value="bidirectional">双向同步</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label for="serverSpace">同步空间</label>
-          <select id="serverSpace">
-            <option value="device">设备空间</option>
-            <option value="shared">共享空间</option>
-          </select>
-        </div>
+      <div class="form-row">
+        <label for="direction">同步方向</label>
+        <select id="direction">
+          <option value="upload">上传（本地 → 远端）</option>
+          <option value="download">下载（远端 → 本地）</option>
+          <option value="bidirectional">双向同步</option>
+        </select>
+        <p id="directionFixedHint" class="hint" hidden></p>
       </div>
 
       <div class="form-row">
-        <label for="remoteFolder">远端子目录</label>
-        <input id="remoteFolder" type="text" placeholder="设备空间可留空；共享空间必须填写">
+        <label>同步空间</label>
+        <p id="syncSpaceSummary" class="hint">导入 SyncKey 后由服务端决定。</p>
       </div>
       <div class="form-grid-2">
         <div class="form-row">
@@ -114,17 +106,6 @@
       <div class="form-row" id="scheduleTimeRow" hidden>
         <label for="scheduleTime">执行时间</label>
         <input id="scheduleTime" class="schedule-param" type="time" value="02:00">
-      </div>
-
-      <div class="form-grid-2">
-        <div class="form-row">
-          <label for="transfers">并行文件</label>
-          <input id="transfers" type="number" value="4" min="1" max="32">
-        </div>
-        <div class="form-row">
-          <label for="streams">单文件线程</label>
-          <input id="streams" type="number" value="8" min="1" max="32">
-        </div>
       </div>
 
       <div class="checkbox-row">

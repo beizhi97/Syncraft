@@ -22,7 +22,7 @@
 
 ### 同步空间管理入口
 
-`POST /api/admin/sync-spaces/create` 受管理 token 保护，只接受现有 owner 设备的 `ownerUserId` 和用户可见的 `syncId`。服务端生成不可变的内部空间 ID 与物理存储目标；成功响应和 `GET /api/admin/state` 只返回脱敏空间摘要（ID、同步 ID、状态、策略、版本、创建时间和活跃成员数），不得返回 bucket、prefix、成员 access key 或 secret。该入口不提供根据同步 ID 查询或匿名加入能力；新设备只能由管理端通过绑定目标空间与角色的 SyncKey 加入。
+`POST /api/admin/sync-spaces/create` 受管理 token 保护，只接受现有 owner 设备的 `ownerUserId`、用户可见的 `syncId`，以及可选的 `mode`（`backup`、`distribution`、`collaboration` 三者之一）。`mode` 必须显式列入请求白名单——请求解析按字段白名单重建对象，未列入的字段会在到达 `createSyncSpace` 之前被静默丢弃。省略 `mode` 时由 `createSyncSpace` 一处决定默认值；给出未知值必须返回 `validation_failed` 400，不得静默回落到默认用途，否则会把「仅上传」成员显示成可双向。`mode` 决定成员可用的同步方向，创建后没有修改接口——刻意不提供，以免要发明「改用途后如何驱逐已有 reader」的语义。服务端生成不可变的内部空间 ID 与物理存储目标；成功响应和 `GET /api/admin/state` 只返回脱敏空间摘要（ID、同步 ID、状态、策略、用途、版本、创建时间和活跃成员数），不得返回 bucket、prefix、成员 access key 或 secret。该入口不提供根据同步 ID 查询或匿名加入能力；新设备只能由管理端通过绑定目标空间与角色的 SyncKey 加入。
 
 SyncKey 用于一次性兑换完整客户端 profile。
 
@@ -219,6 +219,10 @@ SyncKey payload：
 | `singbox_restart_unavailable` | 503 | 服务端未配置或无法访问 sing-box supervisor 控制目录 |
 | `storage_request_failed` | 502 | MinIO/S3 请求失败，包括 DNS、连接拒绝、超时或 S3 非 2xx 响应；若接口明确声明支持部分成功（例如 bucket refresh/create 的管理状态仍成功持久化），可在 HTTP 2xx 响应体内以 `ok:false` / `errorCode:"storage_request_failed"` 表示远端存储步骤失败 |
 | `sync_already_running` | 409 | 已有其他同步任务正在运行，当前请求的 job 不能复用该运行 |
+| `sync_id_unavailable` | 409 | 同步空间名称已被占用 |
+| `sync_space_access_denied` | 403 | 设备在该同步空间没有有效成员资格，或空间已停用 |
+| `sync_space_membership_exists` | 409 | 设备已经是该同步空间的成员 |
+| `sync_space_role_not_allowed` | 409 | 该角色不被同步空间的用途接受；备份用途不接受 reader |
 | `local_host_forbidden` | 403 | 客户端本地接口拒绝非回环 `Host` 头请求（防 DNS rebinding，作用于所有方法）|
 | `local_read_forbidden` | 403 | 客户端本地读接口拒绝跨站浏览器请求 |
 | `local_write_forbidden` | 403 | 客户端本地写接口拒绝跨站浏览器请求 |
@@ -271,7 +275,7 @@ GET /api/health
   "buildTime": null,
   "protocols": {
     "claim": 1,
-    "profile": 1,
+    "profile": 2,
     "adminState": 1,
     "clientStatus": 1,
     "heartbeat": 1
@@ -628,7 +632,7 @@ POST /api/admin/users/disable
 POST /api/admin/users/delete
 ```
 
-`POST /api/admin/users/create` 是低层调试/运维入口，用于直接创建或登记管理用户并立即写入 sing-box 配置；当前服务端控制台的产品化创建设备入口是 `POST /api/claims/create`，由它同时生成一次性 SyncKey 和待兑换 profile。控制台不得把 `/api/admin/users/create` 暴露为普通创建设备按钮，避免出现“已登记但没有可导入 SyncKey”的半成品设备。
+`POST /api/admin/users/create` 用于创建或登记管理用户并立即写入 sing-box 配置。服务端控制台「设备 → 新建设备」是它的产品化入口：设备是同步空间的成员单位，必须能先于 SyncKey 独立存在，否则「创建同步空间」要求选择 owner 设备时无设备可选，而唯一的建设备路径又是签发 SyncKey，形成死锁。`POST /api/claims/create` 在设备名首次出现时仍会隐式创建设备，但那是签发 SyncKey 的副作用，不是建设备的正式入口；控制台不得依赖它作为唯一建设备手段，因为自由文本设备名的拼写错误会静默伪造设备。为避免出现“已登记但没有可导入 SyncKey”的半成品设备，控制台创建设备成功后必须把设备名带入 SyncKey 签发流程并提示下一步；同名设备时 `createManagedUser` 是按 `clientName` 幂等返回既有设备，控制台必须前置拦截并提示，不得谎报新建。
 
 - `enable` / `disable` 请求使用 `{ "userId": "..." }`。
 - `delete` 为软删除，必须提交与设备名完全一致的确认文本，例如 `{ "userId": "...", "confirmText": "company-pc1" }`；未确认返回 `danger_confirmation_required`。
@@ -789,7 +793,7 @@ Content-Type: application/json
     "buildTime": null,
     "protocols": {
       "claim": 1,
-      "profile": 1,
+      "profile": 2,
       "adminState": 1,
       "clientStatus": 1,
       "heartbeat": 1
@@ -850,7 +854,7 @@ Content-Type: application/json
     "version": "0.2.0-beta.2",
     "protocols": {
       "claim": 1,
-      "profile": 1,
+      "profile": 2,
       "adminState": 1,
       "clientStatus": 1,
       "heartbeat": 1
@@ -871,7 +875,7 @@ Content-Type: application/json
       "version": "0.2.0-beta.2",
       "protocols": {
         "claim": 1,
-        "profile": 1,
+        "profile": 2,
         "adminState": 1,
         "clientStatus": 1,
         "heartbeat": 1
@@ -1014,7 +1018,7 @@ Content-Type: application/json
 
 客户端首次启动且尚未导入 profile 时，`GET /api/profile` 必须稳定返回 `{ "profile": null }`，`GET /api/jobs` 必须返回 `{ "jobs": [] }`，`GET /api/sync/history` 必须返回 `{ "history": [] }`。这些空状态属于正常引导流程，不应返回 404 或错误码。
 
-`GET /api/profile` 返回本地已导入 profile 的展示安全摘要，响应格式为 `{ "profile": null }` 或 `{ "profile": { ... } }`。该 HTTP 响应不得作为执行 DTO；可包含 `version`、`profileId`、`clientName`、`issuedAt`、`expiresAt`、`importedAt`、`importMode`、`source`、`summary`、`tunnel.type`、`tunnel.parsed`、`heartbeat.scheme`、`heartbeat.configured`、`storage.type`、`storage.remoteName`、`storage.endpoint`、`storage.bucket`、`storage.prefix` 和 `defaults`。不得包含原始 `tunnel.uri`、`storage.accessKeyId`、`storage.secretAccessKey`、`heartbeat.secret`、SyncKey、claim code、token 或完整 profile。若 secret vault 缺失，该展示接口仍必须基于未水合的 `profile.json` 返回展示安全摘要，方便用户确认已导入设备；同步执行、心跳签名和 rclone 配置必须在进程内通过 `readProfile()` 取得水合运行时对象，并在 vault 缺失时返回 `secret_vault_missing`。
+`GET /api/profile` 返回本地已导入 profile 的展示安全摘要，响应格式为 `{ "profile": null }` 或 `{ "profile": { ... } }`。该 HTTP 响应不得作为执行 DTO；可包含 `version`、`profileId`、`clientName`、`issuedAt`、`expiresAt`、`importedAt`、`importMode`、`source`、`summary`、`tunnel.type`、`tunnel.parsed`、`heartbeat.scheme`、`heartbeat.configured`、`storage.type`、`storage.remoteName`、`storage.endpoint`、`storage.bucket`、`storage.prefix`、`syncSpace`、`authorization` 和 `defaults`。其中 `syncSpace` 为 `{ id, syncId, mode }`、`authorization` 为 `{ role, directions, allowDelete }`，两者都是服务端在签发时算好的结论，客户端只读不改；profile v1（legacy 或离线导入）没有同步空间归属，两者必须为 `null`，此时 UI 退回“三个同步方向都可选”的旧行为，最终仍由 MinIO 策略裁决。不得包含原始 `tunnel.uri`、`storage.accessKeyId`、`storage.secretAccessKey`、`heartbeat.secret`、SyncKey、claim code、token 或完整 profile。若 secret vault 缺失，该展示接口仍必须基于未水合的 `profile.json` 返回展示安全摘要，方便用户确认已导入设备；同步执行、心跳签名和 rclone 配置必须在进程内通过 `readProfile()` 取得水合运行时对象，并在 vault 缺失时返回 `secret_vault_missing`。
 
 `GET /api/jobs` 返回本地已保存任务的展示安全摘要列表，响应格式为 `{ "jobs": [...] }`。该接口是本机调试/兼容读取入口，不是执行 DTO；每个 job 摘要可包含用户可编辑字段和非敏感派生字段，例如 `id`、`name`、`localPath`、`direction`、`remoteFolder`、`serverSpace`、`transfers`、`streams`、`dryRun`、`destructiveSync`、`bandwidthLimit`、`schedule`、`checkers`、`s3UploadConcurrency`、`s3ChunkSize`、`cutoff`、`retries`、`lowLevelRetries`、`localProxyPort`、`clientName`、`remoteName`、`bucketName`、`remotePrefix` 和 `s3Endpoint`；不得包含 `accessKeyId`、`secretAccessKey`、`s3SecretAccessKey`、`heartbeatSecret`、`heartbeatAuthNonces`、`vlessUri`、SyncKey、claim code、token 或完整 profile。若 secret vault 缺失，该展示接口仍必须基于未水合的 `jobs.json` 返回展示安全摘要；同步执行、调度器和预览必须在进程内通过 `readJobs()` / `readProfile()` 或 `buildJobFromProfile()` 取得水合运行时对象，不得依赖 HTTP job 摘要补齐密钥。
 
@@ -1396,7 +1400,7 @@ GET /api/logs
 - `paths`: 本地关键目录摘要，至少包含 `root`、`binRoot` 和 `dataRoot`，用于诊断便携包路径和运行时数据位置。客户端启动时可通过 `SFSC_CLIENT_DATA_ROOT` 或 `SFSC_DATA_ROOT` 显式指定数据目录；未指定时优先使用包根 `data`，若包根数据目录无法创建或写入，必须 fallback 到当前 Windows 用户的 `%LOCALAPPDATA%\Syncraft\data`，并在 `paths.dataRoot` 暴露实际使用目录。
 - `binaries`: 客户端组件摘要，`singbox` 和 `rclone` 至少包含 `path`、`exists`、`ok`、`errorCode`、`message`；缺少组件时必须分别使用 `missing_singbox_binary` 或 `missing_rclone_binary`，让状态页和诊断包无需等待启动/同步失败即可定位缺失组件。`GET /api/client/status.binaries.ok` 是轻量存在性检查；`POST /api/binaries/check` 会额外运行版本命令，响应中的 `ok` 必须表示文件存在且版本检测成功，版本检测失败使用 `binary_version_check_failed`。
 - `profileImported`: 是否已导入 profile。`profileImported` 必须是布尔值；未导入时必须返回 `false`，不得省略或返回字符串/数字等兼容形态。
-- `profileSummary`: 已导入 profile 的摘要，包含 client、服务端、存储空间和本地代理端口。未导入 profile 时 `profileSummary` 必须为 `null`；`profileImported` 为 `true` 时必须为对象。
+- `profileSummary`: 已导入 profile 的摘要，包含 client、服务端、存储空间和本地代理端口，以及 v2 起的 `syncSpace`（`{ id, syncId, mode }`）和 `authorization`（`{ role, directions, allowDelete }`）。客户端 UI 必须以 `authorization.directions` 为唯一依据决定同步方向可选项，并以 `syncSpace.syncId` 作为空间显示名，不得自行提供同步空间或远端子目录选择——服务端签发的 MinIO 策略只授权 `${prefix}/*`，任何本地路由选择都是服务端必拒的组合。profile v1 没有这两块时必须为 `null`，UI 退回“三个方向都可选”。未导入 profile 时 `profileSummary` 必须为 `null`；`profileImported` 为 `true` 时必须为对象。
 - `jobs`: 已保存任务的展示安全摘要；该数组供客户端 UI 预填和展示，不是同步执行 DTO。每项可以包含用户可编辑字段和非敏感派生字段，例如 `id`、`name`、`localPath`、`direction`、`remoteFolder`、`serverSpace`、`transfers`、`streams`、`dryRun`、`destructiveSync`、`bandwidthLimit`、`schedule`、`checkers`、`s3UploadConcurrency`、`s3ChunkSize`、`cutoff`、`retries`、`lowLevelRetries`、`localProxyPort`、`bucketName`、`remoteName` 和 `remotePrefix`；不得包含 `accessKeyId`、`secretAccessKey`、`s3SecretAccessKey`、`heartbeatSecret`、`heartbeatAuthNonces`、`vlessUri`、SyncKey、claim code、token 或完整 profile。同步预览/运行继续由本地运行时读取水合 job/profile 后生成执行配置；`GET /api/jobs` 也返回同类展示安全摘要。
 - `scheduler`: 本地计划任务运行摘要，包含 `enabled`、`intervalMs`、`updatedAt`、`nextRun`、`lastTriggeredAt`、`lastError` 和每个非手动任务的 `jobs[]` 摘要。`scheduler.enabled` 必须是布尔值，`scheduler.intervalMs` 必须是非负整数；`scheduler.updatedAt`、`scheduler.nextRun` 和 `scheduler.lastTriggeredAt` 必须为 `null` 或字符串。`scheduler.lastError` 和 `scheduler.jobs[].lastError` 必须为空字符串或稳定 snake_case 错误码；`scheduler.jobs[]` 中每项至少包含非空字符串 `id`、`name`、`scheduleText`、对象 `schedule`、`nextRun`、`lastTriggeredAt` 和 `lastError`。
 - `processes.singbox` / `processes.sync`: 本地进程状态，`processes.singbox.name` 必须为 `sing-box`，`processes.sync.name` 必须为 `rclone-sync`；每个进程摘要至少包含 `name`、`running`、`pid`、`startedAt` 和 `lastExit`，其中 `running` 必须是布尔值，未运行时 `pid` 必须为 `null`。`processes.sync.metrics` 包含当前同步进度，`processes.sync.metrics.syncState` 必须为 `idle`、`syncing`、`error`、`stopping` 或 `offline`。客户端页面顶部状态、body 状态 class、进度区和停止中样式必须以 `processes.sync.metrics.syncState` 为当前状态来源；`processes.sync.running` 只能辅助判断同步中，不能覆盖 `stopping` 或 `error`。

@@ -63,7 +63,7 @@ Legacy / development Docker Compose
 - 服务端健康与控制台摘要：`GET /api/health`、`GET /api/admin/auth/check`、`GET /api/admin/state`。
 - VLESS/sing-box 管理：`POST /api/admin/tunnel/autofill` 补全参数，`POST /api/admin/tunnel/generate` 生成并写入配置，`GET /api/admin/singbox/config` 只读预览脱敏配置，`POST /api/admin/singbox/write` 作为运维重写入口，`POST /api/admin/singbox/mark-applied` 在管理员确认进程已重启后清除待应用状态。
 - 同步仓库管理：`POST /api/admin/storage/save` 保存 S3/MinIO 参数；`POST /api/admin/storage/buckets/refresh` 刷新远端 bucket 摘要；`POST /api/admin/storage/buckets/create`、`enable`、`disable`、`clear`、`delete-empty` 管理同步仓库生命周期。
-- 设备与 SyncKey 生命周期：服务端控制台用 `POST /api/claims/create` 生成一次性 SyncKey 和待兑换 profile；`POST /api/admin/users/enable`、`disable`、`delete` 管理已有设备；`POST /api/admin/users/create` 仅保留为低层调试/运维入口，不作为普通创建设备入口。
+- 设备与 SyncKey 生命周期：服务端控制台「设备 → 新建设备」用 `POST /api/admin/users/create` 显式登记设备（设备必须能先于 SyncKey 存在，否则创建同步空间时无 owner 可选）；`POST /api/claims/create` 生成一次性 SyncKey 和待兑换 profile，并在设备名首次出现时隐式建设备；`POST /api/admin/users/enable`、`disable`、`delete` 管理已有设备。
 - 客户端运行入口：`POST /api/claims/redeem` 兑换 SyncKey，`POST /api/devices/heartbeat` 接收带 HMAC 的设备心跳。
 - 调试/兼容入口：`POST /api/vless/parse`、`POST /api/singbox/client-config`、`POST /api/profile/encode`、`POST /api/jobs/preview` 用于 smoke、迁移验证和无状态预览，不是普通控制台主流程。
 

@@ -425,7 +425,7 @@ async function exerciseRealClaimLifecycle(adminAuthEnabled) {
       buildId: "server-smoke",
       protocols: {
         claim: 1,
-        profile: 1,
+        profile: 2,
         adminState: 1,
         clientStatus: 1,
         heartbeat: 1

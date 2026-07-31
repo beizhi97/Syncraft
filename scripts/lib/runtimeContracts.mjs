@@ -345,8 +345,43 @@ export function assertServerIssuedProfileContract(profile, label = "serverIssued
   if (options.allowSource === true && profile.source !== undefined) {
     expectedKeys.push("source");
   }
+  // v2：从同步空间成员关系签发的 profile 必须携带这两块。
+  // /api/profile/encode 是管理调试/兼容入口，直接由请求体构造，背后没有同步空间，
+  // 因此调用方显式传 expectSyncSpaceBinding: false，且此时两块必须同时缺席——
+  // 只带一块意味着服务端算出了角色却没说清属于哪个空间（或反之），那才是真的坏状态。
+  const expectSyncSpaceBinding = options.expectSyncSpaceBinding !== false;
+  if (expectSyncSpaceBinding) {
+    expectedKeys.push("authorization", "syncSpace");
+  }
   assertExactKeys(profile, expectedKeys, label);
+  if (!expectSyncSpaceBinding) {
+    assertEqual(profile.syncSpace, undefined, `${label}.syncSpace must be absent without a sync space`);
+    assertEqual(profile.authorization, undefined, `${label}.authorization must be absent without a sync space`);
+  }
   assertEqual(profile.version, PROFILE_VERSION, `${label}.version`);
+  if (expectSyncSpaceBinding) {
+    assertObject(profile.syncSpace, `${label}.syncSpace`);
+    assertExactKeys(profile.syncSpace, ["id", "mode", "syncId"], `${label}.syncSpace`);
+    assertNonEmptyString(profile.syncSpace.id, `${label}.syncSpace.id`);
+    assertNonEmptyString(profile.syncSpace.syncId, `${label}.syncSpace.syncId`);
+    assert(
+      ["backup", "distribution", "collaboration"].includes(profile.syncSpace.mode),
+      `${label}.syncSpace.mode`
+    );
+    assertObject(profile.authorization, `${label}.authorization`);
+    assertExactKeys(profile.authorization, ["allowDelete", "directions", "role"], `${label}.authorization`);
+    assert(["owner", "writer", "reader"].includes(profile.authorization.role), `${label}.authorization.role`);
+    assertEqual(typeof profile.authorization.allowDelete, "boolean", `${label}.authorization.allowDelete`);
+    assertArray(profile.authorization.directions, `${label}.authorization.directions`);
+    // 空的方向集合意味着这个成员根本无法同步，签发这样的 profile 就是签发一个非法状态。
+    assert(profile.authorization.directions.length > 0, `${label}.authorization.directions must not be empty`);
+    for (const [index, direction] of profile.authorization.directions.entries()) {
+      assert(
+        ["upload", "download", "bidirectional"].includes(direction),
+        `${label}.authorization.directions[${index}]`
+      );
+    }
+  }
   assertNonEmptyString(profile.profileId, `${label}.profileId`);
   assertNonEmptyString(profile.clientName, `${label}.clientName`);
   if (options.expectedClientName !== undefined) {
@@ -448,7 +483,9 @@ export function assertProfileEncodeResponseContract(response, label = "profileEn
   assertExactKeys(response, ["code", "profile", "summary", "uri"], label);
   assertServerIssuedProfileContract(response.profile, `${label}.profile`, {
     ...options,
-    allowSource: true
+    allowSource: true,
+    // 该入口由请求体直接构造离线 profile，没有同步空间成员关系可绑定。
+    expectSyncSpaceBinding: false
   });
   assertObject(response.profile.source, `${label}.profile.source`);
   assertEqual(response.profile.source.type, "profile", `${label}.profile.source.type`);
@@ -787,10 +824,11 @@ export function assertAdminStateSummaryContract(state, label = "adminState", opt
 
 export function assertAdminSyncSpaceSummaryContract(syncSpace, label = "adminSyncSpace") {
   assertObject(syncSpace, label);
-  assertExactKeys(syncSpace, ["createdAt", "id", "memberCount", "policy", "status", "syncId", "version"], label);
+  assertExactKeys(syncSpace, ["createdAt", "id", "memberCount", "mode", "policy", "status", "syncId", "version"], label);
   assertNonEmptyString(syncSpace.id, `${label}.id`);
   assertNonEmptyString(syncSpace.syncId, `${label}.syncId`);
   assert(["active", "disabled"].includes(syncSpace.status), `${label}.status`);
+  assert(["backup", "distribution", "collaboration"].includes(syncSpace.mode), `${label}.mode`);
   assertObject(syncSpace.policy, `${label}.policy`);
   assertExactKeys(syncSpace.policy, ["multiWriter"], `${label}.policy`);
   assertEqual(typeof syncSpace.policy.multiWriter, "boolean", `${label}.policy.multiWriter`);

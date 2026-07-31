@@ -1378,9 +1378,9 @@ async function auditSmokeContractDocs() {
   requireText(serverSource, "src/server.js", "await rename(tempFile, file);");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "admin user write response contract");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "admin user delete response contract");
-  requireText(contract, "docs/INTERFACE_CONTRACT.md", "`POST /api/admin/users/create` 是低层调试/运维入口");
-  requireText(contract, "docs/INTERFACE_CONTRACT.md", "当前服务端控制台的产品化创建设备入口是 `POST /api/claims/create`");
-  requireText(contract, "docs/INTERFACE_CONTRACT.md", "避免出现“已登记但没有可导入 SyncKey”的半成品设备");
+  requireText(contract, "docs/INTERFACE_CONTRACT.md", "服务端控制台「设备 → 新建设备」是它的产品化入口");
+  requireText(contract, "docs/INTERFACE_CONTRACT.md", "不是建设备的正式入口");
+  requireText(contract, "docs/INTERFACE_CONTRACT.md", "为避免出现“已登记但没有可导入 SyncKey”的半成品设备，控制台创建设备成功后必须把设备名带入 SyncKey 签发流程并提示下一步");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "admin storage buckets refresh response contract");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "admin storage bucket create response contract");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "admin storage bucket toggle response contract");
@@ -2187,9 +2187,28 @@ async function auditProtocolV1Baseline() {
   if (baseline.schemaVersion !== 1 || baseline.kind !== "sfsc-protocol-baseline" || baseline.protocolBaseline !== "SFSC Protocol v1" || baseline.status !== "frozen") {
     issues.push("Protocol v1 baseline identity must remain frozen and versioned");
   }
+  // 这个文件是 v1 基线，status 为 frozen。它的 protocols 必须停在 v1 的数字，
+  // 否则一个自称「冻结的 v1 基线」却写着 version 2 的文件既是假陈述，
+  // 也让 breakingChangePolicy 变得无法校验：审计会要求你把基线改成与运行时一致，
+  // 从而把「有人悄悄升了协议版本」这个信号自己消掉。
+  // 运行时超前于基线是允许的，但必须在 supersededProtocols 里显式声明一次。
   for (const [field, version] of Object.entries(expectedProtocols)) {
-    if (baseline.protocols?.[field] !== version) {
-      issues.push(`Protocol v1 baseline ${field} version must match runtime version ${version}`);
+    const baselineVersion = baseline.protocols?.[field];
+    const declared = baseline.supersededProtocols?.[field];
+    if (baselineVersion !== 1) {
+      issues.push(`Protocol v1 baseline ${field} version must stay frozen at 1`);
+      continue;
+    }
+    if (version === baselineVersion) {
+      if (declared !== undefined) {
+        issues.push(`Protocol v1 baseline supersededProtocols.${field} must be removed once the runtime returns to the baseline`);
+      }
+      continue;
+    }
+    if (declared !== version) {
+      issues.push(`Protocol v1 baseline must declare supersededProtocols.${field} = ${version} for a runtime past the frozen baseline`);
+    } else if (!(declared > baselineVersion)) {
+      issues.push(`Protocol v1 baseline supersededProtocols.${field} must be greater than the frozen baseline`);
     }
   }
   if (baseline.compatibility?.onMismatch !== "warn_and_confirm" || baseline.compatibility?.heartbeat !== "allow" || baseline.compatibility?.profileIssue !== "warn" || baseline.compatibility?.syncRun !== "warn" || baseline.compatibility?.silentAllow !== false) {
@@ -2967,7 +2986,11 @@ async function auditClaimProfileProtocolDocs() {
   requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "clientProfileImportRequestStringFields", ["claimCode", "code", "clientName", "tKey", "tkey", "token", "uri"]);
   requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "clientProfileImportResponseKeys", ["profile"]);
   requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "profileEncodeResponseKeys", ["code", "profile", "summary", "uri"]);
-  requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "serverIssuedProfileKeys", ["clientName", "defaults", "expiresAt", "heartbeat", "issuedAt", "profileId", "storage", "tunnel", "version"]);
+  requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "serverIssuedProfileKeys", ["authorization", "clientName", "defaults", "expiresAt", "heartbeat", "issuedAt", "profileId", "storage", "syncSpace", "tunnel", "version"]);
+  requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "serverIssuedProfileSyncSpaceKeys", ["id", "mode", "syncId"]);
+  requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "serverIssuedProfileAuthorizationKeys", ["allowDelete", "directions", "role"]);
+  requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "syncSpaceModes", ["backup", "distribution", "collaboration"]);
+  requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "syncDirections", ["upload", "download", "bidirectional"]);
   requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "serverIssuedOfflineProfileRequiredKeys", ["source"]);
   requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "serverIssuedProfileDefaultsKeys", ["bandwidthLimit", "checkers", "chunkSize", "localProxyPort", "lowLevelRetries", "retries", "schedule", "streams", "transfers"]);
   requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "serverIssuedProfileHeartbeatKeys", ["scheme", "secret"]);
@@ -3116,17 +3139,25 @@ async function auditSyncRunTriggerContract() {
   requireText(clientUiSource, "client/public/app.js", "function currentProcessSyncState(sync = {})");
   requireText(clientUiSource, "client/public/app.js", "let currentJobDraft = null;");
   requireText(clientUiSource, "client/public/app.js", "function toClientJobDraft(job = {})");
-  requireText(clientUiSource, "client/public/app.js", "function readPositiveIntegerField(input, label, max)");
-  requireText(clientUiSource, "client/public/app.js", "throw new Error(`${label}必须是 1 到 ${max} 之间的整数。`)");
-  if (clientUiSource.includes("function numberField") || clientUiSource.includes("numberField(fields.transfers")) {
-    issues.push("client/public/app.js must reject invalid sync numeric fields instead of falling back to defaults");
+  // Parallelism is a server-issued default. The client must not surface it as a
+  // form field: a local value would shadow the admin's setting, and a fallback
+  // would do it silently. Absence is the contract, so assert absence.
+  for (const forbidden of ["fields.transfers", "fields.streams", "readPositiveIntegerField", "function numberField"]) {
+    if (clientUiSource.includes(forbidden)) {
+      issues.push(`client/public/app.js must not read sync parallelism locally (found ${forbidden}); server defaults must win`);
+    }
   }
+  for (const forbidden of ['id="transfers"', 'id="streams"', "并行文件", "单文件线程"]) {
+    if (clientUiHtml.includes(forbidden)) {
+      issues.push(`client/public/index.html must not expose sync parallelism as a form field (found ${forbidden})`);
+    }
+  }
+  requireText(clientTest, "tests/client.test.js", "client UI does not send transfers/streams so server defaults win");
   requireText(clientUiSource, "client/public/app.js", "currentJobDraft = toClientJobDraft(job);");
   requireText(clientUiSource, "client/public/app.js", "...base,");
   requireText(clientServerSource, "client/src/clientServer.js", "const normalized = buildJobFromProfile(profile, job);");
   requireText(clientServerSource, "client/src/clientServer.js", "normalized.id = job.id.trim();");
   requireText(clientTest, "tests/client.test.js", "client UI preserves loaded job fields when reading the edit form");
-  requireText(clientTest, "tests/client.test.js", "client UI rejects invalid sync numeric fields instead of falling back");
   requireText(clientHttpTest, "tests/client-http.test.js", "updatedJobPayload.job.id, savedJobPayload.job.id");
   requireText(clientUiSource, "client/public/app.js", "const state = currentProcessSyncState(sync);");
   requireText(clientUiSource, "client/public/app.js", "const syncState = currentProcessSyncState(sync);");
@@ -4205,7 +4236,7 @@ async function auditApiMatrixContract() {
   requireText(
     matrix,
     "docs/API_MATRIX.md",
-    "| POST | `/api/admin/users/create` | 管理 token | 调试/运维入口 | 低层创建或登记设备；服务端控制台生成设备应使用 `/api/claims/create` |"
+    "| POST | `/api/admin/users/create` | 管理 token | 服务端控制台、调试/运维入口 | 创建或登记设备。控制台「设备 → 新建设备」显式调用；同名设备是幂等返回既有设备，控制台改为前置拦截并提示，不谎报新建。`/api/claims/create` 仍会在设备名首次出现时隐式建设备，但那是签发 SyncKey 的副作用，不是建设备的正式入口 |"
   );
   requireText(
     matrix,
@@ -4220,8 +4251,14 @@ async function auditApiMatrixContract() {
     "docs/API_MATRIX.md",
     "修改 `/api/admin/tunnel/generate`、`/api/admin/tunnel/autofill`、`/api/admin/singbox/write`、`/api/admin/singbox/apply`、`/api/admin/singbox/mark-applied`、`/api/admin/storage/save`、`/api/admin/storage/buckets/refresh`、`/api/admin/storage/buckets/create`、`/api/admin/storage/buckets/enable`、`/api/admin/storage/buckets/disable`、`/api/admin/storage/buckets/clear`、`/api/admin/storage/buckets/delete-empty`、`/api/admin/users/create`、`/api/admin/users/enable`、`/api/admin/users/disable`、`/api/admin/users/delete`、`/api/claims/create`、`/api/claims/redeem`、`/api/devices/heartbeat`、`/api/binaries/check`、`/api/client/shutdown`、`/api/profile/import`、`/api/jobs/save`、`/api/singbox/start`、`/api/singbox/stop`、`/api/sync/preview`、`/api/sync/run`、`/api/sync/stop`、`/api/profile/encode`、`/api/vless/parse`、`/api/singbox/client-config` 或 `/api/jobs/preview` 的请求字段时，必须同步更新 `src/core/protocolSchemas.js` 和 `tests/core.test.js` 的 schema 回归。"
   );
-  if (/\| POST \| `\/api\/admin\/users\/create` \| 管理 token \| 服务端控制台 \|/.test(matrix)) {
-    issues.push("docs/API_MATRIX.md must not classify POST /api/admin/users/create as a server console consumer");
+  // Decision #5 (2026-07-31): the console now has an explicit device entry point.
+  // Before this, the only way to create a device was issuing a SyncKey from a
+  // free-text name field, so a typo silently fabricated a device and the sync-space
+  // owner dropdown could say "先创建设备" with no way to comply. This anchor was
+  // previously inverted (it asserted the console must NOT be a consumer); it is
+  // reversed rather than deleted so the entry point cannot regress unnoticed.
+  if (!/\| POST \| `\/api\/admin\/users\/create` \| 管理 token \| 服务端控制台[^|]*\|/.test(matrix)) {
+    issues.push("docs/API_MATRIX.md must classify POST /api/admin/users/create as a server console consumer");
   }
 
   const sources = await readRouteSources("API matrix audit");
@@ -4229,6 +4266,14 @@ async function auditApiMatrixContract() {
     return;
   }
   requireText(serverConsoleHtml, "public/index.html", 'id="refreshSingboxConfigBtn"');
+  requireText(serverConsoleHtml, "public/index.html", 'id="newDeviceName"');
+  requireText(serverConsoleHtml, "public/index.html", 'id="createDeviceBtn"');
+  requireText(
+    sources["public/app.js"],
+    "public/app.js",
+    'byId("createDeviceBtn").addEventListener("click", createDevice)'
+  );
+  requireText(sources["public/app.js"], "public/app.js", 'api("/api/admin/users/create"');
   requireText(
     sources["public/app.js"],
     "public/app.js",

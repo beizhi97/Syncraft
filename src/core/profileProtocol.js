@@ -5,8 +5,15 @@ import { normalizeSchedule } from "./scheduler.js";
 import { createHttpError } from "./errors.js";
 import { sanitizeRemoteName } from "./storage.js";
 import { normalizePositiveInteger, normalizeTcpPort } from "./numbers.js";
+import { SYNC_SPACE_MODES, deriveAuthorization, normalizeSyncSpaceMode } from "./syncSpaceMode.js";
 
-export const PROFILE_VERSION = 1;
+export const PROFILE_VERSION = 2;
+// v2 新增 syncSpace 与 authorization 两块。仍接受 v1：离线导入的旧 profile 是真实用例，
+// 而 v1 载荷根本不携带角色，服务端无从补出来，因此 v1 归一化后不带这两块。
+export const SUPPORTED_PROFILE_VERSIONS = Object.freeze([1, 2]);
+// 前缀标识信封编码，没有变；版本在载荷里自述。若前缀也改成 v2#，旧客户端会在解码阶段
+// 报 import_code_invalid（「导入码格式不对」），而不是 unsupported_profile_version
+// （「请升级客户端」）——后者才是可执行的提示。
 export const PROFILE_URI_PREFIX = "sfsc://import/v1#";
 export const PROFILE_CODE_PREFIX = "SFSC1-";
 
@@ -46,9 +53,10 @@ export function decodeImportProfilePayload(text) {
 }
 
 export function normalizeImportProfile(input = {}) {
-  if (input.version != null && input.version !== PROFILE_VERSION) {
+  if (input.version != null && !SUPPORTED_PROFILE_VERSIONS.includes(input.version)) {
     throw createHttpError("unsupported_profile_version", 400, "Profile or SyncKey version is unsupported");
   }
+  const version = input.version == null ? PROFILE_VERSION : input.version;
   if (input.type === "claim") {
     throw createHttpError("import_code_invalid", 400, "SyncKey payload is invalid for offline profile import");
   }
@@ -63,14 +71,27 @@ export function normalizeImportProfile(input = {}) {
   const defaults = input.defaults || {};
   const prefix = sanitizeRemotePrefix(storage.prefix || `devices/${clientName}`);
   const source = normalizeProfileSource(input.source);
+  const syncSpace = normalizeProfileSyncSpace(input.syncSpace);
+  // 方向在这里重新推导，不采信载荷里的数组：导入码经过用户之手，
+  // 改一个 JSON 字段就能给自己加上写权限的协议是不能接受的。
+  // 存储层（minioPolicy）仍是最终权威，这一层负责让界面表达不出非法状态。
+  const authorization = syncSpace
+    ? deriveAuthorization({
+        mode: syncSpace.mode,
+        role: input.authorization?.role,
+        policy: { allowDelete: input.authorization?.allowDelete === true }
+      })
+    : null;
 
   return {
-    version: PROFILE_VERSION,
+    version,
     profileId: String(input.profileId || `profile-${clientName}`).trim(),
     clientName,
     issuedAt: input.issuedAt || new Date(0).toISOString(),
     expiresAt: input.expiresAt || null,
     ...(source ? { source } : {}),
+    ...(syncSpace ? { syncSpace } : {}),
+    ...(authorization ? { authorization } : {}),
     tunnel: {
       type: "vless",
       uri: tunnelUri,
@@ -122,6 +143,25 @@ function normalizeProfileSource(input = null) {
     type: sanitizeSourceType(input.type || "profile"),
     server: normalizeSourceServer(server)
   };
+}
+
+// 空间标识与用途。displayName 不在协议里：syncId 已经是面向用户的名称
+// （docs/SYNC_ID_PRODUCT_REQUIREMENT.md），再给同一事物第二个名字正是本轮要消除的东西。
+function normalizeProfileSyncSpace(input = null) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return null;
+  }
+  const id = String(input.id || "").trim();
+  const syncId = String(input.syncId || "").trim();
+  if (!id || !syncId) {
+    return null;
+  }
+  const mode = String(input.mode || "").trim().toLowerCase();
+  // 未知用途不静默退回默认值：默认值是分发，会把只能上传的成员显示成可下载。
+  if (!SYNC_SPACE_MODES.includes(mode)) {
+    throw createHttpError("unsupported_profile_version", 400, "Profile syncSpace.mode is unsupported");
+  }
+  return { id, syncId, mode: normalizeSyncSpaceMode(mode) };
 }
 
 function sanitizeSourceType(input) {
@@ -224,7 +264,13 @@ export function summarizeImportProfile(profile) {
     server: `${normalized.tunnel.parsed.server}:${normalized.tunnel.parsed.port}`,
     storage: `${normalized.storage.bucket}/${normalized.storage.prefix}`,
     endpoint: normalized.storage.endpoint,
-    localProxyPort: normalized.defaults.localProxyPort
+    localProxyPort: normalized.defaults.localProxyPort,
+    // v2：UI 用这两块决定可选同步方向和显示空间真名。两者都不含密钥。
+    // legacy/离线 profile 没有它们，为 null 时 UI 退回旧的「三个方向都可选」行为。
+    syncSpace: normalized.syncSpace ? { ...normalized.syncSpace } : null,
+    authorization: normalized.authorization
+      ? { ...normalized.authorization, directions: [...normalized.authorization.directions] }
+      : null
   };
 }
 

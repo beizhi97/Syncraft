@@ -51,6 +51,13 @@ const DEFAULT_STATUS_BY_CODE = {
   singbox_restart_unavailable: 503,
   storage_request_failed: 502,
   sync_already_running: 409,
+  // 这四个同步空间码此前只存在于 serverAdmin.js，未注册到本表。
+  // 后果是 normalizeHttpError 认不出它们，403/409 全被压平成 500「Internal server error」，
+  // 控制台无法分支。已由 tests/sync-space-mode.test.js 锁住。
+  sync_id_unavailable: 409,
+  sync_space_access_denied: 403,
+  sync_space_membership_exists: 409,
+  sync_space_role_not_allowed: 409,
   unsupported_profile_version: 400,
   unsupported_media_type: 415,
   user_not_found: 404,

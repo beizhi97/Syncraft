@@ -414,6 +414,86 @@ test("server bucket refresh ok false shows storage recovery guidance instead of 
   assert.doesNotMatch(finalMessage.message, /仓库列表已刷新/);
 });
 
+test("server console can create a device without spending a SyncKey", async () => {
+  const html = await readFile(join(projectRoot, "public", "index.html"), "utf8");
+  const app = await readFile(join(projectRoot, "public", "app.js"), "utf8");
+
+  // The owner dropdown tells the admin "先创建设备", so the console must offer a
+  // way to obey it. Without this, the only path to a device is issuing a SyncKey
+  // from a free-text name field, which makes typos silently fabricate devices.
+  assert.match(html, /id="newDeviceName"/);
+  assert.match(html, /id="createDeviceBtn"/);
+  assert.match(html, /for="newDeviceName"/);
+  assert.match(html, /for="newDeviceBucket"/);
+  assert.match(app, /byId\("createDeviceBtn"\)\.addEventListener\("click", createDevice\)/);
+
+  const createDevice = extractFunction(app, "createDevice");
+  const context = {};
+  runInNewContext(`
+    globalThis.calls = [];
+    globalThis.actions = [];
+    globalThis.rendered = 0;
+    globalThis.devices = [];
+    let nameValue = "";
+    const fields = {
+      newDeviceName: {
+        get value() { return nameValue; },
+        set value(next) { nameValue = next; }
+      },
+      newDeviceBucket: { value: "home-sync" },
+      deviceName: { value: "" }
+    };
+    function setAction(message, tone) { actions.push({ message, tone }); }
+    function findDeviceByName(input) {
+      const name = String(input || "").trim();
+      return devices.find((device) => device.clientName === name) || null;
+    }
+    async function api(path, body) {
+      calls.push({ path, body });
+      return { user: { id: "user-1", clientName: body.clientName }, state: { devices: [] } };
+    }
+    async function runAction(pendingText, successText, action) {
+      const result = await action();
+      setAction(successText, "good");
+      return result;
+    }
+    function renderDebugJson() {}
+    function renderState() { rendered += 1; }
+    ${createDevice}
+    globalThis.createDevice = createDevice;
+    globalThis.fields = fields;
+  `, context);
+
+  // Empty name must not reach the server.
+  await context.createDevice();
+  assert.equal(context.calls.length, 0);
+  assert.equal(context.actions.at(-1).tone, "warn");
+
+  // Happy path posts to the existing endpoint and clears the input.
+  context.fields.newDeviceName.value = "laptop-01";
+  await context.createDevice();
+  assert.equal(context.calls.length, 1);
+  assert.equal(context.calls[0].path, "/api/admin/users/create");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.calls[0].body)),
+    { clientName: "laptop-01", bucketName: "home-sync" }
+  );
+  assert.equal(context.fields.newDeviceName.value, "");
+  assert.equal(context.rendered, 1);
+  // A device with no SyncKey cannot be imported, so creation must hand off to the
+  // SyncKey flow rather than leaving a half-built device behind.
+  assert.equal(context.fields.deviceName.value, "laptop-01");
+
+  // createManagedUser is idempotent on clientName: a duplicate would return the
+  // existing device and read as success. The console must not claim it created one.
+  context.devices.push({ id: "user-1", clientName: "laptop-01" });
+  context.fields.newDeviceName.value = "laptop-01";
+  await context.createDevice();
+  assert.equal(context.calls.length, 1);
+  assert.equal(context.actions.at(-1).tone, "warn");
+  assert.match(context.actions.at(-1).message, /已存在/);
+});
+
 function extractFunction(source, name) {
   const signature = new RegExp(`(?:async\\s+)?function\\s+${name}\\s*\\(`);
   const match = signature.exec(source);

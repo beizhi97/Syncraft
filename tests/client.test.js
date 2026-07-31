@@ -336,19 +336,17 @@ test("client UI preserves loaded job fields when reading the edit form without e
 
   assert.match(html, /id="remoteTargetSummary"/);
   assert.match(html, /授权与执行范围/);
-  assert.match(html, /id="remoteFolder"/);
-  assert.match(html, /id="serverSpace"/);
-  assert.match(html, /<select id="serverSpace">/);
-  assert.match(html, /<option value="shared">共享空间<\/option>/);
-  assert.match(html, /<input id="remoteFolder" type="text"/);
+  // 同步空间和远端子目录不再是本地表单项：服务端签发的 MinIO 策略只授权
+  // ${prefix}/*，客户端再提供选择只会让用户选出一个服务端必拒的组合。
+  assert.doesNotMatch(html, /id="remoteFolder"/);
+  assert.doesNotMatch(html, /id="serverSpace"/);
+  assert.match(html, /id="syncSpaceSummary"/);
   assert.match(html, /已授权同步内容/);
   assert.match(app, /let currentJobDraft = null/);
   assert.match(app, /const clientJobDraftFields = \[/);
   for (const field of [
     "id",
     "name",
-    "remoteFolder",
-    "serverSpace",
     "checkers",
     "s3UploadConcurrency",
     "s3ChunkSize",
@@ -364,24 +362,28 @@ test("client UI preserves loaded job fields when reading the edit form without e
   assert.match(app, /function toClientJobDraft\(job = \{\}\)/);
   assert.match(app, /currentJobDraft = toClientJobDraft\(job\)/);
   assert.match(app, /const base = currentJobDraft && typeof currentJobDraft === "object" \? currentJobDraft : \{\}/);
-  assert.match(app, /\.\.\.base,\s+direction: fields\.direction\.value/s);
-  assert.match(app, /const remoteFolder = readRemoteFolderField\(\)/);
-  assert.match(app, /remoteFolder,/);
-  assert.match(app, /function readRemoteFolderField\(\)/);
+  assert.doesNotMatch(app, /function readRemoteFolderField\(\)/);
   assert.doesNotMatch(app, /error\.code = "remote_folder_required"/);
-  assert.match(app, /shared_remote_folder_required/);
-  assert.match(app, /invalid_remote_folder/);
+  // 这两个码只由已删除的 readRemoteFolderField 抛出，留在文案表里就是死条目。
+  assert.doesNotMatch(app, /shared_remote_folder_required/);
+  assert.doesNotMatch(app, /invalid_remote_folder/);
   assert.match(app, /function jobPreviewFingerprint\(job = \{\}\)/);
   assert.match(app, /lastPreviewJobFingerprint = jobPreviewFingerprint\(job\)/);
-  assert.match(app, /title: "确认远端目标"/);
-  assert.match(app, /serverSpace: fields\.serverSpace\.value/);
-  assert.match(app, /fields\.remoteFolder\.value = currentJobDraft\.remoteFolder \|\| ""/);
-  assert.match(app, /fields\.serverSpace\.value = currentJobDraft\.serverSpace \|\| "device"/);
-  assert.match(app, /function updateRemoteTargetDraft\(\)/);
+  assert.match(app, /title: "确认同步范围"/);
+  // 确认框不再叫「远端目标」：客户端已经没有远端路由可选，能确认的只有同步范围。
+  assert.doesNotMatch(app, /远端目标|远端目录/);
+  assert.doesNotMatch(app, /function updateRemoteTargetDraft\(\)/);
   assert.match(app, /Object\.hasOwn\(job, field\)/);
   assert.match(app, /function renderRemoteTargetSummary\(job = \{\}, profileSummary = null\)/);
   assert.match(app, /renderRemoteTargetSummary\(status\.jobs\[status\.jobs\.length - 1\] \|\| currentJobDraft, status\.profileSummary\)/);
-  assert.match(app, /\["授权范围", "整个已授权同步内容"\]/);
+  // 摘要从「整个已授权同步内容」这一句占位，换成服务端实际签发的空间、角色与方向。
+  // 仓库名和前缀仍然不能出现——不泄露存储路由这条约束没有放松。
+  assert.match(app, /\["同步空间", formatSyncSpaceName\(summary\.syncSpace\)\]/);
+  // 「未绑定同步空间」的兜底文案只能有一处来源，否则同一状态又会出现多种说法。
+  assert.match(app, /function formatSyncSpaceName\(syncSpace\)/);
+  assert.equal(app.match(/"未绑定同步空间（离线配置）"/g).length, 1);
+  assert.match(app, /\["本设备角色", formatSyncSpaceRole\(summary\.authorization\?\.role\)\]/);
+  assert.match(app, /\["授权方向", formatAuthorizedDirections\(summary\.authorization\?\.directions\)\]/);
   assert.doesNotMatch(app, /\["仓库", job\.bucketName \|\| "-"\]/);
   assert.doesNotMatch(app, /\["路径", job\.remotePrefix \|\| "-"\]/);
   assert.match(app, /function authorizationState\(heartbeat = null\)/);
@@ -391,17 +393,45 @@ test("client UI preserves loaded job fields when reading the edit form without e
   assert.doesNotMatch(app, /secretAccessKey"[\s\S]*clientJobDraftFields/);
 });
 
-test("client UI rejects invalid sync numeric fields instead of falling back", async () => {
+test("client UI does not send transfers/streams so server defaults win", async () => {
   const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
+  const html = await readFile(join(projectRoot, "client", "public", "index.html"), "utf8");
 
-  assert.match(app, /function readPositiveIntegerField\(input, label, max\)/);
-  assert.match(app, /!Number\.isInteger\(value\) \|\| value < 1 \|\| value > max/);
-  assert.match(app, /throw new Error\(`\$\{label\}必须是 1 到 \$\{max\} 之间的整数。`\)/);
-  assert.match(app, /transfers: readPositiveIntegerField\(fields\.transfers, "并行文件", 32\)/);
-  assert.match(app, /streams: readPositiveIntegerField\(fields\.streams, "单文件线程", 32\)/);
+  // The client is an appliance: parallelism is a server-issued default, never a
+  // local form field. Removal is the fix — a fallback would silently re-shadow
+  // the admin value, which is exactly the bug this replaced.
+  assert.doesNotMatch(html, /id="transfers"/);
+  assert.doesNotMatch(html, /id="streams"/);
+  assert.doesNotMatch(html, /并行文件/);
+  assert.doesNotMatch(html, /单文件线程/);
+  assert.doesNotMatch(app, /fields\.transfers/);
+  assert.doesNotMatch(app, /fields\.streams/);
+  assert.doesNotMatch(app, /readPositiveIntegerField/);
   assert.doesNotMatch(app, /function numberField/);
-  assert.doesNotMatch(app, /transfers: numberField\(fields\.transfers, 4\)/);
-  assert.doesNotMatch(app, /streams: numberField\(fields\.streams, 8\)/);
+
+  // clientJobDraftFields must not whitelist them either, or a saved job would
+  // spread stale values back into the payload through `...base`.
+  const draftFields = app.slice(app.indexOf("const clientJobDraftFields"), app.indexOf("];", app.indexOf("const clientJobDraftFields")));
+  assert.doesNotMatch(draftFields, /"transfers"/);
+  assert.doesNotMatch(draftFields, /"streams"/);
+
+  // Behavioural: with the client silent, the admin default reaches the job.
+  const profile = {
+    clientName: "company-pc1",
+    tunnel: { uri: tunnelUri },
+    storage: {
+      endpoint: "http://minio:9000",
+      bucket: "home-sync",
+      accessKeyId: "company-pc1",
+      secretAccessKey: "secret",
+      prefix: "devices/company-pc1"
+    },
+    defaults: { localProxyPort: 18081, transfers: 12, streams: 3, chunkSize: "16M" }
+  };
+
+  const job = buildJobFromProfile(profile, { remoteFolder: "", serverSpace: "device" });
+  assert.equal(job.transfers, 12);
+  assert.equal(job.streams, 3);
 });
 
 test("client empty state import action opens settings", async () => {
@@ -1268,7 +1298,11 @@ test("client confirms sync compatibility warnings before saving or running sync"
   assert.match(app, /`本地：\$\{job\.localPath \|\| "未选择"\}`/);
   assert.match(app, /`方向：\$\{formatDirection\(job\.direction\)\}`/);
   assert.match(app, /"同步内容：当前 SyncKey 已授权内容"/);
-  assert.doesNotMatch(app, /`远端：\$\{formatRemoteTarget\(job\)\}`/);
+  // formatRemoteTarget/formatServerSpace 已随本地路由控件一起删除：前者返回常量、
+  // 后者翻译的正是被废除的「共享空间/设备空间」二分，留着就等着被重新接上。
+  assert.doesNotMatch(app, /function formatRemoteTarget/);
+  assert.doesNotMatch(app, /function formatServerSpace/);
+  assert.doesNotMatch(app, /共享空间|设备空间/);
   assert.match(app, /const job = readJob\(\);\s+const result = await clientApi\.previewSync\(\{ job \}\);\s+lastPreviewJobFingerprint = jobPreviewFingerprint\(job\)/);
   assert.match(app, /clientApi\.saveJob\(\{\s+job: confirmed\.job,\s+confirmCompatibilityWarning: confirmed\.confirmCompatibilityWarning,\s+confirmDestructiveSync: confirmed\.confirmDestructiveSync\s+\}\)/);
   assert.match(app, /createSyncSafetyPlan\(\{ job: confirmed\.job \}\)/);
@@ -1354,7 +1388,7 @@ test("client confirmed job flow sequences compatibility and destructive sync con
       policy: { syncRun: "warn" },
       issues: [{ field: "clientStatus", local: 2, remote: 1 }]
     },
-    job: { destructiveSync: true, direction: "upload", remoteFolder: "internal-trial-001", serverSpace: "shared" }
+    job: { destructiveSync: true, direction: "upload" }
   });
 
   context.confirmationQueue.push({ confirmed: true }, { confirmed: true, text: "镜像同步" });
@@ -1369,12 +1403,11 @@ test("client confirmed job flow sequences compatibility and destructive sync con
   assert.match(context.confirmations[1].body, /镜像同步会删除目标端多余文件/);
   assert.match(context.confirmations[1].body, /本地：D:\\Work/);
   assert.match(context.confirmations[1].body, /当前 SyncKey 已授权内容/);
-  assert.doesNotMatch(context.confirmations[1].body, /internal-trial-001|共享空间/);
+  // 确认框绝不能泄露存储路由。草稿里带着仓库名和前缀，正是可能被顺手拼进去的两个值。
+  assert.doesNotMatch(context.confirmations[1].body, /home-sync|devices\/company-pc1/);
   assert.equal(confirmedRun.confirmCompatibilityWarning, true);
   assert.equal(confirmedRun.confirmDestructiveSync, true);
   assert.equal(confirmedRun.job.destructiveSync, true);
-  assert.equal(confirmedRun.job.remoteFolder, "internal-trial-001");
-  assert.equal(confirmedRun.job.serverSpace, "shared");
 
   const saveContext = buildConfirmedJobContext(app, {
     compatibility: { policy: { syncRun: "warn" } },
@@ -1405,39 +1438,26 @@ test("client confirmed job flow sequences compatibility and destructive sync con
   assert.equal(confirmedSave.confirmDestructiveSync, false);
 });
 
-test("client confirmed job flow uses the SyncKey device directory when its optional subdirectory is empty", async () => {
+test("client confirmed job carries no local storage routing, so the SyncKey prefix is the only target", async () => {
   const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
 
-  const missingFolderContext = buildConfirmedJobContext(app, {
-    job: { remoteFolder: "", serverSpace: "device" }
+  // 旧行为是用户自己填远端子目录并在共享空间下必填。两者都已删除：MinIO 策略只
+  // 授权 ${prefix}/*，客户端能提供的任何路由选择都是一个服务端必拒的组合。
+  // 这里断言 job 里连字段都不再出现，而不是断言它等于某个默认值——留一个默认值
+  // 就等于留一条重新接上本地路由的缝。
+  const context = buildConfirmedJobContext(app, {
+    job: { direction: "upload", localPath: "D:\\Work" }
   });
-  const rootTarget = await missingFolderContext.readConfirmedJob("save");
-  assert.equal(rootTarget.job.remoteFolder, "");
-  assert.equal(rootTarget.job.serverSpace, "device");
+  const confirmed = await context.readConfirmedJob("save");
+  assert.equal(Object.hasOwn(confirmed.job, "remoteFolder"), false);
+  assert.equal(Object.hasOwn(confirmed.job, "serverSpace"), false);
+  assert.equal(confirmed.job.localPath, "D:\\Work");
+  assert.equal(confirmed.job.direction, "upload");
 
-  const missingSharedFolderContext = buildConfirmedJobContext(app, {
-    job: { remoteFolder: "", serverSpace: "shared" }
-  });
-  await assert.rejects(
-    missingSharedFolderContext.readConfirmedJob("save"),
-    (error) => error?.code === "shared_remote_folder_required"
-  );
-
-  for (const remoteFolder of ["../escape", "C:\\secret", "/absolute"]) {
-    const invalidFolderContext = buildConfirmedJobContext(app, {
-      job: { remoteFolder }
-    });
-    await assert.rejects(
-      invalidFolderContext.readConfirmedJob("run"),
-      (error) => error?.code === "invalid_remote_folder"
-    );
-  }
-
-  const safeFolderContext = buildConfirmedJobContext(app, {
-    job: { remoteFolder: "internal-trial-001" }
-  });
-  const confirmed = await safeFolderContext.readConfirmedJob("run");
-  assert.equal(confirmed.job.remoteFolder, "internal-trial-001");
+  // 草稿里带着历史遗留的 serverSpace 时也不能被读回 job：老任务能继续跑靠的是
+  // 服务端 buildJobFromProfile 仍然接受这些字段，不是客户端再把它们发出去。
+  assert.doesNotMatch(app, /serverSpace: fields\./);
+  assert.doesNotMatch(app, /remoteFolder: fields\./);
 });
 
 test("client save and run send confirmed job payload flags to local API", async () => {
@@ -3683,14 +3703,6 @@ function buildConfirmedJobContext(app, options = {}) {
   const destructiveSource = extractBrowserFunctionRange(
     app,
     "function destructiveSyncConfirmationBody",
-    "function formatRemoteTarget"
-  ) + extractBrowserFunctionRange(
-    app,
-    "function formatRemoteTarget",
-    "function formatServerSpace"
-  ) + extractBrowserFunctionRange(
-    app,
-    "function formatServerSpace",
     "function formatDirection"
   ) + extractBrowserFunctionRange(
     app,
@@ -3707,8 +3719,6 @@ function buildConfirmedJobContext(app, options = {}) {
   const fields = {
     direction: { value: jobOptions.direction || "upload" },
     localPath: { value: jobOptions.localPath || "D:\\Work" },
-    remoteFolder: { value: Object.hasOwn(jobOptions, "remoteFolder") ? jobOptions.remoteFolder : "projects" },
-    serverSpace: { value: jobOptions.serverSpace || "device" },
     transfers: { value: String(jobOptions.transfers || 4) },
     streams: { value: String(jobOptions.streams || 8) },
     destructiveSync: { checked: Boolean(jobOptions.destructiveSync) }
@@ -3721,14 +3731,16 @@ function buildConfirmedJobContext(app, options = {}) {
     currentJobDraft: {
       name: "Home Sync",
       bucketName: "home-sync",
-      remotePrefix: "devices/company-pc1",
-      serverSpace: "device"
+      remotePrefix: "devices/company-pc1"
     }
   };
   runInNewContext([
     "function readPositiveIntegerField(field) { return Number(field.value); }",
     "function readBandwidthLimit() { return 'off'; }",
     "function readSchedule() { return { mode: 'manual' }; }",
+    // 方向授权在 readDirectionField 里校验；确认流程测的是确认顺序，
+    // 未知授权（null）时不施加额外限制，与 legacy profile 的行为一致。
+    "function allowedSyncDirections() { return null; }",
     "async function requestConfirmation(options) { confirmations.push(options); return confirmationQueue.shift() ?? null; }",
     "function formatCompatibility(compatibility) { return compatibility?.status || 'warning'; }",
     destructiveSource,
@@ -3876,6 +3888,8 @@ function buildStatusPollingContext(app) {
     "function renderSyncHistory() {}",
     "function renderProfileSummary() {}",
     "function renderRemoteTargetSummary() {}",
+    // 方向授权改选择器可选项，与状态轮询的去重/丢弃逻辑无关，这里存根即可。
+    "function applySyncDirectionAuthorization() {}",
     "function writeJob(job) { $('localPath').value = job.localPath || ''; }",
     source,
     "this.loadStatus = loadStatus;"

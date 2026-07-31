@@ -654,6 +654,19 @@ function summarizeClientProfile(profile = {}) {
       bucket: profile.storage?.bucket,
       prefix: profile.storage?.prefix
     },
+    // v2：把服务端已经算好的空间归属和授权透传给 UI。
+    // UI 必须只读这两块来决定可选同步方向；它们不含任何密钥，展示安全。
+    // legacy/离线 profile 没有这两块，此时为 null，UI 退回到「三个方向都可选」的旧行为。
+    syncSpace: profile.syncSpace ? {
+      id: profile.syncSpace.id,
+      syncId: profile.syncSpace.syncId,
+      mode: profile.syncSpace.mode
+    } : null,
+    authorization: profile.authorization ? {
+      role: profile.authorization.role,
+      directions: Array.isArray(profile.authorization.directions) ? [...profile.authorization.directions] : [],
+      allowDelete: profile.authorization.allowDelete === true
+    } : null,
     defaults: profile.defaults || {}
   };
 }

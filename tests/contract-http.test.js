@@ -2691,7 +2691,7 @@ test("HTTP contract: server-issued SyncKey imports into client profile and accep
   assert.equal(health.version, "0.3.0-rc.3");
   assert.equal(health.diagnostics.role, "server");
   assert.equal(health.diagnostics.version, "0.3.0-rc.3");
-  assert.equal(health.diagnostics.protocols.profile, 1);
+  assert.equal(health.diagnostics.protocols.profile, 2);
   assert.equal(health.diagnostics.protocols.heartbeat, 1);
   assert.deepEqual(health.adminAuth, { enabled: false });
   const stateForHealthContract = await getJson(`${baseUrl}/api/admin/state`);
@@ -3156,7 +3156,7 @@ test("HTTP contract: server-issued SyncKey imports into client profile and accep
       buildTime: null,
       protocols: {
         claim: 1,
-        profile: 1,
+        profile: 2,
         adminState: 1,
         clientStatus: 1,
         heartbeat: 1
@@ -3394,7 +3394,7 @@ test("HTTP contract: server-issued SyncKey imports into client profile and accep
       buildTime: null,
       protocols: {
         claim: 1,
-        profile: 1,
+        profile: 2,
         adminState: 1,
         clientStatus: 1,
         heartbeat: 1
@@ -3510,7 +3510,7 @@ test("HTTP contract: admin token protects management APIs without blocking runti
   assert.equal(authenticatedState.appVersion, "0.3.0-rc.3");
   assert.equal(authenticatedState.diagnostics.role, "server");
   assert.equal(authenticatedState.diagnostics.version, "0.3.0-rc.3");
-  assert.equal(authenticatedState.diagnostics.protocols.profile, 1);
+  assert.equal(authenticatedState.diagnostics.protocols.profile, 2);
   assert.deepEqual(health.diagnostics.protocols, authenticatedState.diagnostics.protocols);
   assertAdminStateSummaryContract(authenticatedState, "authenticatedState");
   assert.equal(authenticatedState.users.length, 0);

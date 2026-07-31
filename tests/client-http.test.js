@@ -962,7 +962,7 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.equal(statusAfterSavePayload.clientVersion, "0.3.0-rc.3");
   assert.equal(statusAfterSavePayload.diagnostics.role, "client");
   assert.equal(statusAfterSavePayload.diagnostics.version, "0.3.0-rc.3");
-  assert.equal(statusAfterSavePayload.diagnostics.protocols.profile, 1);
+  assert.equal(statusAfterSavePayload.diagnostics.protocols.profile, 2);
   assert.equal(statusAfterSavePayload.diagnostics.protocols.heartbeat, 1);
   assert.match(statusAfterSavePayload.paths.root, /sfsc-client-http-/);
   assert.match(statusAfterSavePayload.paths.binRoot, /bin/);

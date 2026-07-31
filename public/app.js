@@ -22,9 +22,12 @@ const fields = {
   newSyncId: byId("newSyncId"),
   syncSpaceOwnerSelect: byId("syncSpaceOwnerSelect"),
   syncSpaceSelect: byId("syncSpaceSelect"),
+  newSyncSpaceMode: byId("newSyncSpaceMode"),
   syncSpaceRole: byId("syncSpaceRole"),
   deviceName: byId("deviceName"),
   bucketSelect: byId("bucketSelect"),
+  newDeviceName: byId("newDeviceName"),
+  newDeviceBucket: byId("newDeviceBucket"),
   expiresInHours: byId("expiresInHours"),
   transfers: byId("transfers"),
   streams: byId("streams"),
@@ -65,6 +68,7 @@ fields.deviceCompatFilter.addEventListener("change", renderDevices);
 fields.deviceSearch.addEventListener("input", renderDevices);
 byId("createClaimBtn").addEventListener("click", createClaim);
 byId("createSyncSpaceBtn").addEventListener("click", createSyncSpace);
+byId("createDeviceBtn").addEventListener("click", createDevice);
 byId("copyClaimBtn").addEventListener("click", copyClaim);
 byId("copyClaimUriBtn").addEventListener("click", copyClaimUri);
 byId("redeemPreviewBtn").addEventListener("click", redeemPreview);
@@ -576,6 +580,39 @@ async function createClaim() {
   await renderLatestSingboxConfigPreview();
 }
 
+async function createDevice() {
+  const clientName = fields.newDeviceName.value.trim();
+  if (!clientName) {
+    setAction("请填写设备名。", "warn");
+    return;
+  }
+  const existing = findDeviceByName(clientName);
+  if (existing) {
+    // createManagedUser is idempotent on clientName: it would return the existing
+    // device and report success. Say so instead of implying a new device appeared.
+    setAction(`${clientName} 已存在，未创建新设备。请换一个设备名。`, "warn");
+    return;
+  }
+  const bucketName = fields.newDeviceBucket.value;
+  const result = await runAction(
+    "正在创建设备...",
+    `设备 ${clientName} 已创建。下一步：生成 SyncKey 后才能在客户端导入。`,
+    () => api("/api/admin/users/create", {
+      clientName,
+      ...(bucketName ? { bucketName } : {})
+    })
+  );
+  if (!result) return;
+  state = result.state;
+  fields.newDeviceName.value = "";
+  // The contract's original objection to a console create button was that it
+  // strands "registered but no importable SyncKey" half-built devices. Carry the
+  // new device into the SyncKey flow so creation continues instead of dangling.
+  fields.deviceName.value = clientName;
+  renderDebugJson({ user: result.user });
+  renderState();
+}
+
 async function createSyncSpace() {
   const syncId = fields.newSyncId.value.trim();
   const ownerUserId = fields.syncSpaceOwnerSelect.value;
@@ -584,7 +621,7 @@ async function createSyncSpace() {
     return;
   }
   const result = await runAction("正在创建同步空间...", "同步空间已创建。", () =>
-    api("/api/admin/sync-spaces/create", { syncId, ownerUserId })
+    api("/api/admin/sync-spaces/create", { syncId, ownerUserId, mode: fields.newSyncSpaceMode.value })
   );
   if (!result) return;
   state = result.state;
@@ -838,6 +875,10 @@ function formatError(error) {
     singbox_start_failed: "客户端隧道启动失败，请查看客户端诊断日志。",
     storage_request_failed: "存储服务请求失败，请检查 MinIO、地址和密钥。",
     sync_already_running: "客户端已有其他同步任务正在运行，请等待完成后再启动这个任务。",
+    sync_id_unavailable: "这个同步空间名称已被占用，请换一个。",
+    sync_space_access_denied: "这台设备没有该同步空间的授权，请先把它加入空间。",
+    sync_space_membership_exists: "这台设备已经是该同步空间的成员。",
+    sync_space_role_not_allowed: "备份用途的同步空间不接受只读成员，请改用分发用途，或把角色设为可写。",
     request_timeout: "请求服务超时，请稍后重试。",
     unsupported_media_type: "请求内容类型不受支持，请刷新页面后重试。",
     unsupported_profile_version: "当前客户端不支持这个配置版本，请升级客户端。",
@@ -1378,6 +1419,16 @@ function renderStorage() {
     ? current
     : activeBuckets[0]?.name || "";
 
+  const currentNewDeviceBucket = fields.newDeviceBucket.value || storage.bucket;
+  fields.newDeviceBucket.innerHTML = activeBuckets.length
+    ? activeBuckets.map((bucket) =>
+      `<option value="${escapeHtml(bucket.name)}">${escapeHtml(bucket.name)}</option>`
+    ).join("")
+    : `<option value="">先创建仓库</option>`;
+  fields.newDeviceBucket.value = activeBuckets.some((bucket) => bucket.name === currentNewDeviceBucket)
+    ? currentNewDeviceBucket
+    : activeBuckets[0]?.name || "";
+
   byId("bucketList").innerHTML = storage.buckets.length ? storage.buckets.map((bucket) =>
     renderBucketItem(bucket, storage.buckets, activeBuckets)
   ).join("") : `<div class="empty">暂无仓库</div>`;
@@ -1392,10 +1443,18 @@ function renderSyncSpaces() {
     ? devices.map((device) => `<option value="${escapeHtml(device.id)}">${escapeHtml(device.clientName)}</option>`).join("")
     : `<option value="">先创建设备</option>`;
   fields.syncSpaceOwnerSelect.value = devices.some((device) => device.id === selectedOwner) ? selectedOwner : devices[0]?.id || "";
-  fields.syncSpaceSelect.innerHTML = `<option value="">设备私有空间</option>${spaces.map((space) =>
-    `<option value="${escapeHtml(space.id)}">${escapeHtml(space.syncId)} · ${escapeHtml(space.memberCount)} 个成员</option>`
+  // 私有空间也是一个有真实 syncId 的同步空间，不是「没有空间」这个替代项。
+  // 空值的含义是「这台设备用它自己的私有空间」，措辞必须仍然落在「同步空间」这个词上。
+  fields.syncSpaceSelect.innerHTML = `<option value="">这台设备的私有同步空间</option>${spaces.map((space) =>
+    `<option value="${escapeHtml(space.id)}">${escapeHtml(space.syncId)} · ${escapeHtml(formatSyncSpaceMode(space.mode))} · ${escapeHtml(space.memberCount)} 个成员</option>`
   ).join("")}`;
   fields.syncSpaceSelect.value = spaces.some((space) => space.id === selectedSpace) ? selectedSpace : "";
+}
+
+// 与客户端 app.js 的同名函数保持同一张对照表：同一个空间在两个界面必须用同一个词
+// 描述自己的用途，否则管理员看到的「分发」和用户看到的说法会对不上。
+function formatSyncSpaceMode(mode) {
+  return { backup: "备份", distribution: "分发", collaboration: "协作" }[mode] || "未知";
 }
 
 function renderBucketItem(bucket, buckets = [], activeBuckets = []) {

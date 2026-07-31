@@ -12,6 +12,9 @@
     "clientStatus": 1,
     "heartbeat": 1
   },
+  "supersededProtocols": {
+    "profile": 2
+  },
   "compatibility": {
     "onMismatch": "warn_and_confirm",
     "heartbeat": "allow",

@@ -97,9 +97,13 @@
                   <div class="form-row"><label for="newSyncId">同步 ID</label><input id="newSyncId" type="text" placeholder="例如 team-documents"></div>
                   <div class="form-row"><label for="syncSpaceOwnerSelect">Owner 设备</label><select id="syncSpaceOwnerSelect"><option value="">先创建设备</option></select></div>
                 </div>
+                <div class="form-grid-2">
+                  <div class="form-row"><label for="newSyncSpaceMode">用途</label><select id="newSyncSpaceMode"><option value="collaboration" selected>协作（双向）</option><option value="backup">备份（仅上传）</option><option value="distribution">分发（写入端上传，其余只读）</option></select></div>
+                </div>
+                <div class="section-label">用途决定成员可用的同步方向，创建后不能修改；建错只能删除空间重建。</div>
                 <div class="btn-row"><button id="createSyncSpaceBtn" class="btn-secondary" type="button">创建同步空间</button></div>
                 <div class="form-grid-2">
-                  <div class="form-row"><label for="syncSpaceSelect">目标同步空间</label><select id="syncSpaceSelect"><option value="">设备私有空间</option></select></div>
+                  <div class="form-row"><label for="syncSpaceSelect">目标同步空间</label><select id="syncSpaceSelect"><option value="">这台设备的私有同步空间</option></select></div>
                   <div class="form-row"><label for="syncSpaceRole">设备角色</label><select id="syncSpaceRole"><option value="writer" selected>可写</option><option value="reader">只读</option><option value="owner">Owner</option></select></div>
                 </div>
                 <div class="form-grid-2">
@@ -140,6 +144,17 @@
 
         <section id="tab-devices" class="tab-panel" data-page-title="设备" data-component="devices-panel">
           <div class="page-head"><div><h1>设备</h1></div><button class="btn-primary" type="button" data-tab-target="tab-tkey">生成 SyncKey</button></div>
+          <section class="panel">
+            <div class="panel-head"><h2>新建设备</h2><span class="status">先建设备，再建同步空间</span></div>
+            <div class="panel-body">
+              <div class="section-label">注册一台设备。设备是同步空间的成员单位，也是签发 SyncKey 的对象。</div>
+              <div class="form-grid-2">
+                <div class="form-row"><label for="newDeviceName">设备名</label><input id="newDeviceName" type="text" placeholder="例如 laptop-01"></div>
+                <div class="form-row"><label for="newDeviceBucket">同步仓库</label><select id="newDeviceBucket"><option value="">等待仓库列表...</option></select></div>
+              </div>
+              <div class="actions"><button id="createDeviceBtn" class="btn-primary" type="button">创建设备</button></div>
+            </div>
+          </section>
           <section class="panel device-panel">
             <div class="filter-bar device-filters">
               <input id="deviceSearch" type="text" placeholder="搜索设备、同步状态或文件">

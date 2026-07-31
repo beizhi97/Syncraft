@@ -22,7 +22,7 @@
 | POST | `/api/admin/storage/buckets/disable` | 管理 token | 服务端控制台 | 停用同步仓库 |
 | POST | `/api/admin/storage/buckets/clear` | 管理 token | 服务端控制台 | 清空同步仓库对象，需要危险确认 |
 | POST | `/api/admin/storage/buckets/delete-empty` | 管理 token | 服务端控制台 | 删除空同步仓库，需要危险确认 |
-| POST | `/api/admin/users/create` | 管理 token | 调试/运维入口 | 低层创建或登记设备；服务端控制台生成设备应使用 `/api/claims/create` |
+| POST | `/api/admin/users/create` | 管理 token | 服务端控制台、调试/运维入口 | 创建或登记设备。控制台「设备 → 新建设备」显式调用；同名设备是幂等返回既有设备，控制台改为前置拦截并提示，不谎报新建。`/api/claims/create` 仍会在设备名首次出现时隐式建设备，但那是签发 SyncKey 的副作用，不是建设备的正式入口 |
 | POST | `/api/admin/users/enable` | 管理 token | 服务端控制台 | 启用设备 |
 | POST | `/api/admin/users/disable` | 管理 token | 服务端控制台 | 停用设备 |
 | POST | `/api/admin/users/delete` | 管理 token | 服务端控制台、smoke lifecycle | 删除设备，需要危险确认 |
