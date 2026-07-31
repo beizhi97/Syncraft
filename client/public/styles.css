@@ -46,6 +46,9 @@ a{color:var(--accent);text-decoration:none}
 .pill.good{background:var(--success-soft);color:var(--success-text)}
 .pill.warn{background:var(--warning-soft);color:var(--warning-text)}
 .pill.bad{background:var(--error-soft);color:var(--error-text)}
+/* unknown: 客户端连不上时用的中性态。刻意不复用 .bad——「不知道」和「坏了」是两件事，
+   把未知画成红色会让用户以为组件故障，从而去修一个并不存在的问题。 */
+.pill.unknown{background:var(--bg);color:var(--text-3)}
 .topbar-spacer{flex:1}
 .topbar-actions{display:flex;gap:8px}
 .topbar-actions button{padding:6px 14px;border-radius:var(--radius-sm);font-size:13px;
@@ -175,6 +178,8 @@ a{color:var(--accent);text-decoration:none}
 .health-card.bad .status{color:var(--error)}
 .health-card.good{color:var(--success)}
 .health-card.bad{color:var(--error)}
+.health-card.unknown{color:var(--text-3)}
+.health-card.unknown .status{color:var(--text-3)}
 .info-list{display:flex;flex-direction:column;gap:6px}
 .info-item{display:flex;justify-content:space-between;font-size:12px;padding:4px 0}
 .info-item .k{color:var(--text-3)}

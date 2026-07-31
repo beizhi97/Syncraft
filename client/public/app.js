@@ -19,6 +19,8 @@ const fields = {
 
 let pendingConfirmation = null;
 let latestStatus = null;
+// 当前事件及其所描述的状态签名。null = 事件区为空。
+let currentAction = null;
 let latestSyncHistory = [];
 let currentJobDraft = null;
 let statusRequestInFlight = null;
@@ -125,36 +127,8 @@ async function loadStatusOnce(requestId) {
     }
     latestAppliedStatusRequestId = requestId;
     latestStatus = status;
-    updateBodyState(status);
-    $("clientVersion").textContent = status.appVersion || status.clientVersion || "-";
-    const successfulHeartbeat = currentSuccessfulHeartbeat(status);
-    $("clientProtocols").textContent = formatProtocols(status.diagnostics?.protocols);
-    $("serverProtocols").textContent = formatProtocols(successfulHeartbeat?.serverDiagnostics?.protocols);
-    $("protocolCompatibility").textContent = formatCompatibility(successfulHeartbeat?.compatibility);
-    $("compatibilityPolicy").textContent = formatCompatibilityPolicy(successfulHeartbeat?.compatibility?.policy);
-    $("clientBuildId").textContent = status.diagnostics?.buildId || "-";
-    $("clientBuildTime").textContent = status.diagnostics?.buildTime ? formatShortTime(status.diagnostics.buildTime) : "-";
-    $("releaseManifestStatus").textContent = formatReleaseManifest(status.releaseManifest);
-    $("releaseManifestBuiltAt").textContent = status.releaseManifest?.builtAt ? formatShortTime(status.releaseManifest.builtAt) : "-";
-    $("singboxPath").textContent = status.binaries.singbox.path;
-    $("rclonePath").textContent = status.binaries.rclone.path;
-    $("dataRoot").textContent = status.paths.dataRoot;
-    $("localStateStatus").textContent = formatLocalState(status.safeguards?.localState);
-    $("secretVaultStatus").textContent = formatSecretVault(status.safeguards?.secretVault);
-
-    const binariesReady = status.binaries.singbox.exists && status.binaries.rclone.exists;
-    setPill("binStatus", binariesReady ? "组件正常" : "组件缺失", binariesReady ? "good" : "bad");
-    const profileStatus = profileStatusDisplay(status.profileImported, status.heartbeat);
-    setPill("profileStatus", profileStatus.pill, profileStatus.state);
-    renderDeviceRecovery(status.profileImported, status.heartbeat);
-    setPill("tunnelStatus", status.processes.singbox.running ? "隧道运行中" : "隧道已停止", status.processes.singbox.running ? "good" : "");
-    const syncPill = syncStatusPill(status.processes.sync || {});
-    setPill("syncStatus", syncPill.text, syncPill.state);
-    renderHeartbeat(status.heartbeat, status.profileImported);
-    setHealth("singboxHealth", "sing-box", status.binaries.singbox.exists);
-    setHealth("rcloneHealth", "rclone", status.binaries.rclone.exists);
-    renderSyncProgress(status.processes.sync.metrics || {}, status.lastSync);
-    renderScheduler(status.scheduler);
+    renderObservedConfig(status);
+    renderLiveState(status);
     latestSyncHistory = status.syncHistory || [];
     renderSyncHistory(latestSyncHistory);
 
@@ -173,12 +147,105 @@ async function loadStatusOnce(requestId) {
     if (requestId < latestStatusRequestId) {
       return null;
     }
+    // 离线只走这一句。逐个重置元素的老写法已经删掉：成功路径渲染的项比 catch 记得
+    // 重置的多得多，差额会安静地留成残影，而且每加一个渲染项就重新漏一次。
+    renderLiveState(null);
+  }
+}
+
+// ── 活状态与事件 ──────────────────────────────────────────────
+//
+// 「活状态」= 现在怎么样（隧道/同步/心跳/进度/计划）。「配置与身份」= 你配置成什么样
+// （版本、路径、协议、发布清单、保管箱、同步历史）。两者的离线语义相反：前者必须归未知，
+// 后者必须留着，因为排障时用户要看的正是它们，而一次轮询超时就清空只会造成闪烁。
+//
+// renderLiveState 是活状态的唯一入口，status 为 null 即未知。成功与离线两条路径都走它，
+// 所以离线分支不可能漏掉某一项。上一版是在 catch 里逐个重置 6 处，而成功路径渲染 29 处，
+// 剩下 23 处保留上次成功轮询的值：客户端已经连不上了，界面还在断言「隧道运行中」。
+function renderLiveState(status) {
+  const unknown = status === null;
+  const sync = unknown ? null : status.processes?.sync || {};
+
+  if (unknown) {
     setBodyState("state-error");
-    setPill("binStatus", "客户端离线", "bad");
-    setPill("heartbeatStatus", "客户端离线", "bad");
-    setHealth("singboxHealth", "sing-box", false);
-    setHealth("rcloneHealth", "rclone", false);
-    setHealth("heartbeatHealth", "服务端心跳", false, "客户端离线");
+    setPill("binStatus", "未知", "unknown");
+    setPill("profileStatus", "未知", "unknown");
+    setPill("tunnelStatus", "未知", "unknown");
+    setPill("syncStatus", "未知", "unknown");
+    setHealth("singboxHealth", "sing-box", null, "客户端离线");
+    setHealth("rcloneHealth", "rclone", null, "客户端离线");
+  } else {
+    updateBodyState(status);
+    const binariesReady = status.binaries.singbox.exists && status.binaries.rclone.exists;
+    setPill("binStatus", binariesReady ? "组件正常" : "组件缺失", binariesReady ? "good" : "bad");
+    const profileStatus = profileStatusDisplay(status.profileImported, status.heartbeat);
+    setPill("profileStatus", profileStatus.pill, profileStatus.state);
+    setPill("tunnelStatus", status.processes.singbox.running ? "隧道运行中" : "隧道已停止", status.processes.singbox.running ? "good" : "");
+    const syncPill = syncStatusPill(sync);
+    setPill("syncStatus", syncPill.text, syncPill.state);
+    setHealth("singboxHealth", "sing-box", status.binaries.singbox.exists);
+    setHealth("rcloneHealth", "rclone", status.binaries.rclone.exists);
+  }
+
+  renderDeviceRecovery(unknown ? null : status.profileImported, unknown ? null : status.heartbeat);
+  renderHeartbeat(unknown ? null : status.heartbeat, unknown ? null : status.profileImported);
+  renderSyncProgress(unknown ? null : sync.metrics || {}, unknown ? null : status.lastSync);
+  renderScheduler(unknown ? null : status.scheduler);
+
+  expireActionForState(unknown ? null : liveStateSignature(status));
+}
+
+// 只有「最后一次成功观测到的配置事实」进这里。离线时不清空是刻意的：
+// 排障恰恰要看版本号和路径，而它们描述的不是「现在怎么样」。
+function renderObservedConfig(status) {
+  const successfulHeartbeat = currentSuccessfulHeartbeat(status);
+  $("clientVersion").textContent = status.appVersion || status.clientVersion || "-";
+  $("clientProtocols").textContent = formatProtocols(status.diagnostics?.protocols);
+  $("serverProtocols").textContent = formatProtocols(successfulHeartbeat?.serverDiagnostics?.protocols);
+  $("protocolCompatibility").textContent = formatCompatibility(successfulHeartbeat?.compatibility);
+  $("compatibilityPolicy").textContent = formatCompatibilityPolicy(successfulHeartbeat?.compatibility?.policy);
+  $("clientBuildId").textContent = status.diagnostics?.buildId || "-";
+  $("clientBuildTime").textContent = status.diagnostics?.buildTime ? formatShortTime(status.diagnostics.buildTime) : "-";
+  $("releaseManifestStatus").textContent = formatReleaseManifest(status.releaseManifest);
+  $("releaseManifestBuiltAt").textContent = status.releaseManifest?.builtAt ? formatShortTime(status.releaseManifest.builtAt) : "-";
+  $("singboxPath").textContent = status.binaries.singbox.path;
+  $("rclonePath").textContent = status.binaries.rclone.path;
+  $("dataRoot").textContent = status.paths.dataRoot;
+  $("localStateStatus").textContent = formatLocalState(status.safeguards?.localState);
+  $("secretVaultStatus").textContent = formatSecretVault(status.safeguards?.secretVault);
+}
+
+// 事件（actionMessage）的存活期不得超过它所描述的状态。签名只取「事件在描述的那几件事」：
+// 同步状态及是否在跑、隧道是否在跑、心跳结论、配置是否已导入。签名一变，
+// 上一条事件描述的那个世界就已经不在了。
+function liveStateSignature(status) {
+  const sync = status.processes?.sync || {};
+  return [
+    currentProcessSyncState(sync),
+    sync.running ? "running" : "idle",
+    status.processes?.singbox?.running ? "tunnel-up" : "tunnel-down",
+    status.heartbeat?.ok ? "hb-ok" : status.heartbeat?.remoteErrorCode || "hb-none",
+    status.profileImported ? "imported" : "empty"
+  ].join("|");
+}
+
+// 兜底存活期：有些事件描述的状态根本不会变（比如「已保存任务」），签名比对永远不触发，
+// 那条横幅就会长期驻留——和绿色横幅驻留是同一个缺陷的另一副面孔。
+// 错误留久一些：用户需要时间读错误码，而错误本身在状态区也另有体现。
+const actionMessageTtlMs = 6000;
+const errorActionMessageTtlMs = 20000;
+
+function expireActionForState(signature) {
+  if (!currentAction) return;
+  // 未知（signature 为 null）时一律清空：我们无从判断那条事件是否还成立，
+  // 留着它就是在替一个观测不到的状态背书。
+  if (signature === null || signature !== currentAction.signature) {
+    setAction("");
+    return;
+  }
+  const ttl = currentAction.state === "bad" ? errorActionMessageTtlMs : actionMessageTtlMs;
+  if (Date.now() - currentAction.at >= ttl) {
+    setAction("");
   }
 }
 
@@ -884,7 +951,20 @@ function isValidTime(value) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(String(value || ""));
 }
 
-function renderSyncProgress(metrics = {}, lastSync = null) {
+// metrics 为 null 表示「此刻无从观测」（客户端离线）。必须显式分支：默认参数 `= {}`
+// 只拦 undefined 不拦 null，直接往下走会在 metrics.speedMbps 抛 TypeError；
+// 而把 null 当成 {} 更糟——那会渲染出「0.00 Mbps / 0%」，把未知说成「静止且无进度」。
+function renderSyncProgress(metrics, lastSync = null) {
+  if (metrics === null) {
+    $("speedValue").textContent = "-";
+    $("progressFill").style.width = "0%";
+    $("progressValue").textContent = "未知";
+    $("transferredValue").textContent = "-";
+    $("lastSyncValue").textContent = "-";
+    $("currentFileValue").textContent = "-";
+    return;
+  }
+  metrics = metrics || {};
   const speed = Number(metrics.speedMbps || 0);
   const scanning = metrics.syncState === "syncing" && metrics.phase === "scanning";
   const alreadyCurrent = metrics.phase === "completed"
@@ -910,9 +990,16 @@ function renderSyncProgress(metrics = {}, lastSync = null) {
   $("currentFileValue").textContent = `${currentFile}${currentFile === "-" ? "" : currentFileSuffix}`;
 }
 
-function renderScheduler(scheduler = {}) {
+function renderScheduler(scheduler) {
   const target = $("schedulerValue");
   if (!target) return;
+  // null 与 {} 在这里绝不能同义：{} 渲染成「未启用」，那是一句关于配置的断言，
+  // 而离线时我们并不知道计划是否启用。
+  if (scheduler === null) {
+    target.textContent = "未知";
+    return;
+  }
+  scheduler = scheduler || {};
   if (!scheduler.enabled) {
     target.textContent = "未启用";
     return;
@@ -1283,14 +1370,28 @@ function syncStatusPill(sync = {}) {
   return { text: "空闲", state: "" };
 }
 
+// ok 三态：true=正常，false=异常，null=未知。用 null 而不是再加一个布尔参数，
+// 因为「未知」不是「异常」的一种程度——客户端连不上时我们对 sing-box 是否在跑
+// 毫无观测，画成红叉会让用户去修一个可能并不存在的故障。
 function setHealth(id, name, ok, detail = "") {
   const el = $(id);
   const wide = el.classList.contains("wide");
-  el.textContent = `${ok ? "✓" : "×"} ${name}${detail ? ` · ${detail}` : ""}`;
-  el.className = `health-card ${ok ? "good" : "bad"}${wide ? " wide" : ""}`;
+  const unknown = ok === null;
+  const glyph = unknown ? "?" : ok ? "✓" : "×";
+  const tone = unknown ? "unknown" : ok ? "good" : "bad";
+  el.textContent = `${glyph} ${name}${detail ? ` · ${detail}` : ""}`;
+  el.className = `health-card ${tone}${wide ? " wide" : ""}`;
 }
 
+// heartbeat 为 null 表示客户端本身不可达，这与「心跳失败」不同：心跳失败是我们
+// 成功问到了客户端、客户端说它连不上服务端；null 是我们连客户端都没问到，
+// 对服务端可达性没有任何观测。
 function renderHeartbeat(heartbeat, profileImported) {
+  if (heartbeat === null) {
+    setPill("heartbeatStatus", "未知", "unknown");
+    setHealth("heartbeatHealth", "服务端心跳", null, "客户端离线");
+    return;
+  }
   const status = heartbeatDisplay(heartbeat, profileImported);
   setPill("heartbeatStatus", status.pill, status.state);
   setHealth("heartbeatHealth", "服务端心跳", status.ok, status.detail);
@@ -1299,6 +1400,13 @@ function renderHeartbeat(heartbeat, profileImported) {
 function renderDeviceRecovery(profileImported, heartbeat) {
   const target = $("deviceRecoveryNotice");
   if (!target) return;
+  // 离线时收起提示而不是留着：这条提示会指导用户去重新导入 SyncKey，
+  // 而基于陈旧心跳给出的操作建议可能把用户推向一次没必要的重新导入。
+  if (heartbeat === null) {
+    target.hidden = true;
+    target.textContent = "";
+    return;
+  }
   const message = deviceRecoveryMessage(profileImported, heartbeat);
   target.hidden = !message;
   target.textContent = message || "";
@@ -1408,10 +1516,15 @@ function formatHeartbeatDevice(device) {
   return parts.join(" · ");
 }
 
+// 写入事件时记下它所描述的状态签名和时间，让 expireActionForState 能判断
+// 「它描述的那件事还成立吗」。空文本即清空，不记签名——否则清空动作自己会变成一条事件。
 function setAction(text, state) {
   const el = $("actionMessage");
   el.textContent = text;
   el.className = state ? `notice ${state}` : "notice";
+  currentAction = text
+    ? { signature: latestStatus ? liveStateSignature(latestStatus) : null, state: state || "", at: Date.now() }
+    : null;
 }
 
 async function withBusyAction(buttonId, action) {

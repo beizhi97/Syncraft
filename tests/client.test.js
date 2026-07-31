@@ -1066,8 +1066,10 @@ test("client UI surfaces heartbeat status from local runtime state", async () =>
   assert.match(html, /id="heartbeatStatus"/);
   assert.match(html, /id="heartbeatHealth"/);
   assert.match(html, /id="deviceRecoveryNotice"/);
-  assert.match(app, /renderHeartbeat\(status\.heartbeat, status\.profileImported\)/);
-  assert.match(app, /renderDeviceRecovery\(status\.profileImported, status\.heartbeat\)/);
+  // 心跳与设备恢复的渲染入口已并入 renderLiveState：离线时必须传 null 走未知分支，
+  // 而不是不调用从而留下上一次成功轮询的心跳结论。断言仍然钉「渲染器收到哪些参数」。
+  assert.match(app, /renderHeartbeat\(unknown \? null : status\.heartbeat, unknown \? null : status\.profileImported\)/);
+  assert.match(app, /renderDeviceRecovery\(unknown \? null : status\.profileImported, unknown \? null : status\.heartbeat\)/);
   assert.match(app, /profileStatusDisplay\(status\.profileImported, status\.heartbeat\)/);
   assert.match(app, /function heartbeatDisplay/);
   assert.match(app, /function formatHeartbeatDevice\(device\)/);
@@ -1248,7 +1250,10 @@ test("client sync stop waits for rclone exit and keeps diagnostics stable", asyn
   assert.match(app, /state === "stopping"/);
   assert.match(app, /return \{ text: "正在停止", state: "warn" \}/);
   assert.match(app, /if \(sync\.running \|\| state === "syncing"\)/);
-  assert.match(app, /const syncPill = syncStatusPill\(status\.processes\.sync \|\| \{\}\)/);
+  // sync 现在在 renderLiveState 顶部解出（离线时为 null），这里钉的仍是
+  // 「同步 pill 由 syncStatusPill 决定」这条契约。
+  assert.match(app, /const sync = unknown \? null : status\.processes\?\.sync \|\| \{\}/);
+  assert.match(app, /const syncPill = syncStatusPill\(sync\)/);
   assert.match(httpContract, /client sync stop waits through delayed rclone exit before accepting a new run/);
   assert.match(httpContract, /stopActive\.secondRunAfterStop/);
   assert.match(httpContract, /historyAfterIdleStop/);
@@ -3868,6 +3873,15 @@ function buildStatusPollingContext(app) {
     "let latestStatusRequestId = 0;",
     "let latestAppliedStatusRequestId = 0;",
     "const clientApi = { getStatus: () => { this.getStatusCalls += 1; return this.getStatusQueue.shift(); } };",
+    // setBodyState 与 currentAction 都定义在抽取范围之外。历史上这里没桩 setBodyState，
+    // 于是离线分支一执行就 ReferenceError——那正是 catch 分支只重置 6 处、剩下 23 处
+    // 留成残影却长期无人发现的原因：这条路径在任何测试里都没真正跑过。
+    "function setBodyState() {}",
+    "let currentAction = null;",
+    // liveStateSignature 要用它算事件签名。漏桩的表现极具误导性：ReferenceError 被
+    // loadStatusOnce 的裸 catch 吞掉，loadStatus 于是返回 undefined，报错长成
+    // 「Cannot read properties of undefined (reading 'appVersion')」，看着像轮询去重坏了。
+    "function currentProcessSyncState(sync = {}) { return sync.metrics?.syncState || 'idle'; }",
     "function updateBodyState() {}",
     "function currentSuccessfulHeartbeat(status) { return status.lastSuccessfulHeartbeat || status.heartbeat || null; }",
     "function formatProtocols(value) { return value ? 'protocols' : '-'; }",
