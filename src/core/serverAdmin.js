@@ -17,6 +17,12 @@ import {
   requireSyncSpaceMode
 } from "./syncSpaceMode.js";
 
+// 出厂占位口令。它同时是「管理员还没配过存储」的判定依据（见 setupReadiness.js），
+// 和生产启动的 fail-closed 门槛（见 server.js 的 PLACEHOLDER_STORAGE_SECRETS）。
+// 两处必须引用同一个常量：各写一份字面量就会改一处漏一处，而漏掉的那处要么放行
+// 出厂口令上生产，要么把未配置的部署报成已就绪。
+export const DEFAULT_STORAGE_SECRET_PLACEHOLDER = "change-this-minio-root-password";
+
 const DEFAULTS = {
   publicServerUrl: "https://pass.971223.xyz:2025",
   vlessPublicHost: "pass.971223.xyz",
@@ -93,7 +99,7 @@ export function createDefaultAdminState(env = {}) {
       bucket: cleanBucket(env.S3_BUCKET || DEFAULTS.s3Bucket),
       accessKeyMode: "shared",
       accessKeyId: String(env.S3_ACCESS_KEY_ID || env.MINIO_ROOT_USER || "syncadmin"),
-      secretAccessKey: String(env.S3_SECRET_ACCESS_KEY || env.MINIO_ROOT_PASSWORD || "change-this-minio-root-password"),
+      secretAccessKey: String(env.S3_SECRET_ACCESS_KEY || env.MINIO_ROOT_PASSWORD || DEFAULT_STORAGE_SECRET_PLACEHOLDER),
       prefixRoot: "devices",
       sharedPrefix: "shared",
       buckets: [

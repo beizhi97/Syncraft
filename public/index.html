@@ -22,15 +22,19 @@
   <div class="app app-shell">
     <aside class="sidebar" aria-label="管理导航">
       <div class="brand"><span class="brand-mark" aria-hidden="true"></span><strong>Syncraft 管理</strong></div>
+      <!-- 导航顺序即依赖顺序：存储与隧道在 SyncKey 之前。
+           旧顺序把 SyncKey 排在它依赖的基础设置前面，于是「首次搭建」没有对应界面，
+           管理员从最后一步开始点。 -->
       <div class="sidebar-group">
         <div class="sidebar-group-label">运行</div>
         <button class="sidebar-item nav-item active" type="button" data-tab-target="tab-overview"><span class="nav-dot"></span>概览</button>
-        <button class="sidebar-item nav-item" type="button" data-tab-target="tab-tkey"><span class="nav-dot"></span>SyncKey</button>
-        <button class="sidebar-item nav-item" type="button" data-tab-target="tab-devices"><span class="nav-dot"></span>设备</button>
+        <button id="setupNavItem" class="sidebar-item nav-item" type="button" data-tab-target="tab-setup" hidden><span class="nav-dot"></span>首次配置<span id="setupNavBadge" class="badge warning">待完成</span></button>
       </div>
       <div class="sidebar-group">
         <div class="sidebar-group-label">配置</div>
         <button class="sidebar-item nav-item" type="button" data-tab-target="tab-vless" data-nav-group="settings"><span class="nav-dot"></span>基础设置</button>
+        <button class="sidebar-item nav-item" type="button" data-tab-target="tab-devices"><span class="nav-dot"></span>设备</button>
+        <button class="sidebar-item nav-item" type="button" data-tab-target="tab-tkey"><span class="nav-dot"></span>SyncKey</button>
       </div>
       <div class="sidebar-foot">
         <div class="health-indicator"><span id="healthDot" class="health-dot warn"></span><span id="healthText">检测中</span></div>
@@ -49,6 +53,18 @@
 
       <div id="actionMessage" aria-live="polite"></div>
       <div class="main-wrap content">
+        <section id="tab-setup" class="tab-panel" data-page-title="首次配置" data-component="setup-panel">
+          <div class="page-head">
+            <div><h1>首次配置</h1></div>
+            <button id="refreshSetupBtn" class="btn-secondary" type="button">重新检测</button>
+          </div>
+          <div class="panel">
+            <div class="section-label">按顺序完成四步。每一步的就绪由实时证据判定（配置写入与应用时间、sing-box 进程与端口、存储端点探针），不看默认值，所以这里显示的绿灯代表真的能用。</div>
+            <div id="setupProgress" class="section-label">检测中</div>
+            <div id="setupStepList"></div>
+          </div>
+        </section>
+
         <section id="tab-overview" class="tab-panel active" data-page-title="运行概览">
           <div class="page-head">
             <div><h1>运行概览</h1></div>

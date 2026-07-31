@@ -6,6 +6,7 @@ import { dirname, extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { requestSingboxRestart } from "./core/singboxControl.js";
 import { checkApplianceHealth } from "./core/applianceHealth.js";
+import { summarizeSetupReadiness } from "./core/setupReadiness.js";
 import { acquireServerStateLock } from "./core/serverStateLock.js";
 import { ensureMinioClaimAccess, removeMinioDeviceAccess, setMinioDeviceAccessEnabled } from "./minioProvisioner.js";
 import {
@@ -43,6 +44,7 @@ import {
   setStorageBucketEnabled,
   maskSecret,
   summarizeAdminState,
+  DEFAULT_STORAGE_SECRET_PLACEHOLDER,
   summarizeAdminSyncSpace,
   summarizeClaim,
   summarizeDevice,
@@ -68,7 +70,7 @@ const PLACEHOLDER_ADMIN_TOKENS = new Set(["change-this-admin-token"]);
 // CORE-4: the storage secret placeholder must never survive into a production
 // start. Compose now refuses to interpolate without MINIO_ROOT_PASSWORD, and
 // this guard catches direct/manual launches that bypass compose.
-const PLACEHOLDER_STORAGE_SECRETS = new Set(["change-this-minio-root-password"]);
+const PLACEHOLDER_STORAGE_SECRETS = new Set([DEFAULT_STORAGE_SECRET_PLACEHOLDER]);
 const CLAIM_REDEEM_AUDIT_UNAVAILABLE = "unavailable";
 const CLAIM_REDEEM_FAILURE_LIMIT = Number(process.env.SFSC_CLAIM_REDEEM_FAILURE_LIMIT || 8);
 const CLAIM_REDEEM_FAILURE_WINDOW_MS = Number(process.env.SFSC_CLAIM_REDEEM_FAILURE_WINDOW_MS || 10 * 60 * 1000);
@@ -220,6 +222,22 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/admin/state") {
       return json(res, summarizeAdminState(adminState));
+    }
+
+    // 首次运行就绪度单独成端点，不并入 /api/admin/state：它需要实时探针
+    // （MinIO 健康端点带 1.5s 超时、sing-box 端口与 PID），而 summarizeAdminState
+    // 是同步纯函数、被控制台高频轮询。合并会把网络 I/O 的延迟摊到每次状态刷新上。
+    if (req.method === "GET" && url.pathname === "/api/admin/setup") {
+      const health = await checkApplianceHealth({
+        dataDir,
+        singboxControlDir,
+        singboxPort: Number(process.env.SINGBOX_LISTEN_PORT || process.env.VLESS_PORT || 45678),
+        rcloneBin: process.env.RCLONE_BIN,
+        storageEndpoint: process.env.S3_ENDPOINT
+      }).catch(() => null);
+      // 探针整体失败传 null 而不是抛错：就绪度页面在存储挂掉时更需要能打开，
+      // 而 summarizeSetupReadiness 把探针缺失一律算作未就绪，不会因此谎报。
+      return json(res, summarizeSetupReadiness(adminState, health));
     }
 
     const deviceVlessUriMatch = url.pathname.match(/^\/api\/admin\/devices\/([^/]+)\/vless-uri$/);

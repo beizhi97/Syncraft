@@ -43,6 +43,8 @@ const fields = {
 };
 
 let state = null;
+// null 表示「就绪度未取到」，不是「一切正常」。渲染侧必须按未验证处理。
+let setupReadiness = null;
 let latestClaimTKey = "";
 let latestClaimUri = "";
 let latestClaimShortCode = "";
@@ -74,6 +76,7 @@ byId("copyClaimUriBtn").addEventListener("click", copyClaimUri);
 byId("redeemPreviewBtn").addEventListener("click", redeemPreview);
 byId("refreshBtn").addEventListener("click", loadState);
 byId("refreshOverviewBtn").addEventListener("click", loadState);
+byId("refreshSetupBtn").addEventListener("click", loadState);
 byId("loginForm").addEventListener("submit", loginAdmin);
 byId("logoutBtn").addEventListener("click", logoutAdmin);
 byId("confirmForm").addEventListener("submit", submitConfirmation);
@@ -135,6 +138,8 @@ async function loadState() {
     state = await api("/api/admin/state");
     hideAuthGate();
     updateAuthStatus(true);
+    // 就绪度先取再渲染：概览的隧道/存储灯现在读它，缺了会退回「未验证」而不是谎报就绪。
+    await loadSetupReadiness();
     renderState();
   } catch (error) {
     if (error.code === "admin_auth_required") {
@@ -145,6 +150,18 @@ async function loadState() {
       return;
     }
     throw error;
+  }
+}
+
+// 就绪度带实时探针（MinIO 健康端点 1.5s 超时、sing-box 端口与 PID），
+// 所以它独立于 /api/admin/state 取，失败时置 null——渲染侧把 null 当「未验证」，
+// 绝不当「已就绪」。这是整个 C 的前提：未知不等于良好。
+async function loadSetupReadiness() {
+  try {
+    setupReadiness = await api("/api/admin/setup");
+  } catch (error) {
+    if (error.code === "admin_auth_required") throw error;
+    setupReadiness = null;
   }
 }
 
@@ -1195,8 +1212,62 @@ function setConfirmMessage(message) {
   target.textContent = message || "";
 }
 
+// 取一步的就绪信息。拿不到就绪度时返回 null，调用方据此显示「未验证」。
+function readinessStep(id) {
+  const steps = Array.isArray(setupReadiness?.steps) ? setupReadiness.steps : [];
+  return steps.find((step) => step.id === id) || null;
+}
+
+function renderSetupReadiness() {
+  const navItem = byId("setupNavItem");
+  const panel = byId("tab-setup");
+  const complete = setupReadiness?.complete === true;
+  // 全部就绪后收起入口：向导长期驻留会在日常运维界面留下一个永远绿的装饰。
+  // 取不到就绪度时保持显示——那种情况更需要管理员看到检测失败。
+  if (navItem) navItem.hidden = complete;
+  if (panel && complete && panel.classList.contains("active")) {
+    switchTab("tab-overview");
+  }
+
+  const steps = Array.isArray(setupReadiness?.steps) ? setupReadiness.steps : [];
+  const progress = byId("setupProgress");
+  if (progress) {
+    if (!setupReadiness) {
+      progress.textContent = "拿不到就绪检测结果，请确认服务端在运行后重新检测。";
+    } else {
+      const readyCount = steps.filter((step) => step.ready).length;
+      progress.textContent = complete
+        ? `四步全部就绪，首次配置已完成。`
+        : `已完成 ${readyCount} / ${steps.length} 步，当前应处理：${steps.find((step) => step.id === setupReadiness.currentStepId)?.title || "未知"}。`;
+    }
+  }
+
+  const list = byId("setupStepList");
+  if (!list) return;
+  if (!steps.length) {
+    list.innerHTML = `<div class="notice warning"><strong>就绪状态未验证</strong><span>没有拿到检测结果，界面不会据此判断是否配置完成。</span></div>`;
+    return;
+  }
+  list.innerHTML = steps.map((step, index) => {
+    const tone = step.ready ? "good" : step.blocked ? "" : "warn";
+    const stateText = step.ready ? "已就绪" : step.blocked ? "待前置步骤" : "待处理";
+    return `
+      <div class="notice ${step.ready ? "success" : step.blocked ? "" : "warning"}">
+        <strong>${index + 1}. ${escapeHtml(step.title)} <span class="pill ${tone}">${escapeHtml(stateText)}</span></strong>
+        <span>${escapeHtml(step.ready ? step.hint : step.blockedReason || step.hint)}</span>
+        ${step.ready ? "" : `<span><button class="btn-secondary btn-compact" type="button" data-tab-target="${escapeHtml(setupStepTab(step.id))}">前往</button></span>`}
+      </div>`;
+  }).join("");
+}
+
+// 步骤到面板的映射。存储与隧道同属基础设置的两个子页。
+function setupStepTab(id) {
+  return { storage: "tab-storage", tunnel: "tab-vless", device: "tab-devices", synckey: "tab-tkey" }[id] || "tab-overview";
+}
+
 function renderState() {
   if (!state) return;
+  renderSetupReadiness();
   renderStatStrip();
   renderOverview();
   renderVless();
@@ -1271,22 +1342,26 @@ function renderStatStrip() {
 }
 
 function renderOverview() {
-  const tunnel = state?.tunnel || {};
-  const storage = state?.storage || {};
+  // 这里刻意不再从 state.tunnel / state.storage 读任何东西：概览的配置类灯与
+  // 待处理项全部改由就绪度提供。把那两个变量留在作用域里，等于给「顺手用
+  // tunnel.protocol 判断一下」留好了入口，而那正是本轮要消除的缺陷。
   const devices = Array.isArray(state?.devices) ? state.devices : [];
   const enabledDevices = devices.filter((device) => device.enabled !== false);
-  const buckets = Array.isArray(storage.buckets) ? storage.buckets : [];
-  const activeBuckets = buckets.filter((bucket) => !bucket.disabledAt);
   const issues = [];
 
-  if (tunnel.restartRequired) {
-    issues.push({ level: "warning", title: "配置修改尚未应用", detail: "sing-box 仍在使用上一版配置，请到基础设置执行“重启并应用”。" });
+  // 首次配置未完成时，它是唯一值得说的事：底下那些「离线/失败」条目在
+  // 配置本身没完成时全是噪音。旧实现没有「你还没配置完」这个概念，
+  // 于是零配置部署的概览显示「无待处理项」。
+  if (setupReadiness && setupReadiness.complete === false) {
+    const current = setupReadiness.steps.find((step) => step.id === setupReadiness.currentStepId);
+    issues.push({
+      level: "warning",
+      title: "首次配置尚未完成",
+      detail: current ? `下一步：${current.title}。${current.blockedReason || current.hint}` : "打开首次配置面板查看剩余步骤。"
+    });
   }
-  if (!tunnel.protocol) {
-    issues.push({ level: "warning", title: "VLESS 尚未配置", detail: "生成隧道配置后，客户端才能建立同步连接。" });
-  }
-  if (!activeBuckets.length) {
-    issues.push({ level: "danger", title: "没有可用同步仓库", detail: "检查 MinIO 连接并至少启用一个同步仓库。" });
+  if (!setupReadiness) {
+    issues.push({ level: "warning", title: "就绪状态未验证", detail: "拿不到就绪检测结果，界面不会据此判断配置是否完成。" });
   }
   const offlineCount = enabledDevices.filter((device) => !device.online).length;
   if (offlineCount) {
@@ -1308,9 +1383,13 @@ function renderOverview() {
     ? issues.slice(0, 4).map((issue) => `<div class="notice ${issue.level}"><strong>${escapeHtml(issue.title)}</strong><span>${escapeHtml(issue.detail)}</span></div>`).join("")
     : `<div class="notice success"><strong>无待处理项</strong></div>`;
 
-  setOverviewStatus("overviewServiceState", true, "API 与管理状态可达");
-  setOverviewStatus("overviewTunnelState", Boolean(tunnel.protocol) && !tunnel.restartRequired, tunnel.restartRequired ? "待重启应用" : tunnel.protocol ? "已配置并应用" : "尚未配置");
-  setOverviewStatus("overviewStorageState", activeBuckets.length > 0, activeBuckets.length ? `${activeBuckets.length} 个仓库可用` : "没有可用仓库");
+  // 三盏灯改为读就绪度证据。旧实现分别是：硬编码 true、Boolean(tunnel.protocol)、
+  // activeBuckets.length > 0——三者都是「存在一个默认值」，零配置部署会全绿。
+  const tunnelStep = readinessStep("tunnel");
+  const storageStep = readinessStep("storage");
+  setOverviewStatus("overviewServiceState", Boolean(setupReadiness), setupReadiness ? "API 与管理状态可达" : "就绪检测未返回");
+  setOverviewStatus("overviewTunnelState", tunnelStep?.ready === true, tunnelStep ? (tunnelStep.ready ? "已配置并应用" : tunnelStep.blockedReason) : "未验证");
+  setOverviewStatus("overviewStorageState", storageStep?.ready === true, storageStep ? (storageStep.ready ? "已配置并可达" : storageStep.blockedReason) : "未验证");
   const protocolCount = Object.keys(state?.diagnostics?.protocols || {}).length;
   setOverviewStatus("overviewProtocolState", protocolCount > 0, protocolCount ? `${protocolCount} 项协议已报告` : "协议摘要缺失");
 

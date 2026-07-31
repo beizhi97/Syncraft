@@ -11,6 +11,7 @@
 | GET | `/api/health` | 公开 | 服务端控制台、smoke、运维探活 | 服务端健康、版本和协议诊断 |
 | GET | `/api/admin/auth/check` | 管理 token | 服务端控制台、smoke | 校验管理登录状态 |
 | GET | `/api/admin/state` | 管理 token | 服务端控制台、smoke | 获取脱敏管理摘要 |
+| GET | `/api/admin/setup` | 管理 token | 服务端控制台（首次配置面板、概览三盏灯） | 返回首次运行四步就绪度 `{complete,currentStepId,steps}`；就绪一律由证据推导（配置写入/应用时间戳、`checkApplianceHealth` 实时探针），不得由默认值推导；探针缺失算未就绪。刻意独立于 `/api/admin/state`：前者含 1.5s 网络探针，后者是被高频轮询的同步纯函数 |
 | GET | `/api/admin/devices/{id}/vless-uri` | 管理 token | 服务端控制台、调试/运维入口 | 显式按需返回单个设备完整 VLESS URI；常规 `/api/admin/state` 不得携带完整 URI |
 | POST | `/api/admin/tunnel/generate` | 管理 token | 服务端控制台 | 生成并写入服务端 sing-box 配置 |
 | POST | `/api/admin/tunnel/autofill` | 管理 token | 服务端控制台 | 补全 VLESS/REALITY 参数 |

@@ -54,6 +54,7 @@ export {
   normalizeClaimPayload
 } from "./claimProtocol.js";
 export {
+  DEFAULT_STORAGE_SECRET_PLACEHOLDER,
   autoFillTunnelConfig,
   buildProfileForUser,
   buildSingboxServerConfig,

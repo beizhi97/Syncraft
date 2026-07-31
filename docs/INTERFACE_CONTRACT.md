@@ -440,6 +440,20 @@ GET /api/admin/devices/{id}/vless-uri
 
 管理摘要的 `claims[]` 是服务端控制台展示 SyncKey 生命周期的只读摘要合同。每个 claim 必须至少包含 `id`、`code`、`userId`、`clientName`、`bucketName`、`profileId`、`used`、`createdAt`、`expiresAt`、`redeemedAt` 和 `server`；其中 `code` 必须是 `AAAA-AAAA` 无歧义短码，字符集为 `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`，`used` 必须是布尔值，`expiresAt` 与 `redeemedAt` 必须为 `null` 或 ISO 字符串。若 `used === true`，`redeemedAt` 必须为非空字符串。服务端内部可以为短时绑定重放记录 `claim.redeemedBy.clientRedeemId`、`claim.redeemedBy.clientInstallIdHash`、`claim.redeemedBy.firstRedeemedAt` 和 `claim.replayUntil`；管理摘要若展示这些恢复字段，只能展示 `clientRedeemId`、`clientInstallIdHash`、时间和布尔状态，不得展示原始 `clientInstallId`。状态保存前必须执行保守压缩：已兑换 claim 继续保留审计摘要，过期未使用 claim 在保留期后删除，过期的短时重放绑定只保留 `firstRedeemedAt`，不再保留绑定 ID 或安装 ID 哈希；已软删除且不再被 claim 引用的用户在保留期后可从 `users[]` 删除。`claims[]` 不得包含完整 `profile`、完整 `tKey`、`tKeyUri`、legacy `claimCode` / `token`、`uri`、VLESS URI 或存储密钥；完整导入凭据只允许出现在 `/api/claims/create` 响应和控制台复制动作的内存态中，不得进入管理摘要调试 JSON。
 
+### 首次运行就绪度
+
+```http
+GET /api/admin/setup
+```
+
+该接口受管理 token 保护，返回首次运行向导的四步就绪度。响应顶层必须且只包含 `complete`、`currentStepId` 和 `steps`；`steps[]` 的顺序必须固定为 `storage` → `tunnel` → `device` → `synckey`，即真实依赖顺序，控制台导航也必须按同一顺序排列。每一步必须包含 `id`、`title`、`hint`、`ready`、`blocked`、`blockedBy`、`blockedReason` 和 `evidence`。
+
+就绪状态必须从证据推导，不得从「默认值为真」推导。存储就绪要求实时探针可用、endpoint 可达、数据目录可写，且 root 口令不再等于出厂占位口令（唯一来源是 `DEFAULT_STORAGE_SECRET_PLACEHOLDER`）；隧道就绪要求 `lastConfigWrittenAt` 与 `lastAppliedAt` 均已写入、`restartRequired` 为假、sing-box 进程存活且端口在监听。判定不得使用 `tunnel.protocol` 是否有值（它有硬编码默认值 `vless-tcp-none`）、不得使用 `storage.buckets` 非空（空列表时会被补一个 `source: "configured"` 的回落 bucket）、不得使用 `/api/health` 的字面 `ok: true`。探针整体不可用时所有依赖探针的步骤必须判为未就绪，不得因「没测到问题」而放行。
+
+`ready` 与 `blocked` 是两件事：`blocked` 表示前置步骤未完成，`blockedBy` 指向第一个未就绪的步骤 id，使任一时刻只有一步被呈现为可操作，管理员不会看到四个红灯同时亮而无从下手。注册设备会把隧道重新弄脏（新设备意味着 sing-box 配置多一个 VLESS 用户，`createManagedUser` 因此置 `restartRequired = true`），所以四步不是纯线性流程，向导必须能表达「回到隧道再应用一次」。
+
+该接口刻意独立于 `GET /api/admin/state`：就绪度需要带超时的实时网络探针，而管理摘要是被控制台高频轮询的同步纯函数，合并会把探针延迟摊到每次状态刷新上。响应不得包含存储 secret、管理 token 或出厂占位口令原文。控制台概览的服务、隧道、存储三盏灯必须读该接口的证据；就绪度未取到时必须显示为未验证，不得显示为正常。`complete` 为真时首次配置面板与导航入口收起，但判定必须是显式等于 `true`，不得用真值判断，否则就绪度取不到（`null`）时入口会连同问题一起消失。
+
 ### 危险操作确认
 
 危险操作必须由前端弹层明确确认，且服务端会强制校验确认字段。
