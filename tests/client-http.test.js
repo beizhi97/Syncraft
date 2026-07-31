@@ -261,6 +261,33 @@ test("client local API rejects non-loopback Host headers on reads and writes", a
     const allowed = await rawClientRequest(port, "GET", "/api/health", hostHeader);
     assert.equal(allowed.status, 200, `${label} allowed`);
   }
+
+  // C-5: a loopback Host is not sufficient authority for reads. A malicious page
+  // can send a plain cross-site GET to a guessed loopback port; reads must
+  // refuse it exactly as writes already do, or the browser-reachable read
+  // surface stays wider than the write surface.
+  for (const path of ["/api/health", "/api/client/status", "/api/profile", "/api/jobs", "/api/sync/history"]) {
+    const crossSiteRead = await rawClientRequest(port, "GET", path, `127.0.0.1:${port}`, {
+      "sec-fetch-site": "cross-site"
+    });
+    assert.equal(crossSiteRead.status, 403, `cross-site read ${path}`);
+    assertHttpErrorResponseContract(JSON.parse(crossSiteRead.body), `crossSiteRead${path}`, {
+      errorCode: "local_read_forbidden"
+    });
+    assert.equal(crossSiteRead.body.includes("home-sync"), false, `cross-site read ${path} leaked bucket`);
+  }
+
+  // Negative control: the same-site and direct-tool read paths the product
+  // depends on must stay reachable, so this is not a blanket read block.
+  for (const [label, headers] of [
+    ["sameOrigin", { "sec-fetch-site": "same-origin" }],
+    ["sameSite", { "sec-fetch-site": "same-site" }],
+    ["noneUserNavigation", { "sec-fetch-site": "none" }],
+    ["nonBrowserTool", {}]
+  ]) {
+    const allowedRead = await rawClientRequest(port, "GET", "/api/client/status", `127.0.0.1:${port}`, headers);
+    assert.equal(allowedRead.status, 200, `${label} read allowed`);
+  }
 });
 
 test("client shuts down managed processes through its platform-supported shutdown trigger", async (t) => {

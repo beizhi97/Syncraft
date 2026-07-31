@@ -812,6 +812,7 @@ function formatError(error) {
     last_bucket_delete_blocked: "至少需要保留一个同步仓库。",
     local_host_forbidden: "客户端拒绝了非回环 Host 的请求，请从客户端窗口内操作。",
     local_state_corrupt: "客户端本地状态文件损坏，请先导出诊断包，备份并修复或隔离损坏 JSON 后再按需重新导入 SyncKey。",
+    local_read_forbidden: "客户端本地读取请求被拒绝，请从客户端窗口内操作。",
     local_write_forbidden: "客户端本地写入请求被拒绝，请从客户端窗口内操作。",
     missing_rclone_binary: "客户端缺少 rclone 组件，请重新解压或重新安装。",
     missing_singbox_binary: "客户端缺少 sing-box 组件，请重新解压或重新安装。",

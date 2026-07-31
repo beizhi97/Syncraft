@@ -220,6 +220,7 @@ SyncKey payload：
 | `storage_request_failed` | 502 | MinIO/S3 请求失败，包括 DNS、连接拒绝、超时或 S3 非 2xx 响应；若接口明确声明支持部分成功（例如 bucket refresh/create 的管理状态仍成功持久化），可在 HTTP 2xx 响应体内以 `ok:false` / `errorCode:"storage_request_failed"` 表示远端存储步骤失败 |
 | `sync_already_running` | 409 | 已有其他同步任务正在运行，当前请求的 job 不能复用该运行 |
 | `local_host_forbidden` | 403 | 客户端本地接口拒绝非回环 `Host` 头请求（防 DNS rebinding，作用于所有方法）|
+| `local_read_forbidden` | 403 | 客户端本地读接口拒绝跨站浏览器请求 |
 | `local_write_forbidden` | 403 | 客户端本地写接口拒绝跨站浏览器请求 |
 | `unsupported_media_type` | 415 | 带请求体的写请求未使用 `application/json` |
 | `unsupported_profile_version` | 400 | profile 或 SyncKey 版本不支持 |
@@ -965,6 +966,8 @@ Content-Type: application/json
 客户端本地 HTTP 只监听 `127.0.0.1:5188`。桌面入口和便携 launcher 必须尽量复用已运行的本地运行时：重复打开客户端时应聚焦已有 Electron 窗口或打开已存在的本地 UI，而不是再启动一个占用同一端口的运行时。若 `5188` 被已运行 SFSC 客户端占用，`clientServer.js` 直接复用并退出；若被非 SFSC 进程占用，启动失败使用 `client_port_in_use`。判断“已运行 SFSC 客户端”时不得只看 `/api/health` 的 HTTP 200，必须解析 JSON 并校验 `ok: true`、`mode: "client-exe-runtime"` 和 `diagnostics.role: "client"`；HTTP 200 但不是 client health response contract 的本机服务必须视为非 SFSC 进程。
 
 错误响应使用同一套通用错误响应格式。客户端 UI 应优先读取 `errorCode`，并继续兼容 `error`。
+
+客户端本地所有 `GET` 读接口同样只面向本机 SFSC UI 与本地自动化。运行时必须在进入任何 handler 前拒绝浏览器跨站读取：`Sec-Fetch-Site: cross-site` 时返回 `403 local_read_forbidden`。这与写入口的跨站防护对称——否则恶意页面可用一次普通跨站 `GET` 读走同步配置、bucket 名称与 VLESS 服务器地址。该保护不替代 Host 白名单与 loopback 监听边界，三者都必须保留。读接口刻意不引入 bearer token：已能在本机执行代码的进程可直接读取 `secrets.json` 与 `profile.json`，token 无法防御该路径，只会让所有本地工具与测试被迫携带凭据。
 
 客户端本地所有 `POST` 写入口只面向同一台机器上的 SFSC UI、启动器、调度器、smoke 和本地自动化。进入共享请求 schema 前，运行时必须拒绝浏览器跨站写入：`Sec-Fetch-Site: cross-site` 或 `Origin` 不是同一 loopback host/port 时返回 `403 local_write_forbidden`。带请求体的 `POST` 必须使用 `Content-Type: application/json`，否则返回 `415 unsupported_media_type`；空 body 的控制入口可继续兼容无 `Content-Type` 的本地 shutdown/stop 调用。该保护不替代 loopback 监听边界，二者都必须保留。
 

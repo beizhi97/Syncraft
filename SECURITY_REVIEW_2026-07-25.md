@@ -54,7 +54,7 @@ Syncraft 的安全基线**明显高于同类 MVP 平均水平**，值得肯定�
 | CORE-3 | core | `protocolSchemas.js:600-614` | 嵌套对象/JSON 字段不做白名单与类型校验 | ✅ 已修复（心跳透传为设计例外，见 §七）|
 | CORE-4 | core | `profileProtocol.js:82-85`, `rclone.js:143-144` | 硬编码弱默认密钥、默认允许 http 端点 | ✅ 可利用半条已修复；其余按设计接受（见 §七）|
 | CORE-5 | core | `heartbeatAuth.js:32` | 无 nonce 重放缓存，5 分钟时窗内可重放心跳 | ✅ 条目为误报；真实残留已修复（见 §七）|
-| C-5 | 客户端 | `clientServer.js` 全局 | 无鉴权令牌，任意本地进程可全量调用 API | ⏳ 未处理 |
+| C-5 | 客户端 | `clientServer.js` 全局 | 无鉴权令牌，任意本地进程可全量调用 API | ☑️ 已按威胁模型处理（补读接口跨站防护；token 不采纳，见 §八）|
 | C-6 | 客户端 | `store.js:331-338,369` | secrets.json 写入 TOCTOU 明文窗口 + icacls 失败静默 | ✅ 已修复 |
 | C-7 | 客户端 | `clientServer.js:521-547` | GET /api/client/status 泄露本地绝对路径 | ✅ 诊断包已修复；status 字段属合同（见 §七）|
 | E-1 | Electron | `main.cjs:117-147,181-203` | 缺 will-navigate / setWindowOpenHandler 导航限制 | ✅ 已修复 |
@@ -201,7 +201,7 @@ E-1：主窗口 `setWindowOpenHandler` 一律 deny，`will-navigate` 仅放行 `
 三份 Dockerfile 与两份 compose 的全部基础镜像（node/caddy/minio/mc/sing-box/baseimage-alpine）改为 `tag@digest` 双钉定（digest 为实取的 manifest-list digest，可经 `.env` 的 `*_IMAGE_DIGEST` 覆盖）；appliance 内置 rclone 从 1.71.1 升到 1.74.3 与客户端 `binaries.lock.json` 对齐（审查条目后半条），composeAudit 强制校验两者一致，lock 升级而 appliance 忘改会直接审计失败。**限制**：沙箱无 docker，镜像可拉取性与 appliance rclone 1.74.3 运行行为需部署机/N1 冒烟确认。
 
 ### 仍待处理
-C-5（本地鉴权 token，涉及产品交互决策）、Q-1（god 文件拆分，建议单独排期）。D-4 已按实际部署形态降级为维护期事项，Q-2 已于 2026-07-28 完成，两者均见 §八。
+Q-1（god 文件拆分，建议单独排期）。C-5 已按威胁模型处理，D-4 已按实际部署形态降级为维护期事项，Q-2 已于 2026-07-28 完成，两者均见 §八。
 
 ---
 
@@ -220,6 +220,15 @@ C-5（本地鉴权 token，涉及产品交互决策）、Q-1（god 文件拆分�
 
 ### Q-2 ✅ 重复实现与死导入
 `b3a48d4`。`maskSecret` 与 `summarizeAdminSyncSpace` 在 `src/core/serverAdmin.js` 与 `src/server.js` 各有一份独立定义，其中脱敏函数靠注释"keep in sync"维持一致——任一侧改动都会让管理响应脱敏产生分歧。已收敛为 core 单一来源并从 `core/index.js` 导出，`server.js` 改为导入。同时清理 4 处死导入：`clientServer.js` 与 `server.js` 的 `normalizeBandwidthLimit`、`serverAdmin.js` 的 `normalizeClaimCode`、`prepare-pilot-wave.mjs` 的 `dirname`。
+
+### C-5 ☑️ 补齐读接口跨站防护；不采纳 bearer token
+原条目建议为客户端本地 API 增加鉴权令牌。经威胁建模后**不采纳该方案**，改为补齐真正可被利用的缺口。
+
+不采纳 token 的理由：该条目描述的威胁是"任意本地进程可全量调用 API"，但能在本机执行代码的进程可以直接读取 `secrets.json` 与 `profile.json`，绕过 HTTP 层，token 对该路径没有防御力。代价方面，它需要改动 213 处测试调用与 8 个本地脚本调用方，并引入 token 的存储、轮换与分发问题——在防御收益接近于零的前提下，这些改动本身会成为新的出错面。
+
+真正可利用的是浏览器路径，而这里存在实际缺口：写入口已有 `Sec-Fetch-Site`、`Origin`、`Content-Type` 三重校验，**读接口却只有 Host 白名单**。Host 白名单挡的是 DNS 重绑定，挡不住恶意页面向已知 loopback 端口直接发起普通跨站 `GET`——由此可读走同步配置、bucket 名称与 VLESS 服务器地址。现补上 `assertLocalReadRequest`：任何非 POST 请求带 `Sec-Fetch-Site: cross-site` 即返回新稳定码 403 `local_read_forbidden`，使读写防护对称。
+
+新错误码已完成 5 点合同链登记。回归测试覆盖 5 个读端点的跨站拒绝并断言响应体不含 bucket 名，另附负向对照：`same-origin`、`same-site`、`none`（用户导航）与不带该头的非浏览器工具（smoke、trial runner）必须仍可读取——这些本地工具不发送 `Sec-Fetch-Site`，因此不受影响。该防护经反向验证：移除守卫后测试失败，恢复后通过。
 
 ### D-4 ☑️ 按实际部署形态降级
 原报告将 D-4 列为"唯一开放的真实安全风险"，前提是硬编码的主机可从公网访问。经确认该 N1 主机**仅内网可达、无公网入口**，该前提不成立：利用这把 SSH 私钥的先决条件是攻击者已经进入内网，此时其掌握的手段通常已远超一把部署密钥。因此按实际暴露面降级为维护期事项，不再作为紧急阻塞项。

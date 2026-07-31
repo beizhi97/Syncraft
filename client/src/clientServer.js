@@ -240,6 +240,8 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
     if (req.method === "POST") {
       assertLocalWriteRequest(req);
+    } else {
+      assertLocalReadRequest(req);
     }
 
     if (req.method === "GET" && url.pathname === "/api/health") {
@@ -2681,6 +2683,24 @@ function contentType(path) {
 function assertLocalWriteRequest(req) {
   assertBrowserWriteOrigin(req);
   assertJsonWriteContentType(req);
+}
+
+// C-5: the Host allowlist above blocks DNS rebinding, but a malicious page can
+// still issue a plain cross-site GET to a known loopback port and read sync
+// configuration, bucket names, and the VLESS server address. Writes already
+// refuse cross-site requests; reads must refuse them too, otherwise the
+// browser-reachable read surface stays wider than the write surface.
+//
+// This deliberately does not add a bearer token. A token cannot defend against
+// a local process that already executes code (it would simply read
+// secrets.json / profile.json directly), so the threat it would actually
+// mitigate is the browser one — which origin checks address without forcing
+// every local tool and test to carry credentials.
+function assertLocalReadRequest(req) {
+  const secFetchSite = String(req.headers["sec-fetch-site"] || "").trim().toLowerCase();
+  if (secFetchSite === "cross-site") {
+    throw createHttpError("local_read_forbidden", 403, "Cross-site local reads are forbidden");
+  }
 }
 
 // Rejects requests whose Host header is not this loopback listener. Blocks DNS

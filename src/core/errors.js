@@ -24,6 +24,7 @@ const DEFAULT_STATUS_BY_CODE = {
   invalid_vless_uri: 400,
   local_host_forbidden: 403,
   local_state_corrupt: 409,
+  local_read_forbidden: 403,
   local_write_forbidden: 403,
   last_active_bucket_disable_blocked: 409,
   last_bucket_delete_blocked: 409,
