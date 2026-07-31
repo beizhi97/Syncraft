@@ -4,7 +4,11 @@
 
 Syncraft 把 `sing-box`、`rclone` 和 MinIO/S3 组合成一套可管理的同步服务：管理员在服务端管理设备并签发一次性 SyncKey，Windows 客户端导入后即可创建同步任务。同步流量只交给 rclone 进程走本地代理，不会修改系统代理、路由、DNS、TUN 或防火墙。
 
-当前版本为 **0.3.0-rc.2 产品候选版**，以已验证的产品化基线为起点。它提供 Windows 桌面包、便携包和 Docker 服务端部署包；桌面 ZIP 是默认交付形态，便携 ZIP 用于兼容回退，目前不提供安装程序。
+当前版本为 **0.3.0-rc.3 产品候选版**，以已验证的产品化基线为起点。它提供 Windows 桌面包、便携包和 Docker 服务端部署包；桌面 ZIP 是默认交付形态，便携 ZIP 用于兼容回退，目前不提供安装程序。
+
+本版在 rc.1 基线上完成了一轮完整的白盒安全审查与加固：管理 Token 默认强制、凭证不再经命令行传递、密钥文件写入前先收紧 ACL、心跳与 SyncKey 兑换限速、本地接口读写均拒绝跨站浏览器请求、二进制与容器镜像按哈希/digest 钉定。审查结论与逐项实施记录见 [`SECURITY_REVIEW_2026-07-25.md`](SECURITY_REVIEW_2026-07-25.md) 与 [`SECURITY_HARDENING_CLOSEOUT_2026-07-26.md`](SECURITY_HARDENING_CLOSEOUT_2026-07-26.md)。
+
+从更早版本升级时有两处行为变化需注意：服务端 Compose 现在要求显式设置 `MINIO_ROOT_PASSWORD`，缺失即拒绝启动，不再回退到占位密码；未设置管理 Token 时管理接口默认拒绝访问，本地开发需显式设置 `SFSC_ALLOW_NO_ADMIN_TOKEN=1`。
 
 ## 用户交付入口
 
@@ -208,3 +212,5 @@ scripts/             CI、smoke、发布与 N1 自动化
 - 不提交 `.env`、`server/data/`、真实 sing-box 配置、本地客户端数据、下载的二进制文件或 `dist/` 产物。
 - 管理 Token、SyncKey、VLESS URI、S3/MinIO 密钥和私钥不得进入 `reports/`、Issue、聊天记录或截图。
 - 客户端本地状态默认位于 `%LOCALAPPDATA%\Syncraft\data`；排障前先导出诊断包并备份，不要直接删除状态文件。
+- 客户端本地 API 只绑定 loopback，并校验 Host 头以阻断 DNS 重绑定；读写接口都拒绝 `Sec-Fetch-Site: cross-site` 的浏览器请求。它**刻意不使用鉴权令牌**——已能在本机执行代码的进程可以直接读取本地凭据文件，令牌无法防御该路径，因此防线是进程边界与文件 ACL，而非 HTTP 层令牌。
+- 服务端管理面应置于 HTTPS 反代之后，并始终设置强随机 `SFSC_ADMIN_TOKEN`；MinIO 的 API 与控制台端口默认只绑定 localhost。

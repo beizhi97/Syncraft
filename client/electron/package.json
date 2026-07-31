@@ -1,5 +1,5 @@
 {
   "name": "singbox-folder-sync-electron-dev",
-  "version": "0.3.0-rc.2",
+  "version": "0.3.0-rc.3",
   "main": "main.cjs"
 }
