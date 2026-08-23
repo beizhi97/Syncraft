@@ -56,7 +56,7 @@ a{color:var(--accent);text-decoration:none}
 .topbar-actions button:hover{color:var(--accent-hover);border-color:var(--border-2)}
 
 /* ── Action Message ─────────────────────────── */
-#actionMessage{margin:0 24px;max-width:1200px}
+#actionMessage{position:fixed;top:62px;right:24px;z-index:250;width:min(520px,calc(100vw - 48px));margin:0;pointer-events:none;box-shadow:var(--shadow-lg)}
 .action-msg{padding:10px 16px;border-radius:var(--radius-sm);font-size:13px;display:flex;
   align-items:center;gap:8px;margin-top:8px}
 .action-msg.good{background:var(--success-soft);color:var(--success-text)}

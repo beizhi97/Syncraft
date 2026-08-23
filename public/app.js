@@ -72,6 +72,7 @@ byId("createClaimBtn").addEventListener("click", createClaim);
 byId("createSyncSpaceBtn").addEventListener("click", createSyncSpace);
 byId("createDeviceBtn").addEventListener("click", createDevice);
 byId("copyClaimBtn").addEventListener("click", copyClaim);
+byId("copyShortClaimBtn").addEventListener("click", copyShortClaim);
 byId("copyClaimUriBtn").addEventListener("click", copyClaimUri);
 byId("redeemPreviewBtn").addEventListener("click", redeemPreview);
 byId("refreshBtn").addEventListener("click", loadState);
@@ -538,6 +539,7 @@ async function revealAndCopyDeviceVlessUri(button, device, clientName) {
 }
 
 async function createClaim() {
+  clearClaimResult();
   const targetDevice = findDeviceByName(fields.deviceName.value);
   if (targetDevice?.enabled === false) {
     const message = `${targetDevice.clientName} 已停用。请先在设备列表中重新启用，再生成 SyncKey。`;
@@ -678,8 +680,22 @@ async function copyClaim() {
     return;
   }
   try {
-    await navigator.clipboard.writeText(value);
+    await copyText(value);
     setAction("完整 SyncKey 已复制。", "good");
+  } catch {
+    setAction("复制失败，当前浏览器不允许访问剪贴板。", "bad");
+  }
+}
+
+async function copyShortClaim() {
+  const value = latestClaimShortCode;
+  if (!value) {
+    setAction("请先生成 SyncKey。");
+    return;
+  }
+  try {
+    await copyText(value);
+    setAction("短码已复制；加入时还需填写服务端地址。", "good");
   } catch {
     setAction("复制失败，当前浏览器不允许访问剪贴板。", "bad");
   }
@@ -692,11 +708,46 @@ async function copyClaimUri() {
     return;
   }
   try {
-    await navigator.clipboard.writeText(value);
+    await copyText(value);
     setAction("导入 URI 已复制。", "good");
   } catch {
     setAction("复制失败，当前浏览器不允许访问剪贴板。", "bad");
   }
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Intranet HTTP pages are not secure contexts, so use the selected-text
+      // fallback below when the Clipboard API is absent or denied.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = String(value || "");
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) {
+    throw new Error("Clipboard copy was rejected");
+  }
+}
+
+function clearClaimResult() {
+  latestClaimTKey = "";
+  latestClaimUri = "";
+  latestClaimShortCode = "";
+  byId("claimOut").value = "";
+  byId("claimShortCode").textContent = "-";
+  byId("claimServerResult").textContent = "-";
+  byId("claimResult").hidden = true;
+  byId("profileOut").textContent = "等待新的 SyncKey 生成结果...";
 }
 
 async function loginAdmin(event) {
@@ -1713,6 +1764,7 @@ function renderClaimResult(result = {}) {
   byId("claimShortCode").textContent = result.code || claim.code || latestClaimShortCode || "-";
   byId("claimDevice").textContent = claim.clientName || result.profile?.clientName || fields.deviceName.value || "-";
   byId("claimBucket").textContent = claim.bucketName || result.profile?.storage?.bucket || fields.bucketSelect.value || "-";
+  byId("claimServerResult").textContent = claim.server || fields.claimServer.value || "-";
   byId("claimExpiry").textContent = formatExpiry(claim.expiresAt);
 }
 

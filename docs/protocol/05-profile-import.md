@@ -8,13 +8,13 @@ Profile import is the client-local boundary that turns an import code into local
 
 `POST /api/profile/import` accepts a JSON object with string import fields:
 
-`code`, `tKey`, `tkey`, `claimCode`, `token`, `uri`, `clientName`.
+`code`, `tKey`, `tkey`, `claimCode`, `token`, `uri`, `clientName`, `server`.
 
 It does not accept a raw `{ "profile": { ... } }` object. Complete offline profiles must be encoded as an import code with `SFSC1-...` or `sfsc://import/v1#...`.
 
 `code`, `tKey`, `tkey`, `claimCode`, and `token` are aliases for a full SyncKey or an offline full profile import code. `uri` is retained for legacy VLESS URI import compatibility. Legacy VLESS import may also use `clientName` and `options.localProxyPort`.
 
-`/api/claims/create.code` is an `AAAA-AAAA` short code for server-side redeem only. Passing that short code to client-local `/api/profile/import` returns `import_code_invalid` and must not consume the claim.
+`/api/claims/create.code` is an `AAAA-AAAA` human short code. Client-local `/api/profile/import` accepts it only together with the corresponding HTTP(S) `server` address, normalizes both values, creates the same pending recovery binding as a full SyncKey, and redeems it through that server. A short code without a valid `server` returns `import_code_invalid` and must not consume the claim.
 
 ## Offline Profile Codes
 

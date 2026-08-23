@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const fields = {
   claimCode: $("claimCode"),
+  claimServer: $("claimServer"),
   localPath: $("localPath"),
   direction: $("direction"),
   scheduleMode: $("scheduleMode"),
@@ -279,12 +280,20 @@ async function saveProfile() {
     setAction("请先在设置里粘贴服务端生成的 SyncKey。", "bad");
     return;
   }
+  const shortCode = /^[A-Z0-9]{4}-[A-Z0-9]{4}$/i.test(code);
+  const server = fields.claimServer.value.trim();
+  if (shortCode && !server) {
+    const message = "短码加入需要填写服务端地址（错误码：import_code_invalid）。";
+    $("profileSummary").textContent = message;
+    setAction(message, "bad");
+    return;
+  }
 
   return withBusyAction("saveProfileBtn", async () => {
     setAction("正在兑换 SyncKey...");
     $("profileSummary").textContent = "正在导入服务端配置...";
     try {
-      const result = await clientApi.importProfile({ code }, { timeoutMs: profileImportRequestTimeoutMs });
+      const result = await clientApi.importProfile({ code, ...(shortCode ? { server } : {}) }, { timeoutMs: profileImportRequestTimeoutMs });
       renderProfileSummaryFromProfile(result.profile);
       fields.claimCode.value = "";
       setAction("服务端配置已导入。", "good");
@@ -1735,10 +1744,11 @@ function formatError(error) {
 
 function formatProfileImportError(error) {
   const item = profileImportErrorGuidance(error?.code);
+  const code = error?.code ? `（错误码：${error.code}）` : "";
   if (!item) {
-    return `导入失败：${formatError(error)}`;
+    return `导入失败：${formatError(error)}${code}`;
   }
-  return `导入失败：${item.message} ${item.action}`;
+  return `导入失败：${item.message} ${item.action}${code}`;
 }
 
 function profileImportErrorGuidance(code) {
@@ -1796,7 +1806,7 @@ function profileImportErrorGuidance(code) {
     import_code_invalid: {
       retryable: false,
       message: "SyncKey 格式不正确。",
-      action: "不可重试当前内容：请从服务端重新复制完整 SyncKey，不要粘贴短码。"
+      action: "请重新复制完整 SyncKey；使用短码时，请同时填写服务端地址。"
     },
     import_code_required: {
       retryable: false,

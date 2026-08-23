@@ -146,6 +146,16 @@ test("Electron desktop exposes a narrow native folder picker bridge", async () =
   assert.doesNotMatch(app, /webkitRelativePath\?\.split/);
 });
 
+test("Electron desktop disables only the broken Windows GPU sandbox", async () => {
+  const main = await readFile(join(projectRoot, "client", "electron", "main.cjs"), "utf8");
+
+  assert.match(main, /process\.platform === "win32"/);
+  assert.match(main, /app\.commandLine\.appendSwitch\("disable-gpu-sandbox"\)/);
+  assert.doesNotMatch(main, /appendSwitch\("no-sandbox"\)/);
+  assert.doesNotMatch(main, /disableHardwareAcceleration\(\)/);
+  assert.match(main, /sandbox:\s*true/);
+});
+
 test("Electron desktop shows a startup error window instead of silently quitting", async () => {
   const main = await readFile(join(projectRoot, "client", "electron", "main.cjs"), "utf8");
 
@@ -1122,7 +1132,7 @@ test("client profile import errors show retry guidance for SyncKey recovery", as
   assert.match(app, /const message = formatProfileImportError\(error\)/);
   assert.match(app, /\$\("profileSummary"\)\.textContent = message/);
   assert.match(app, /setAction\(message, "bad"\)/);
-  assert.match(app, /return `导入失败：\$\{item\.message\} \$\{item\.action\}`/);
+  assert.match(app, /return `导入失败：\$\{item\.message\} \$\{item\.action\}\$\{code\}`/);
   assert.doesNotMatch(app, /\$\("profileSummary"\)\.textContent = `导入失败：\$\{formatError\(error\)\}`/);
 
   for (const code of [
@@ -1135,7 +1145,7 @@ test("client profile import errors show retry guidance for SyncKey recovery", as
   }
   assert.match(app, /不可重试当前 SyncKey：请在服务端重新生成后导入。/);
   assert.match(app, /不可重试当前内容：请重新复制完整 SyncKey/);
-  assert.match(app, /不要粘贴短码/);
+  assert.match(app, /使用短码时，请同时填写服务端地址/);
 
   for (const code of [
     "server_state_write_failed",
@@ -1613,7 +1623,7 @@ test("client exposes stable heartbeat and request timeout transport codes", asyn
   assert.match(app, /const syncRunRequestTimeoutMs = 120000/);
   assert.match(app, /const syncPreparationRequestTimeoutMs = 120000/);
   assert.match(app, /const bidirectionalInitializationRequestTimeoutMs = 240000/);
-  assert.match(app, /clientApi\.importProfile\(\{ code \}, \{ timeoutMs: profileImportRequestTimeoutMs \}\)/);
+  assert.match(app, /clientApi\.importProfile\(\{ code, \.\.\.\(shortCode \? \{ server \} : \{\}\) \}, \{ timeoutMs: profileImportRequestTimeoutMs \}\)/);
   assert.match(app, /const clientApi = Object\.freeze\(\{/);
   assert.match(app, /getStatus: \(\) => requestJson\(\{ method: "GET", path: "\/api\/client\/status" \}\)/);
   assert.match(app, /stopSync: \(\) => requestJson\(\{ method: "POST", path: "\/api\/sync\/stop", body: \{\} \}\)/);
@@ -2914,6 +2924,50 @@ test("client redeems a claim token into a complete profile", async () => {
   assert.equal(profile.tunnel.uri, tunnelUri);
   assert.equal(profile.storage.prefix, "devices/company-pc1");
   assert.equal(profile.claim, undefined);
+});
+
+test("client redeems a human short code when its server address is supplied", async () => {
+  const calls = [];
+
+  const profile = await resolveProfileImport({
+    code: "c7kd-92pq",
+    server: "https://pass.971223.xyz:2025/"
+  }, {
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return jsonResponse({
+        profile: makeServerProfile({
+          profileId: "profile-short-code-001",
+          clientName: "short-code-pc"
+        })
+      });
+    }
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://pass.971223.xyz:2025/api/claims/redeem");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { code: "C7KD-92PQ" });
+  assert.equal(profile.importMode, "claim-redeem");
+  assert.equal(profile.source.server, "https://pass.971223.xyz:2025");
+  assert.equal(profile.clientName, "short-code-pc");
+});
+
+test("client rejects a short code server that is not an HTTP origin", async () => {
+  for (const server of [
+    "https://pass.971223.xyz:2025/prefix",
+    "https://pass.971223.xyz:2025/?tenant=one",
+    "https://user:secret@pass.971223.xyz:2025"
+  ]) {
+    await assert.rejects(
+      () => resolveProfileImport({ code: "C7KD-92PQ", server }),
+      (error) => {
+        assert.equal(error.code, "import_code_invalid");
+        assert.equal(error.status, 400);
+        assert.match(error.publicMessage, /origin/);
+        return true;
+      }
+    );
+  }
 });
 
 test("client sends claim recovery binding when redeeming a pending SyncKey", async () => {

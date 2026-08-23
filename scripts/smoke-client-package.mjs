@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import net from "node:net";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -356,6 +355,10 @@ async function requireElectronBridge(appRoot) {
   requirePattern(main, /contextIsolation:\s*true/, "Electron window must keep contextIsolation enabled.");
   requirePattern(main, /nodeIntegration:\s*false/, "Electron renderer must keep nodeIntegration disabled.");
   requirePattern(main, /sandbox:\s*true/, "Electron renderer must keep sandbox enabled.");
+  requirePattern(main, /app\.commandLine\.appendSwitch\(["']disable-gpu-sandbox["']\)/, "Electron must apply the Windows GPU sandbox crash workaround.");
+  if (/appendSwitch\(["']no-sandbox["']\)/.test(main)) {
+    throw new Error("Electron must not disable the renderer sandbox globally.");
+  }
   requirePattern(main, /preload:\s*path\.join\(__dirname,\s*["']preload\.cjs["']\)/, "Electron window must load the packaged preload bridge.");
 
   requirePattern(preload, /contextBridge\.exposeInMainWorld\(["']sfscDesktop["']/, "Preload must expose the sfscDesktop bridge.");
@@ -405,7 +408,12 @@ async function requireHealthReadiness(appRoot) {
 async function requirePackageLaunch(packageRoot, packageName) {
   const port = await getRandomPort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const dataRoot = await mkdtemp(join(tmpdir(), `sfsc-package-launch-${packageName}-${port}-`));
+  // Keep launch state beneath the repository so constrained build agents can
+  // grant the packaged process write access without opening the system temp
+  // directory. The directory is unique and removed in the finally block.
+  const smokeTempRoot = join(projectRoot, ".tmp", "client-package-smoke");
+  mkdirSync(smokeTempRoot, { recursive: true });
+  const dataRoot = await mkdtemp(join(smokeTempRoot, `${packageName}-${port}-`));
   const exePath = join(packageRoot, "Syncraft.exe");
   let child = null;
   const startedAt = Date.now();

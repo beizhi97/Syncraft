@@ -15,7 +15,6 @@ import {
   createHeartbeatAuth,
   computeNextRun,
   createHttpError,
-  decodeClaimToken,
   describeSchedule,
   isStableErrorCode,
   normalizeSchedule,
@@ -29,7 +28,7 @@ import {
 } from "../../src/core/index.js";
 import { ensureClientDirs, getClientPaths } from "./paths.js";
 import { buildDiagnosticBundle } from "./diagnosticBundle.js";
-import { resolveProfileImport } from "./profileImport.js";
+import { resolveClaimReference, resolveProfileImport } from "./profileImport.js";
 import { fileExists, ManagedProcess, readRecentLog, readRecentLogWithMeta, redactLogText, runBuffered } from "./processRunner.js";
 import {
   appendRcloneOutputContext,
@@ -929,16 +928,13 @@ async function resetHeartbeatState() {
 }
 
 async function prepareClaimRecoveryForImport(body = {}) {
-  const importCode = body.code || body.tKey || body.tkey || body.claimCode || body.token;
-  if (!importCode) {
-    return null;
-  }
   let claim = null;
   try {
-    claim = decodeClaimToken(String(importCode).trim());
+    claim = resolveClaimReference(body);
   } catch {
     return null;
   }
+  if (!claim) return null;
   return prepareClaimRecovery(claim, paths);
 }
 

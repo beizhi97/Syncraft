@@ -1879,6 +1879,14 @@ test("protocol request schemas normalize key client and server request envelopes
     code: "SFSC1-example"
   });
   assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_PROFILE_IMPORT, {
+    code: " c7kd-92pq ",
+    server: " https://sync.example.com/ ",
+    junk: true
+  }), {
+    code: "c7kd-92pq",
+    server: "https://sync.example.com/"
+  });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_PROFILE_IMPORT, {
     uri: " vless://example ",
     clientName: " legacy-pc ",
     options: {
@@ -2760,9 +2768,9 @@ test("interface contract documents profile import and job save contracts", async
   assert.match(contract, /POST \/api\/profile\/import[\s\S]*?- `404 claim_not_found`[\s\S]*?### 保存同步任务/);
   assert.match(contract, /POST \/api\/profile\/import[\s\S]*?- `409 local_state_corrupt`[\s\S]*?### 保存同步任务/);
   assert.match(contract, /POST \/api\/profile\/import[\s\S]*?- `410 claim_expired`[\s\S]*?### 保存同步任务/);
-  assert.match(contract, /`\/api\/claims\/create` 响应中的 `code` 是 `AAAA-AAAA` 短码/);
-  assert.match(contract, /客户端本地 `\/api\/profile\/import` 直接收到该短码时必须返回 `400 import_code_invalid`/);
-  assert.match(matrix, /短码直传返回 `import_code_invalid` 且不消耗 SyncKey/);
+  assert.match(contract, /`\/api\/claims\/create` 返回的 `AAAA-AAAA` 短码/);
+  assert.match(contract, /短码缺少有效 `server` 时必须返回 `400 import_code_invalid`/);
+  assert.match(matrix, /短码缺少有效 `server` 时返回 `import_code_invalid` 且不消耗 SyncKey/);
   for (const expected of [
     /短时绑定重放/,
     /pending recovery stash/,
@@ -3649,6 +3657,7 @@ test("server console presents SyncKey short code and separate copy actions", asy
   assert.match(html, /id="applyNotice"/);
   assert.match(html, /id="refreshSingboxConfigBtn"[^>]*>刷新配置预览/);
   assert.match(html, /id="copyClaimBtn"[^>]*>复制完整 SyncKey/);
+  assert.match(html, /id="copyShortClaimBtn"[^>]*>复制短码/);
   assert.match(html, /id="copyClaimUriBtn"[^>]*>复制导入 URI/);
   assert.match(app, /latestClaimTKey/);
   assert.match(app, /latestClaimUri/);
@@ -6584,9 +6593,8 @@ test("repository ignore rules exclude runtime state and secrets", async () => {
   assert.match(audit, /local_state_corrupt/);
   assert.match(audit, /Windows 客户端本地状态恢复/);
   assert.match(audit, /secret_vault_missing/);
-  assert.match(audit, /shortCodeImport/);
   assert.match(audit, /createdClaim\.code/);
-  assert.match(audit, /短码直传返回 `import_code_invalid`/);
+  assert.match(audit, /短码缺少有效 `server` 时返回 `import_code_invalid`/);
   assert.match(audit, /missingVaultSave/);
   assert.match(audit, /missingVaultRun/);
   assert.match(audit, /assertNonEmptyString\(preview\.schedule\.text/);
@@ -9464,10 +9472,8 @@ test("release audit fails when smoke protocol alignment docs drift", async () =>
       );
       const missingClientContractDoc = await runReleaseAudit(tempRoot);
       assert.notEqual(missingClientContractDoc.code, 0);
-      assert.match(
-        missingClientContractDoc.stderr,
-        new RegExp(`docs\\/INTERFACE_CONTRACT\\.md must mention ${contractName}`)
-      );
+      assert.match(missingClientContractDoc.stderr, /docs\/INTERFACE_CONTRACT\.md must mention/);
+      assert.equal(missingClientContractDoc.stderr.includes(contractName), true);
     }
 
     await writeFile(join(tempRoot, "docs", "INTERFACE_CONTRACT.md"), contract, "utf8");
@@ -11835,6 +11841,22 @@ test("SyncKey claim expiry request fields are explicit and side-effect free on v
   }
 });
 
+test("SyncKey server origin validation happens before claim state mutation", () => {
+  const state = createDefaultAdminState();
+  const before = structuredClone(state);
+
+  assert.throws(() => createClaim(state, {
+    clientName: "invalid-server-origin-pc",
+    server: "https://sync.example.com/prefix?tenant=one"
+  }), (error) => {
+    assert.equal(error.code, "validation_failed");
+    assert.equal(error.status, 400);
+    assert.match(error.publicMessage, /origin/);
+    return true;
+  });
+  assert.deepEqual(state, before);
+});
+
 test("server admin validation errors carry explicit stable codes", () => {
   const state = createDefaultAdminState({
     S3_BUCKET: "home-sync",
@@ -13117,8 +13139,9 @@ async function createFakeClientPackage(packageRoot) {
   }), "utf8");
 
   await writeFile(join(appRoot, "client", "electron", "main.cjs"), `
-const { BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const path = require("node:path");
+app.commandLine.appendSwitch("disable-gpu-sandbox");
 new BrowserWindow({
   webPreferences: {
     contextIsolation: true,

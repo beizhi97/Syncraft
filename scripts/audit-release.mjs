@@ -2983,7 +2983,7 @@ async function auditClaimProfileProtocolDocs() {
   if (profileSchema.profileUriPrefix !== extractStringConstant(profileProtocolSource, "PROFILE_URI_PREFIX")) {
     issues.push("docs/protocol/schemas/profile-import.json profileUriPrefix must match src/core/profileProtocol.js PROFILE_URI_PREFIX");
   }
-  requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "clientProfileImportRequestStringFields", ["claimCode", "code", "clientName", "tKey", "tkey", "token", "uri"]);
+  requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "clientProfileImportRequestStringFields", ["claimCode", "code", "clientName", "server", "tKey", "tkey", "token", "uri"]);
   requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "clientProfileImportResponseKeys", ["profile"]);
   requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "profileEncodeResponseKeys", ["code", "profile", "summary", "uri"]);
   requireSchemaArray(profileSchema, "docs/protocol/schemas/profile-import.json", "serverIssuedProfileKeys", ["authorization", "clientName", "defaults", "expiresAt", "heartbeat", "issuedAt", "profileId", "storage", "syncSpace", "tunnel", "version"]);
@@ -3011,7 +3011,7 @@ async function auditClaimProfileProtocolDocs() {
   for (const field of ["localProxyPort", "transfers", "streams", "checkers", "chunkSize", "retries", "lowLevelRetries", "bandwidthLimit", "schedule"]) {
     requireText(profileProtocolSource, "src/core/profileProtocol.js", `${field}:`);
   }
-  requireText(protocolSchemasSource, "src/core/protocolSchemas.js", "copyOptionalStringFields(input, output, [...CLAIM_REDEEM_FIELDS, \"uri\", \"clientName\"]);");
+  requireText(protocolSchemasSource, "src/core/protocolSchemas.js", "copyOptionalStringFields(input, output, [...CLAIM_REDEEM_FIELDS, \"uri\", \"clientName\", \"server\"]);");
   requireText(protocolSchemasSource, "src/core/protocolSchemas.js", "output.localProxyPort = readPort(input.localProxyPort, \"options.localProxyPort\");");
   if (/Object\.hasOwn\(input,\s*["']profile["']\)/.test(protocolSchemasSource)) {
     issues.push("src/core/protocolSchemas.js client profile import request must not accept raw profile objects");
@@ -3806,7 +3806,7 @@ async function auditClaimRedeemRecoveryContract() {
     "`profile_storage_required`",
     "不得保存一次性短码",
     "导入未完成",
-    "短码，只供服务端 `/api/claims/redeem` 使用",
+    "短码不包含路由信息",
     "`400 import_code_invalid`",
     "导入模式不变量",
     "legacy VLESS 导入不得补 `source.server`",
@@ -3844,7 +3844,7 @@ async function auditClaimRedeemRecoveryContract() {
     "不同客户端",
     "不得保存一次性短码",
     "导入未完成",
-    "短码直传返回 `import_code_invalid`",
+    "短码缺少有效 `server` 时返回 `import_code_invalid`",
     "兑换前必须重新校验 claim 指向的设备和 bucket 仍未删除、未停用",
     "失效时返回 `validation_failed` 且不得消耗 SyncKey",
     "远端终态错误",
@@ -4047,7 +4047,7 @@ async function auditClaimRedeemRecoveryContract() {
   requireText(clientUiSource, "client/public/app.js", "const message = formatProfileImportError(error);");
   requireText(clientUiSource, "client/public/app.js", "$(\"profileSummary\").textContent = message;");
   requireText(clientUiSource, "client/public/app.js", "setAction(message, \"bad\");");
-  requireText(clientUiSource, "client/public/app.js", "return `导入失败：${item.message} ${item.action}`;");
+  requireText(clientUiSource, "client/public/app.js", "return `导入失败：${item.message} ${item.action}${code}`;");
   for (const code of [
     "claim_not_found",
     "claim_already_used",
@@ -4077,7 +4077,7 @@ async function auditClaimRedeemRecoveryContract() {
   for (const expected of [
     "不可重试当前 SyncKey",
     "不可重试当前内容",
-    "请从服务端重新复制完整 SyncKey，不要粘贴短码",
+    "使用短码时，请同时填写服务端地址",
     "可重试",
     "用同一个 SyncKey 再试",
     "服务端数据目录权限和磁盘空间",
@@ -4134,9 +4134,8 @@ async function auditClaimRedeemRecoveryContract() {
   requireText(clientHttpTest, "tests/client-http.test.js", "client profile import rejects claim redeem profiles without storage credentials");
   requireText(clientHttpTest, "tests/client-http.test.js", "client profile import rejects claim redeem profiles without tunnel credentials");
   requireText(clientHttpTest, "tests/client-http.test.js", "profile_tunnel_required");
-  requireText(clientHttpTest, "tests/client-http.test.js", "const shortCodeImport = await fetch(`${clientBaseUrl}/api/profile/import`");
-  requireText(clientHttpTest, "tests/client-http.test.js", "body: JSON.stringify({ code: createdClaim.code })");
-  requireText(clientHttpTest, "tests/client-http.test.js", "assertHttpErrorResponseContract(shortCodeImportPayload, \"shortCodeImport\"");
+  requireText(clientHttpTest, "tests/client-http.test.js", "code: createdClaim.code");
+  requireText(clientHttpTest, "tests/client-http.test.js", "server: `${serverBaseUrl}/`");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "`S3_CLIENT_ENDPOINT`");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "`http://n1-minio.sfsc:9000`");
   requireText(clientHttpTest, "tests/client-http.test.js", "const n1StorageEndpoint = \"http://n1-minio.sfsc:9000\";");

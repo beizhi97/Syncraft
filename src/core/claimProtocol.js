@@ -47,7 +47,7 @@ export function decodeClaimToken(input) {
 }
 
 export function normalizeClaimPayload(input = {}, options = {}) {
-  const server = normalizeServerUrl(input.server);
+  const server = normalizeClaimServer(input.server);
   const code = normalizeClaimCode(input.code, options);
 
   return {
@@ -77,8 +77,8 @@ export function extractClaimCode(input) {
   return normalizeClaimCode(raw, { allowLegacyCode: true });
 }
 
-function normalizeServerUrl(input) {
-  const text = String(input || "").trim().replace(/\/+$/g, "");
+export function normalizeClaimServer(input) {
+  const text = String(input || "").trim();
   let url;
   try {
     url = new URL(text);
@@ -88,7 +88,10 @@ function normalizeServerUrl(input) {
   if (!["http:", "https:"].includes(url.protocol)) {
     throw new Error("SyncKey server must use http or https");
   }
-  return url.toString().replace(/\/$/g, "");
+  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("SyncKey server must be an HTTP(S) origin without credentials, path, query, or fragment");
+  }
+  return url.origin;
 }
 
 function base64UrlEncode(text) {

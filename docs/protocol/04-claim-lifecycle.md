@@ -27,7 +27,7 @@ The current short-code alphabet intentionally removes ambiguous characters. Deco
 
 `claim`, `claimCode`, `code`, `compatibility`, `profile`, `state`, `tKey`, `tKeyUri`, `uri`.
 
-`code` is only the short code for the server redeem endpoint. It is not a client import code.
+`code` is the human short code for the server redeem endpoint. A client may import it when the request also supplies the corresponding normalized HTTP(S) `server` address; the short code is not self-routing and must never be guessed against an implicit server.
 
 `tKey` and legacy alias `claimCode` are the full `SFSC1-...` SyncKey. `tKeyUri` and legacy alias `uri` are the full `sfsc://import/v1#...` URI. The `claim` object is a redacted admin summary and must not contain a SyncKey, full profile, storage secret, heartbeat secret, or VLESS URI.
 

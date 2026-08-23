@@ -3,6 +3,8 @@ import {
   decodeClaimToken,
   decodeImportProfilePayload,
   isClaimRedeemErrorCode,
+  LEGACY_CLAIM_CODE_PATTERN,
+  normalizeClaimPayload,
   normalizeImportProfile,
   parseVlessUri,
   PROFILE_VERSION
@@ -14,7 +16,7 @@ export async function resolveProfileImport(body = {}, options = {}) {
   const importCode = body.code || body.tKey || body.tkey || body.claimCode || body.token;
   if (importCode) {
     const text = String(importCode || "").trim();
-    const claim = tryDecodeClaimToken(text);
+    const claim = resolveClaimReference(body);
     if (claim) {
       const profile = validateClaimRedeemProfile(await redeemClaim(claim, options));
       return {
@@ -41,6 +43,23 @@ export async function resolveProfileImport(body = {}, options = {}) {
   }
 
   throw createHttpError("import_code_required", 400, "Import code is required");
+}
+
+export function resolveClaimReference(body = {}) {
+  const importCode = body.code || body.tKey || body.tkey || body.claimCode || body.token;
+  const text = String(importCode || "").trim();
+  const claim = tryDecodeClaimToken(text);
+  if (claim) {
+    return claim;
+  }
+  if (!LEGACY_CLAIM_CODE_PATTERN.test(text.toUpperCase())) {
+    return null;
+  }
+  try {
+    return normalizeClaimPayload({ server: body.server, code: text }, { allowLegacyCode: true });
+  } catch (error) {
+    throw createHttpError("import_code_invalid", 400, `Short SyncKey requires a valid server address: ${error.message}`);
+  }
 }
 
 function validateClaimRedeemProfile(profile) {

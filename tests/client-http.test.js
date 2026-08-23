@@ -3842,21 +3842,22 @@ test("client imports a real server-issued SyncKey into local jobs and sync previ
   assert.equal(createdClaim.profile.storage.endpoint, n1StorageEndpoint);
   assert.equal(createdClaim.profile.defaults.localProxyPort, 18092);
 
-  const shortCodeImport = await fetch(`${clientBaseUrl}/api/profile/import`, {
+  const shortCodeWithoutServer = await fetch(`${clientBaseUrl}/api/profile/import`, {
     method: "POST",
     headers: jsonHeaders,
     body: JSON.stringify({ code: createdClaim.code })
   });
-  assert.equal(shortCodeImport.status, 400);
-  const shortCodeImportPayload = await shortCodeImport.json();
-  assertHttpErrorResponseContract(shortCodeImportPayload, "shortCodeImport", {
+  assert.equal(shortCodeWithoutServer.status, 400);
+  const shortCodeWithoutServerPayload = await shortCodeWithoutServer.json();
+  assertHttpErrorResponseContract(shortCodeWithoutServerPayload, "shortCodeWithoutServer", {
     errorCode: "import_code_invalid"
   });
-  assert.match(shortCodeImportPayload.message, /SFSC1-|sfsc:\/\/import\/v1#/);
+  assert.match(shortCodeWithoutServerPayload.message, /valid server address/i);
   assert.equal(await pathExists(join(tempRoot, "data", "claim-recovery.json")), false);
 
   const imported = await postJson(`${clientBaseUrl}/api/profile/import`, {
-    code: createdClaim.tKey
+    code: createdClaim.code,
+    server: `${serverBaseUrl}/`
   });
   assert.equal(imported.profile.importMode, "claim-redeem");
   assert.deepEqual(imported.profile.source, {

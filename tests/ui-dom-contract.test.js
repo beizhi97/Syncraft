@@ -73,6 +73,25 @@ test("server claim output remains writable by production app.js", async () => {
   assert.doesNotMatch(html, /<div[^>]*id="claimOut"/);
 });
 
+test("server SyncKey copy works without the secure-context Clipboard API and stale keys are cleared", async () => {
+  const app = await readFile(join(projectRoot, "public", "app.js"), "utf8");
+
+  assert.match(app, /async function copyText\(value\)/);
+  assert.match(app, /navigator\.clipboard\?\.writeText/);
+  assert.match(app, /document\.execCommand\("copy"\)/);
+  assert.match(app, /async function copyClaim\(\)[\s\S]*?await copyText\(value\)/);
+  assert.match(app, /async function createClaim\(\)[\s\S]*?clearClaimResult\(\)[\s\S]*?runAction/);
+  assert.match(app, /function clearClaimResult\(\)[\s\S]*?byId\("profileOut"\)\.textContent = "等待新的 SyncKey 生成结果\.\.\."/);
+});
+
+test("client import errors stay above the settings drawer", async () => {
+  const html = await readFile(join(projectRoot, "client", "public", "index.html"), "utf8");
+  const css = await readFile(join(projectRoot, "client", "public", "styles.css"), "utf8");
+
+  assert.match(html, /id="actionMessage"[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(css, /#actionMessage\{[^}]*position:fixed[^}]*z-index:2[1-9]\d/);
+});
+
 test("server shell health and stat strip avoid stale optimistic status", async () => {
   const html = await readFile(join(projectRoot, "public", "index.html"), "utf8");
   const app = await readFile(join(projectRoot, "public", "app.js"), "utf8");

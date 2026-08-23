@@ -1581,7 +1581,10 @@ function normalizeHttpUrl(input) {
   if (!["http:", "https:"].includes(url.protocol)) {
     throw new Error("Server URL must use http or https");
   }
-  return url.toString().replace(/\/$/g, "");
+  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("Server URL must be an HTTP(S) origin without credentials, path, query, or fragment");
+  }
+  return url.origin;
 }
 
 function buildServerIssuedProfile(body = {}) {

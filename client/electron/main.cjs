@@ -4,6 +4,12 @@ const http = require("node:http");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
+// Work around a Chromium GPU sandbox initialization crash (0x80000003) on
+// affected Windows 11 builds while keeping the renderer sandbox enabled.
+if (process.platform === "win32") {
+  app.commandLine.appendSwitch("disable-gpu-sandbox");
+}
+
 const port = process.env.SFSC_CLIENT_PORT || "5188";
 const configuredDataRoot = process.env.SFSC_CLIENT_DATA_ROOT || process.env.SFSC_DATA_ROOT;
 const logRoot = path.join(configuredDataRoot || path.join(path.dirname(process.execPath), "data"), "logs");

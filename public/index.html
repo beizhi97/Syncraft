@@ -148,8 +148,9 @@
               <div class="panel-body">
                 <div id="claimResult" class="claim-result" hidden>
                   <div id="claimShortCode" class="short-code">-</div>
-                  <div class="meta"><div><span>设备：</span><span id="claimDevice">-</span></div><div><span>仓库：</span><span id="claimBucket">-</span></div><div><span>有效期：</span><span id="claimExpiry">-</span></div></div>
-                  <div class="actions"><button id="copyClaimBtn" class="btn-primary" type="button">复制完整 SyncKey</button><button id="copyClaimUriBtn" class="btn-secondary" type="button">复制导入 URI</button></div>
+                  <div class="meta"><div><span>设备：</span><span id="claimDevice">-</span></div><div><span>仓库：</span><span id="claimBucket">-</span></div><div><span>服务端：</span><span id="claimServerResult">-</span></div><div><span>有效期：</span><span id="claimExpiry">-</span></div></div>
+                  <p class="hint">短码用于人工加入；客户端需同时填写上面的服务端地址。</p>
+                  <div class="actions"><button id="copyShortClaimBtn" class="btn-secondary" type="button">复制短码</button><button id="copyClaimBtn" class="btn-primary" type="button">复制完整 SyncKey</button><button id="copyClaimUriBtn" class="btn-secondary" type="button">复制导入 URI</button></div>
                   <div class="claim-detail"><label for="claimOut">完整 SyncKey</label><textarea id="claimOut" class="output-area" readonly></textarea></div>
                 </div>
                 <div class="result-empty">生成后将在这里显示一次性 SyncKey。请直接交付给目标设备。</div>

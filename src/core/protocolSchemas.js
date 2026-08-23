@@ -249,7 +249,7 @@ export function parseProtocolRequest(name, body = {}) {
 function parseClientProfileImportRequest(body) {
   const input = requirePlainObject(body, "client profile import request");
   const output = {};
-  copyOptionalStringFields(input, output, [...CLAIM_REDEEM_FIELDS, "uri", "clientName"]);
+  copyOptionalStringFields(input, output, [...CLAIM_REDEEM_FIELDS, "uri", "clientName", "server"]);
   if (Object.hasOwn(input, "options")) {
     output.options = parseClientProfileImportOptions(input.options);
   }

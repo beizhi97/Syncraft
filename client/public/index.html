@@ -26,7 +26,7 @@
 </header>
 
 <!-- ═══ Action Message ═══════════════════════════════════ -->
-<div id="actionMessage">
+<div id="actionMessage" role="status" aria-live="polite">
   <!-- state-error: <div class="action-msg bad">⚠ 同步失败，请查看诊断日志。错误码：rclone_sync_failed</div> -->
 </div>
 
@@ -215,7 +215,9 @@
     <!-- ── SyncKey Import ────────────────────────────── -->
     <div class="drawer-section">
       <h3>服务端配置</h3>
-      <textarea id="claimCode" placeholder="粘贴 SyncKey：SFSC1-... 或 sfsc://import/v1#..."></textarea>
+      <textarea id="claimCode" placeholder="粘贴完整 SyncKey，或输入短码（例如 C7KD-92PQ）"></textarea>
+      <input id="claimServer" type="url" inputmode="url" placeholder="使用短码时填写服务端地址，例如 http://192.168.1.254:5177" style="width:100%;margin-top:8px">
+      <p class="hint" style="margin:6px 0 0">完整 SyncKey 自带服务端地址；短码加入时需要同时填写服务端地址。</p>
       <div class="btn-row" style="margin-top:8px">
         <button id="saveProfileBtn" class="btn-primary" style="font-size:12px;padding:6px 16px">导入</button>
       </div>

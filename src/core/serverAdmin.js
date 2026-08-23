@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { normalizeBandwidthLimit } from "./bandwidth.js";
-import { CLAIM_CODE_ALPHABET, encodeClaimToken, extractClaimCode } from "./claimProtocol.js";
+import { CLAIM_CODE_ALPHABET, encodeClaimToken, extractClaimCode, normalizeClaimServer } from "./claimProtocol.js";
 import { ADMIN_STATE_VERSION, buildRuntimeDiagnostics, compareRuntimeDiagnostics, normalizeRuntimeDiagnostics } from "./diagnostics.js";
 import { HEARTBEAT_AUTH_MAX_SKEW_MS, createHeartbeatSecret, verifyHeartbeatAuth } from "./heartbeatAuth.js";
 import { normalizeSchedule } from "./scheduler.js";
@@ -64,7 +64,7 @@ export function createDefaultAdminState(env = {}) {
     version: ADMIN_STATE_VERSION,
     updatedAt: now,
     settings: {
-      publicServerUrl: cleanUrl(env.PUBLIC_SERVER_URL || env.CLAIM_SERVER_URL || DEFAULTS.publicServerUrl)
+      publicServerUrl: cleanClaimServerOrigin(env.PUBLIC_SERVER_URL || env.CLAIM_SERVER_URL || DEFAULTS.publicServerUrl)
     },
     tunnel: {
       id: "vless-main",
@@ -150,7 +150,7 @@ export function normalizeAdminState(input = {}, env = {}) {
   };
   state.version = ADMIN_STATE_VERSION;
 
-  state.settings.publicServerUrl = cleanUrl(state.settings.publicServerUrl);
+  state.settings.publicServerUrl = cleanClaimServerOrigin(state.settings.publicServerUrl);
   state.tunnel.listenPort = readPort(state.tunnel.listenPort);
   state.tunnel.publicPort = readPort(state.tunnel.publicPort);
   state.tunnel.publicHost = cleanHost(state.tunnel.publicHost);
@@ -703,7 +703,7 @@ export function createClaim(state, input = {}) {
     : sanitizeClientName(inputFieldOrDefault(input, "clientName", "company-pc1"));
   const hasSelectedBucket = hasAnyInputField(input, ["bucketName", "bucket"]);
   const selectedBucketName = firstInputFieldOrDefault(input, ["bucketName", "bucket"], undefined);
-  const serverUrl = cleanUrl(inputFieldOrDefault(input, "server", state.settings.publicServerUrl));
+  const serverUrl = cleanClaimServerOrigin(inputFieldOrDefault(input, "server", state.settings.publicServerUrl));
   const now = new Date();
   const expiresAt = normalizeClaimExpiresAt(input, now);
   const profileExpiresAt = normalizeClaimProfileExpiresAt(input.profileExpiresAt);
@@ -1921,6 +1921,14 @@ function cleanUrl(input) {
     throw validationError("URL must use http or https");
   }
   return url.toString().replace(/\/$/g, "");
+}
+
+function cleanClaimServerOrigin(input) {
+  try {
+    return normalizeClaimServer(input);
+  } catch (error) {
+    throw validationError(error.message);
+  }
 }
 
 function normalizeRealityConfig(input = {}) {

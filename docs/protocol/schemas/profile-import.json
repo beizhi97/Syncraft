@@ -4,7 +4,7 @@
   "profileVersion": 2,
   "profileCodePrefix": "SFSC1-",
   "profileUriPrefix": "sfsc://import/v1#",
-  "clientProfileImportRequestStringFields": ["claimCode", "code", "clientName", "tKey", "tkey", "token", "uri"],
+  "clientProfileImportRequestStringFields": ["claimCode", "code", "clientName", "server", "tKey", "tkey", "token", "uri"],
   "clientProfileImportResponseKeys": ["profile"],
   "profileEncodeResponseKeys": ["code", "profile", "summary", "uri"],
   "serverIssuedProfileKeys": ["authorization", "clientName", "defaults", "expiresAt", "heartbeat", "issuedAt", "profileId", "storage", "syncSpace", "tunnel", "version"],

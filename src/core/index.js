@@ -51,6 +51,7 @@ export {
   decodeClaimToken,
   encodeClaimToken,
   extractClaimCode,
+  normalizeClaimServer,
   normalizeClaimPayload
 } from "./claimProtocol.js";
 export {
