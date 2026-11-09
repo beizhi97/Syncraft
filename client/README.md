@@ -1,10 +1,10 @@
 # Syncraft Windows Client
 
-This is the Windows portable client for Syncraft, distributed as a ZIP folder rather than an installer. Its directory-first product flow for N1/Linux ordinary-directory mode is: import a channel configuration code, submit a device identity request, enter the administrator-issued identity verification code, select an authorized server directory and a local Windows folder, review first-run bidirectional conflicts, and explicitly confirm initialization before enabling automatic sync. The channel code and identity code serve different steps.
+This is the Windows portable client for Syncraft, distributed as a ZIP folder rather than an installer. Its directory-first product flow for N1/Linux ordinary-directory mode is: import a channel configuration code, submit a device identity request, enter the administrator-issued one-time identity verification code, select an authorized server directory and a local Windows folder via the native folder picker, review first-run bidirectional conflicts (with one-click dual-version preservation), and explicitly confirm initialization before enabling automatic sync. The channel code and identity code serve different steps.
 
-The client can repair its connection and continue existing authorized tasks. Reconfiguring the server connection and receiving a new channel code do not require deleting a saved task or resetting its relation/baseline. MinIO/S3 profile import remains a compatibility path; it is not the default first-run workflow. The client follows the shared interface contract in `../docs/INTERFACE_CONTRACT.md`.
+The client can repair its connection (`POST /api/enrollment/repair`), clean up interrupted probe files on restart, automatically retry transient `sing-box` tunnel exits during active transfers, recover server-deleted files from local history versions, and continue existing authorized tasks. Reconfiguring the server connection and receiving a new channel code do not require deleting a saved task or resetting its relation/baseline. MinIO/S3 profile import remains a compatibility path; it is not the default first-run workflow. The client follows the shared interface contract in `../docs/INTERFACE_CONTRACT.md`.
 
-The project is currently in product acceptance-candidate work. A locally built ZIP is not evidence of public release or production readiness. No new public-network performance conclusion is claimed here.
+Pre-built, preflight-verified Windows release packages (`SyncraftDesktop.zip` and `SyncraftClient.zip`) are published on [Syncraft-client Releases](https://github.com/beizhi97/Syncraft-client/releases) and [Syncraft Releases](https://github.com/beizhi97/Syncraft/releases). Always verify the accompanying `.sha256` checksum file before extracting.
 
 The desktop ZIP contains a portable application folder, not a Windows installer. The unpacked folder contains:
 
@@ -16,7 +16,7 @@ resources/bin/win32/sing-box.exe
 resources/bin/win32/rclone.exe
 ```
 
-The runtime creates `data/` next to the executable after launch. Release packages must not ship with `data/`, because it may contain local profile, job, log, and secret-vault state.
+The runtime creates `data/` next to the executable after launch (or under `%LOCALAPPDATA%\Syncraft\data` when configured). Release packages must not ship with `data/`, because it may contain local profile, job, log, and secret-vault state.
 
 `Syncraft.exe` is an Electron desktop app. It opens its own window and runs only the bundled `sing-box.exe` and `rclone.exe`.
 

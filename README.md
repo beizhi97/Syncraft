@@ -1,47 +1,44 @@
 # Syncraft
 
-> 将 Windows 普通目录与自托管 N1/Linux 目录双向同步的工具，连接配置码与设备身份验证码分步使用。
+> 将 Windows 普通目录与自托管 N1/Linux 目录安全双向同步的工具，通道配置码与设备身份验证码分步使用。
 
-普通目录模式面向 N1/Linux 主机上由管理员开放的既有目录。客户端先导入管理员签发的通道配置码，再提交设备身份申请；管理员独立签发身份验证码后，用户选择获授权的目录和本地文件夹，确认首次双向冲突，再启用自动同步。通道配置码建立接入通道，身份验证码验证设备身份，两者不可互换。同步流量只由受管理的同步进程通过本地数据通道传输，不修改系统代理、路由、DNS、TUN 或防火墙。
+普通目录模式面向 N1/Linux 主机上由管理员开放的既有目录。客户端先导入管理员签发的**通道配置码**建立受信任接入通道，再提交设备身份申请；管理员在控制台勾选授权目录并独立签发**一次性身份验证码**后，用户在客户端完成核验、选择获授权目录与 Windows 本地文件夹、处理首次双向冲突（支持一键保存双方版本）并显式确认初始化，随后即可执行手动或定时自动同步。通道配置码建立接入通道，身份验证码验证设备身份并绑定目录授权，两者职责分离、不可互换。同步流量仅由受管理的同步子进程通过本地数据通道传输，不修改系统代理、路由、DNS、TUN 或防火墙。
 
-当前工作以产品化基线为基础，处于产品验收候选阶段，尚不能据此判断已发布或生产就绪。Windows 客户端当前以 ZIP 包形态交付；本仓库没有 Windows 安装程序。N1 普通目录部署入口见 [`server/DEPLOYMENT.md`](server/DEPLOYMENT.md)，其安装脚本为 `server/install-n1-directory-appliance.sh`。本 README 不提供新的公网性能结论。
+当前版本建立在完整产品化基线之上，已完成目录优先（Ordinary-Directory Appliance）全链路重构、白盒安全加固、严格发布预检（`37 pass / 0 warn / 0 fail`）、1011 项单元与契约测试及 Windows + N1 隔离容器端到端验收闭环。Windows 客户端以免安装便携式 ZIP 包形态交付（默认推荐 Electron 桌面端 `SyncraftDesktop.zip`，同时提供 Node 便携回退包 `SyncraftClient.zip`）。N1 普通目录部署入口见 [`server/DEPLOYMENT.md`](server/DEPLOYMENT.md)，安装脚本为 `server/install-n1-directory-appliance.sh`。
 
-本版在 rc.1 基线上完成了一轮完整的白盒安全审查与加固：管理 Token 默认强制、凭证不再经命令行传递、密钥文件写入前先收紧 ACL、心跳与 SyncKey 兑换限速、本地接口读写均拒绝跨站浏览器请求、二进制与容器镜像按哈希/digest 钉定。审查结论与逐项实施记录见 [`SECURITY_REVIEW_2026-07-25.md`](SECURITY_REVIEW_2026-07-25.md) 与 [`SECURITY_HARDENING_CLOSEOUT_2026-07-26.md`](SECURITY_HARDENING_CLOSEOUT_2026-07-26.md)。
+本版在既有安全加固基线（管理 Token 默认强制、凭证不经命令行传递、密钥文件写入前收紧 ACL、心跳与兑换限速、本地读写接口拒绝跨站浏览器请求、二进制与容器镜像按哈希/digest 钉定，详见 [`SECURITY_REVIEW_2026-07-25.md`](SECURITY_REVIEW_2026-07-25.md) 与 [`SECURITY_HARDENING_CLOSEOUT_2026-07-26.md`](SECURITY_HARDENING_CLOSEOUT_2026-07-26.md)）之上，新增了 Go 原生 SFTP 与关系守护服务（`sfsc-sftp-service` / `sfsc-relation-supervisor` / `sfsc-root-guard`）、Linux 目录根不可变标记（`.sfsc-directory-root.json`）保护、授权关系/设备撤销实时终止在途传输（`SIGTERM`）以及连接修复与无损重配能力。
 
-MinIO/S3 仍作为兼容模式保留，可从 [`server/DEPLOYMENT_AND_MIGRATION_GUIDE.md`](docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md) 查阅旧部署与迁移说明；普通目录模式不要求配置 MinIO。两种 appliance 模式共享状态和端口，不能同时运行，切换前请按部署文档核对服务状态。
+MinIO/S3 仍作为兼容模式保留，可从 [`docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md`](docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md) 查阅旧部署与迁移说明；普通目录模式不依赖或部署 MinIO。两种 appliance 模式共享状态和端口，不能同时运行，切换前请按部署文档核对服务状态。
 
-## 用户交付入口
+## 用户交付入口与当前发布版本
 
-本仓库是开发主仓库，统一维护客户端、服务端、共享协议和测试。普通使用者按目标选择独立交付仓库：
+本仓库（[beizhi97/Syncraft](https://github.com/beizhi97/Syncraft)）是开发主仓库，统一维护客户端、服务端、Go/C++ 原生组件、共享协议和测试，并在 [GitHub Releases](https://github.com/beizhi97/Syncraft/releases) 提供完整发布资产。普通使用者也可按角色直接前往独立交付仓库：
 
-- [Syncraft-server](https://github.com/beizhi97/Syncraft-server)：服务端交付仓库入口；请核对对应版本是否已发布普通目录部署资产。
-- [Syncraft-client](https://github.com/beizhi97/Syncraft-client)：Windows 客户端交付仓库入口；本候选尚不能据此认定已有公开下载包。
-
-Windows 客户端当前构建形态是 ZIP，不是安装程序。发布状态须以对应 Release 页面和候选验收记录为准；不要把本地构建产物视为已发布版本。
+- **[Syncraft-client](https://github.com/beizhi97/Syncraft-client)**：Windows 客户端用户下载仓库，可直接从 [Releases](https://github.com/beizhi97/Syncraft-client/releases) 下载已打包并通过严格预检的 `SyncraftDesktop.zip` 与 `SyncraftClient.zip` 及同名 `.sha256` 校验文件。
+- **[Syncraft-server](https://github.com/beizhi97/Syncraft-server)**：服务端部署交付仓库，包含已展开的 N1/Linux 普通目录模式与兼容模式部署文件（`install-n1-directory-appliance.sh`、`DEPLOYMENT.md`、`systemd/`、`runtime/` 等）。
 
 ## 适合谁使用
 
-- 想在 N1/Linux 主机上开放普通目录，并从 Windows 设备双向同步的个人或小团队。
-- 需要分开管理通道接入与设备身份授权，并保留已有任务目录和双向基准的人。
-- 需要保留 MinIO/S3 部署的现有用户；该路径仍作为兼容模式提供。
+- 想在 N1/Linux 主机上直接开放既有普通目录，并从 Windows 设备安全双向同步的个人或小团队。
+- 需要将“通道接入配置”与“设备身份及目录授权”分步管控，并在服务端重设连接配置后完整保留客户端既有任务与双向同步基准的用户。
+- 需要保留既有 MinIO/S3 部署的存量用户；该路径仍作为兼容模式完整保留。
 
-## 你会得到什么
+## 核心能力总览
 
-- 普通目录 appliance：管理员登记主机上已存在的目录，服务端按授权目录为设备提供数据通道。
-- Windows 客户端：支持普通目录上传、下载、双向同步和定时任务；可用目录与方向由服务端授权决定。
-- 分步首次接入：通道配置码与身份验证码分别导入/输入，身份验证后再选择授权目录和本地文件夹。
-- 首次双向冲突保护：用户预览并保存冲突副本，显式确认后才初始化双向同步。
-- 连接修复和重新配置：客户端可修复连接；服务端一键重配可沿用现有设备、任务目录和同步基准。
-- 同步进度、最近历史、脱敏日志和诊断包。
-- 发布候选使用 ZIP、SHA-256、`release-manifest.json` 和 CI/preflight 校验；每个候选包仍需独立验收。
+- **N1/Linux 普通目录 Appliance**：管理员直接登记主机上已存在的目录，服务端按设备授权关系提供受 `sfsc-root-guard` 与 `sfsc-relation-supervisor` 隔离的原生 SFTP 数据通道，无需额外部署对象存储。
+- **分步双码首次接入**：第一步导入通道配置码并提交设备耐久公钥签名的身份申请；第二步输入管理员签发的一次性身份验证码，自动拉取已授权目录范围与允许的同步方向。
+- **Windows 原生文件夹选择与首次双向冲突保护**：Electron 桌面端内置原生文件夹选择器（`选择本地同步文件夹`）；首次双向同步前自动扫描双端同名异内容冲突，支持一键“保存双方版本”（带崩溃恢复日志），并须用户显式点击“初始化双向”后才建立双向同步基线。
+- **一键连接修复与无损通道重配**：客户端内置一键“修复连接”（支持并发互斥保护与中断探测文件自动清理）及自有 `sing-box.exe` 进程异常退出自动重试；服务端一键重设连接配置并签发新通道码后，客户端无需删除既有任务或重建双向同步基线即可平滑恢复同步。
+- **实时权限吊销与历史版本恢复**：管理员撤销单个目录授权关系或停用设备时，服务端实时向对应在途传输会期发送 `SIGTERM` 立即终止，不影响同设备其他授权目录或其他正常设备；支持从客户端历史版本恢复被远端误删的文件及按需调优传输并发参数。
+- **全链路脱敏可观测性**：主界面实时展示速率、传输量、当前文件与最近同步状态；设置抽屉支持组件检测、协议兼容性核对、同步历史/日志查看及一键导出脱敏诊断包。
 
 ## 使用教程
 
-下面按“管理员部署 N1 普通目录服务，Windows 用户完成两码接入”说明。不要把完整通道配置码、身份验证码、管理 Token 或通道连接信息发到聊天群、Issue 或截图中。
+下面按“管理员部署 N1 普通目录服务，Windows 用户完成双码接入与首次同步”说明。切勿将完整通道配置码、一次性身份验证码、管理 Token 或私钥发到聊天群、Issue 或截图中。
 
 ### 1. 管理员部署服务端
 
-准备一台能够运行 Docker 和 systemd 的 N1/Linux 服务器，并由管理员预先创建要开放的主机目录。按 [普通目录部署文档](server/DEPLOYMENT.md) 准备 `.env.directory`，并使用实际脚本 `server/install-n1-directory-appliance.sh` 安装；可先使用脚本的 `SFSC_DIRECTORY_CHECK_ONLY=1` 检查路径和部署输入。该部署说明描述安装操作，不代表此候选已在用户环境安装或发布。
+准备一台运行 Docker 和 systemd 的 N1/Linux 服务器，并由管理员预先创建要开放的主机目录。按 [普通目录部署文档](server/DEPLOYMENT.md) 准备 `.env.directory`，使用 `server/install-n1-directory-appliance.sh` 安装（可先用 `SFSC_DIRECTORY_CHECK_ONLY=1` 预检路径和环境配置）：
 
 ```bash
 sudo install -d -m 0750 /srv/syncraft-shares
@@ -49,78 +46,76 @@ sudo cp server/.env.directory.example server/.env.directory
 sudoedit server/.env.directory
 ```
 
-设置非占位管理 Token 和客户端可访问的服务端地址。不要把 S3/MinIO 密钥加到普通目录配置中。安装命令示例：
+设置强随机 `SFSC_ADMIN_TOKEN` 和客户端可访问的服务端公网/局域网地址（普通目录模式无需填写 S3/MinIO 密钥）。执行安装：
 
 ```sh
 sudo sh server/install-n1-directory-appliance.sh /srv/syncraft-shares
 ```
 
-登录管理控制台后按顺序完成：
+登录管理控制台后按“首次配置”向导顺序完成：
 
-1. 开放管理员预先创建的目录。
-2. 填写外部连接地址，应用连接设置并生成通道配置码。
-3. 在 Windows 客户端导入通道配置码并提交设备身份申请。
-4. 为申请选择获授权的目录，签发独立的一次性身份验证码。
-5. 在客户端输入身份验证码，再选择目录和本地文件夹。
+1. **开放目录**：登记主机上预先创建的共享目录（服务端会自动写入并保护 `.sfsc-directory-root.json` 标记）。
+2. **生成通道配置码**：填写外部连接地址，应用连接设置并生成通道配置码发给客户端用户。
+3. **接收设备申请**：用户在 Windows 客户端导入通道配置码并提交设备身份申请。
+4. **勾选授权目录并签发身份验证码**：在控制台“设备申请”列表中为该申请选择一个或多个获授权目录，签发一次性身份验证码。
+5. **完成配对**：用户在客户端输入一次性身份验证码，即可在授权目录范围内配置同步任务。
 
-普通目录安装不会停止或删除 MinIO。若旧 S3 appliance 已启用，切换时需遵循部署文档的显式替换步骤，不要同时启动两种 appliance unit。
+普通目录安装不会停止或删除已有 MinIO 容器。若旧 S3 appliance 已启用，切换时请按部署文档执行显式替换步骤，不要同时启动两种 appliance unit。
 
 ### 2. 校验并启动 Windows 客户端
 
-使用经过验收并实际发布的 Windows ZIP；若当前只有本地候选包，则从验收交付目录获取 ZIP 和同名 `.sha256` 文件。先在 PowerShell 中核对 ZIP 的 SHA-256，再解压到用户可写且不会被清理的目录，例如 `C:\Tools\Syncraft\`；不要直接在 ZIP、下载临时目录或系统受保护目录中运行。当前没有 Windows 安装程序。
+从 [Syncraft-client Releases](https://github.com/beizhi97/Syncraft-client/releases) 或主仓 Release 下载 `SyncraftDesktop.zip` 和同名 `SyncraftDesktop.zip.sha256`。先在 PowerShell 中核对 SHA-256 哈希，再解压到用户可写且不会被清理的固定目录（例如 `C:\Tools\Syncraft\`），切勿直接在压缩包预览目录、临时目录或系统受保护目录中运行：
 
 ```powershell
 Get-FileHash -LiteralPath .\SyncraftDesktop.zip -Algorithm SHA256
 ```
 
-解压后运行：
+解压后双击运行：
 
 ```text
 SyncraftDesktop\Syncraft.exe
 ```
 
-首次启动时，客户端会显示等待导入状态。这是正常的：它还没有任何服务器配置或同步权限。
+首次启动时，客户端会展示分步首次接入向导，等待导入通道配置码。
 
 ![Syncraft 首次启动实际截图](docs/images/client-first-run.png)
 
 ### 3. 导入通道配置码并完成身份验证
 
-客户端首次运行时先粘贴通道配置码并提交身份申请。管理员在设备申请列表中选择目录并签发身份验证码；用户再将该验证码输入客户端。通道配置码用于建立连接，身份验证码用于验证设备，不要把身份验证码当作连接配置码导入。
+1. 在客户端粘贴管理员提供的**通道配置码**，填写设备名称并点击提交身份申请。
+2. 管理员在服务端控制台为该申请勾选授权目录并生成**一次性身份验证码**。
+3. 在客户端输入该一次性身份验证码完成核验（通道配置码用于建立连接，身份验证码用于核验设备身份与拉取目录授权，请勿混用）。
 
-身份验证本身不表示目录授权或同步已成功。客户端只显示服务端已授予的目录；用户再选择该目录和 Windows 本地文件夹。
+### 4. 选择同步目录、处理首次冲突并启动同步
 
-### 4. 创建同步任务
+身份核验通过后，客户端会自动展示服务端授予的目录范围与允许的同步方向：
 
-授权就绪后，选择获授权目录和 Windows 本地文件夹，再设置同步方向与计划：
-
-1. “本地文件夹”：选择或输入需要同步的目录。这是唯一必填项。
-2. “同步目录”：只显示管理员授权的目录，不允许填写或切换未授权的服务端路径。
-3. “同步方向”：只列出当前目录授权允许的方向。
-4. “计划任务”：首次建议先手动验证。确认目录和首次同步结果无误后，可选择间隔、每日或启动时自动同步；危险同步计划需要明确授权。
-5. 双向同步首次运行前，先查看冲突预览并保存冲突副本，再明确确认初始化。已有 relation/baseline 的任务应继续复用；修复连接或签发新通道码不会要求删除任务或重新建立同步基准。
+1. **选择授权目录**：从服务端已授权目录列表中选择目标同步目录（客户端不允许填写未授权的服务端路径）。
+2. **选择本地文件夹**：点击“浏览…”通过 Windows 原生文件夹选择器选择本地同步目录，或直接粘贴本地路径。
+3. **同步方向与计划任务**：同步方向由服务端授权自动决定或限定；首次运行建议先保持手动模式完成首次同步验证，随后可切换为间隔（如每分钟/每 5 分钟）、每日或启动时自动同步。
+4. **首次双向冲突检查与显式初始化**：首次执行双向同步前，客户端会先执行双端冲突扫描。若双端存在同名不同内容文件，可一键点击**“保存双方版本”**保留两份副本，再点击**“初始化双向”**建立双向同步基准，随后即可正常执行双向增量同步。
+5. **连接修复与通道重配**：日常使用中若遇网络波动可点击**“修复连接”**自检恢复；若服务端更改端口或密钥并签发了新通道配置码，直接导入新通道配置码即可沿用既有授权关系、本地任务与双向同步基准，无需删除任务或重新初始化。
 
 ![同步任务配置实际截图](docs/images/client-task-setup.png)
 
-> 上图摄于早期 S3/SyncKey 界面，可能与当前两码接入和目录选择界面不同；以当前候选客户端实际界面和合同为准。重截流程见 [截图说明](docs/images/README.md)。
-
-自动同步按用户选择的 schedule 运行；每次执行前重新验证当前任务授权、安全计划、目录 marker 和既有双向基准。任何需人工确认的首次初始化都不会由调度器自动执行。
+自动同步按用户保存的调度计划运行；每次触发前都会重新验证当前任务授权、安全计划、目录 marker 与既有双向基准，任何需要人工确认的首次初始化操作绝不会由调度器静默执行。
 
 ### 5. 查看进度与排障
 
-主界面显示速度、传输量、当前文件和最近同步状态。点击“设置”可查看组件检测、协议兼容性、同步历史和日志，并导出脱敏诊断包。
+主界面实时显示传输速度、已传输字节、当前文件、最新同步结果以及历史恢复版本列表。点击右上角“设置”可查看 `sing-box` / `rclone` 组件状态、发布清单摘要、同步历史与运行日志，并支持一键导出脱敏诊断包。
 
-遇到问题时按这个顺序处理：
+遇到异常时建议按以下顺序排查：
 
-1. 确认 ZIP SHA-256 与 `.sha256` 文件一致。
-2. 确认 `sing-box` 和 `rclone` 在“组件检测”中正常。
-3. 查看同步历史和日志中的稳定错误码。
-4. 导出诊断包，备份本地 `data` 后再处理状态损坏或密钥库缺失。
+1. 核对客户端 ZIP 的 SHA-256 与 `.sha256` 文件一致。
+2. 在客户端“设置 -> 组件检测”中确认 `sing-box.exe` 与 `rclone.exe` 校验正常。
+3. 使用主界面“修复连接”检测控制通道与 SFTP 数据通道可达性，并查看稳定错误码提示。
+4. 导出脱敏诊断包，先备份本地 `data/` 目录后再按文档处理本地状态恢复。
 
-常见错误码和恢复步骤见 [部署与迁移指南](docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md#4-windows-客户端本地状态恢复) 与 [试点支持指南](docs/PILOT_SUPPORT_GUIDE.md)。
+常见稳定错误码与恢复步骤见 [部署与迁移指南](docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md#4-windows-客户端本地状态恢复) 与 [试点支持指南](docs/PILOT_SUPPORT_GUIDE.md)。
 
 ## 开发与构建
 
-开发环境需要 Windows、Node.js 24、pnpm 9；只有部署服务端时才需要 Docker Desktop。
+开发环境需要 Windows、Node.js 24、pnpm 9；部署或容器化验证服务端时需要 Docker。
 
 ```powershell
 pnpm install
@@ -192,30 +187,33 @@ GitHub 的 `.github/workflows/ci.yml` 执行发布审计与全量测试；`.gith
 ## 项目结构
 
 ```text
-src/                 服务端 API 与共享核心逻辑
-public/              服务端管理控制台
-client/              Windows 本地 API、Electron、客户端 UI 与构建脚本
-server/              appliance、systemd、Compose 兼容配置和 sing-box 部署文件
-tests/               Node 合同与行为测试
-docs/                协议、设计、部署、试点与交接文档
-scripts/             CI、smoke、发布与 N1 自动化
+src/                 服务端 API、双码授权、连接修复与共享核心逻辑
+public/              服务端管理控制台（含首次配置向导、目录登记、配对与修复）
+client/              Windows 本地 API、Electron 桌面壳、客户端 UI 与打包脚本
+native/              Go 原生服务（sfsc-sftp-service / sfsc-relation-supervisor / sfsc-root-guard）与 C++ 锁组件
+server/              N1 普通目录与兼容模式 appliance、systemd 单元、运行时启动器与部署脚本
+tests/               Node 契约、安全、UI 与端到端行为测试
+docs/                接口合同、API 矩阵、协议 Schema、架构与部署文档
+scripts/             CI、发布审计、smoke、打包与 N1 自动化脚本
 ```
 
 ## 文档导航
 
-- [接口合同](docs/INTERFACE_CONTRACT.md)：客户端和服务端 API、SyncKey、profile、心跳与稳定错误码的唯一基线。
+- [接口合同](docs/INTERFACE_CONTRACT.md)：客户端和服务端 API、双码入网、目录授权、SyncKey、profile、心跳与稳定错误码的唯一基线。
 - [API 矩阵](docs/API_MATRIX.md)：双端路由与调用方。
+- [普通目录部署指南](server/DEPLOYMENT.md)：N1/Linux 普通目录 appliance 部署、升级与排障说明。
+- [目录根安全合同](docs/DIRECTORY_ROOT_CONTRACT.md)：普通目录根标记（`.sfsc-directory-root.json`）与路径边界约束。
 - [部署与迁移指南](docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md)：Docker、N1、客户端状态恢复、升级和发布。
 - [SyncKey 协议](docs/T_KEY_PROTOCOL.md)：旧 S3/MinIO 兼容模式的一次性授权格式和生命周期。
 - [软件设计说明](docs/SOFTWARE_DESIGN_SPEC.md)：整体设计。
-- [内部试运行清单](docs/INTERNAL_TRIAL_CHECKLIST.md) 与 [试点运行手册](docs/PILOT_RUNBOOK.md)：面向小范围试用。
+- [内部试运行清单](docs/INTERNAL_TRIAL_CHECKLIST.md) 与 [试点运行手册](docs/PILOT_RUNBOOK.md)：面向小范围试用与支持。
 
 修改任一 `/api/*` 路由、SyncKey/profile/heartbeat 字段、稳定错误码、诊断字段或发布包结构时，必须同步更新 `docs/INTERFACE_CONTRACT.md`、`docs/API_MATRIX.md` 和对应合同测试。
 
 ## 安全边界
 
 - 不提交 `.env`、`server/data/`、真实 sing-box 配置、本地客户端数据、下载的二进制文件或 `dist/` 产物。
-- 管理 Token、SyncKey、VLESS URI、S3/MinIO 密钥和私钥不得进入 `reports/`、Issue、聊天记录或截图。
+- 管理 Token、通道配置码、一次性身份验证码、SyncKey、VLESS URI、S3/MinIO 密钥和私钥不得进入 `reports/`、Issue、聊天记录或截图。
 - 客户端本地状态默认位于 `%LOCALAPPDATA%\Syncraft\data`；排障前先导出诊断包并备份，不要直接删除状态文件。
 - 客户端本地 API 只绑定 loopback，并校验 Host 头以阻断 DNS 重绑定；读写接口都拒绝 `Sec-Fetch-Site: cross-site` 的浏览器请求。它**刻意不使用鉴权令牌**——已能在本机执行代码的进程可以直接读取本地凭据文件，令牌无法防御该路径，因此防线是进程边界与文件 ACL，而非 HTTP 层令牌。
 - 服务端管理面应置于 HTTPS 反代之后，并始终设置强随机 `SFSC_ADMIN_TOKEN`；MinIO 的 API 与控制台端口默认只绑定 localhost。
