@@ -4,6 +4,7 @@ node_modules/
 # Build outputs
 dist/
 *.zip
+!tests/fixtures/release-bundle-mode-fixture.zip
 
 # Downloaded Windows runtime binaries (reproducibly restored from the lock file)
 client/resources/bin/win32/*.exe
@@ -21,6 +22,7 @@ reports/
 server/.env
 server/.env.*
 !server/.env.example
+!server/.env.directory.example
 
 # Release signing keys (private key must never be committed; the .pub is tracked)
 secrets/

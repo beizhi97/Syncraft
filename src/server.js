@@ -2,13 +2,24 @@ import http from "node:http";
 import net from "node:net";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, extname, join, normalize, sep } from "node:path";
+import { dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { requestSingboxRestart } from "./core/singboxControl.js";
 import { checkApplianceHealth } from "./core/applianceHealth.js";
 import { summarizeSetupReadiness } from "./core/setupReadiness.js";
 import { acquireServerStateLock } from "./core/serverStateLock.js";
 import { ensureMinioClaimAccess, removeMinioDeviceAccess, setMinioDeviceAccessEnabled } from "./minioProvisioner.js";
+import { createSftpRelationServiceStartup } from "./service/relationServiceStartup.js";
+import { createEnrollmentService } from "./service/enrollmentService.js";
+import { createEnrollmentBootstrapGateway } from "./service/enrollmentBootstrapGateway.js";
+import { createEnrollmentBootstrapIssuer, applyEnrollmentBootstrapOverlay } from "./service/enrollmentBootstrapIssuer.js";
+import { createSharedDirectoryService } from "./service/sharedDirectoryService.js";
+import { createEnrollmentDataAuthorization } from "./service/enrollmentDataAuthorization.js";
+import { createEnrollmentRevocationService } from "./service/enrollmentRevocationService.js";
+import { createEnrollmentReconfigureService } from "./service/enrollmentReconfigure.js";
+import { createRealityTransportProbe } from "./service/realityTransportProbe.js";
+import { openRelationServiceBindingCatalog } from "./service/relationServiceBindingCatalog.js";
+import { createEnrollmentIdentityId } from "./core/enrollmentProtocol.js";
 import {
   buildClientSingboxConfig,
   buildRclonePreview,
@@ -102,6 +113,9 @@ try {
   adminToken = resolveAdminToken(process.env);
   trustProxyConfig = resolveTrustProxyConfig(process.env);
   assertStorageSecretNotPlaceholder(process.env);
+  if (process.env.SFSC_STORAGE_MODE === "directory" && !String(process.env.SFSC_DIRECTORY_ROOT || "").trim()) {
+    throw new Error("SFSC_DIRECTORY_ROOT is required when SFSC_STORAGE_MODE=directory");
+  }
 } catch (error) {
   console.error(`[sfsc] server_config_invalid: ${error.message}`);
   process.exit(1);
@@ -147,11 +161,125 @@ try {
 }
 adminState.appVersion = appVersion;
 adminState.diagnostics = diagnostics;
+const enrollmentService = createEnrollmentService({
+  statePath: join(dataDir, "sfsc-enrollment-state.json"),
+  signerPath: join(dataDir, "sfsc-enrollment-signer.json"),
+  catalogPath: join(dataDir, "relation-service", "catalog.json"),
+  activeChannelRevision: process.env.SFSC_ENROLLMENT_CHANNEL_REVISION || "",
+  allowedBootstrapOrigins: String(process.env.SFSC_ENROLLMENT_BOOTSTRAP_ORIGINS || "")
+    .split(",").map(value => value.trim()).filter(Boolean)
+});
+const enrollmentBootstrapIssuer = createEnrollmentBootstrapIssuer({
+  registryPath: join(dataDir, "sfsc-enrollment-bootstrap-registry.json"),
+  enrollmentService
+});
+const verifyRealityTransport = createRealityTransportProbe();
+const sharedDirectoryService = createSharedDirectoryService({
+  catalogPath: join(dataDir, "relation-service", "catalog.json"),
+  directoryRoot: process.env.SFSC_STORAGE_MODE === "directory" ? process.env.SFSC_DIRECTORY_ROOT : undefined
+});
+const enrollmentBootstrapGateway = createEnrollmentBootstrapGateway({
+  enrollmentService,
+  host: "127.0.0.1",
+  port: Number(process.env.SFSC_ENROLLMENT_BOOTSTRAP_PORT || 18082)
+});
 let adminStateWriteQueue = Promise.resolve();
+let singboxConfigMutationQueue = Promise.resolve();
+let enrollmentBootstrapGatewayAddress = null;
+let enrollmentBootstrapIdentity = null;
+let enrollmentDataAuthorization = null;
+let enrollmentDataAuthorizationInit = null;
+let activeRelationService = null;
+let activeRelationCatalog = null;
+let enrollmentRevocationService = null;
+let revocationRecoveryBlocked = false;
+const enrollmentReconfigureService = createEnrollmentReconfigureService({
+  journalDir: join(dataDir, "sfsc-enrollment-reconfigure"),
+  getTunnel: () => adminState.tunnel,
+  setTunnel: tunnel => { adminState.tunnel = structuredClone(tunnel); },
+  readConfig: async () => readFile(singboxConfigPath).catch(error => {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }),
+  writeConfig: async () => writeSingboxConfigFile(adminState),
+  restoreConfig: bytes => writeFileAtomic(singboxConfigPath, bytes),
+  saveAdminState,
+  requestRestart: configSha256 => requestSingboxRestart({
+    controlDir: singboxControlDir,
+    expectedConfigSha256: configSha256
+  }),
+  markDataApplied: (configSha256, restartResult) => enrollmentDataAuthorization?.markApplied({
+    expectedConfigSha256: configSha256,
+    restartResult
+  }),
+  markBootstrapApplied: (tunnel, configSha256, restartResult) => {
+    if (!enrollmentBootstrapGatewayAddress) {
+      throw createHttpError("enrollment_channel_not_ready", 503, "Enrollment bootstrap gateway is unavailable");
+    }
+    return enrollmentBootstrapIssuer.markApplied({
+      tunnel,
+      gatewayPort: enrollmentBootstrapGatewayAddress.port,
+      expectedConfigSha256: configSha256,
+      restartResult
+    });
+  },
+  markSingboxApplied: () => markSingboxApplied(adminState, { confirmMarkApplied: true }),
+  verifyTransport: async ({ tunnel }) => {
+    if (tunnel?.protocol !== "vless-reality-tcp") return;
+    if (!enrollmentBootstrapGatewayAddress) {
+      throw createHttpError("enrollment_channel_not_ready", 503, "Enrollment bootstrap gateway is unavailable");
+    }
+    const bootstrapUser = await enrollmentBootstrapIssuer.current({
+      tunnel,
+      gatewayPort: enrollmentBootstrapGatewayAddress.port
+    });
+    await verifyRealityTransport({
+      tunnel,
+      bootstrapUser,
+      gatewayPort: enrollmentBootstrapGatewayAddress.port
+    });
+  },
+  snapshotBootstrap: () => enrollmentBootstrapIssuer.snapshot(),
+  restoreBootstrap: snapshot => enrollmentBootstrapIssuer.restoreSnapshot(snapshot),
+  issueCode: ({ tunnel, configSha256, issuedAt, expiresAt, onIssued }) => {
+    if (!enrollmentBootstrapGatewayAddress) {
+      throw createHttpError("enrollment_channel_not_ready", 503, "Enrollment bootstrap gateway is unavailable");
+    }
+    return enrollmentBootstrapIssuer.issue({
+      tunnel,
+      gatewayPort: enrollmentBootstrapGatewayAddress.port,
+      configSha256,
+      issuedAt,
+      expiresAt,
+      onIssued
+    });
+  },
+  isCurrentConfigApplied: async (tunnel, bytes) => {
+    if (!enrollmentBootstrapGatewayAddress || !singboxControlDir || !tunnel?.id || !bytes) return false;
+    try {
+      const config = JSON.parse(Buffer.from(bytes).toString("utf8"));
+      return Boolean(config && Array.isArray(config.inbounds)
+        && config.inbounds.some(inbound => inbound?.tag === "vless-in" && inbound.type === "vless"));
+    } catch {
+      return false;
+    }
+  },
+  makeTargetTunnel: (currentTunnel, input) => {
+    const shadow = structuredClone(adminState);
+    shadow.tunnel = structuredClone(currentTunnel);
+    updateTunnelConfig(shadow, {
+      publicHost: input.publicHost ?? currentTunnel.publicHost,
+      publicPort: input.publicPort ?? currentTunnel.publicPort
+    });
+    return shadow.tunnel;
+  },
+  summarizeState: () => summarizeAdminState(adminState)
+});
 
 const server = http.createServer(async (req, res) => {
   let adminStateSnapshot = null;
   let releaseAdminStateWriteLock = null;
+  let releaseSingboxConfigMutationLock = null;
   let claimRedeemAudit = null;
   try {
     const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
@@ -164,11 +292,21 @@ const server = http.createServer(async (req, res) => {
       const health = await checkApplianceHealth({
         dataDir,
         singboxControlDir,
+        singboxHost: process.env.SINGBOX_PROBE_HOST,
         singboxPort: Number(process.env.SINGBOX_LISTEN_PORT || process.env.VLESS_PORT || 45678),
         rcloneBin: process.env.RCLONE_BIN,
         storageEndpoint: process.env.S3_ENDPOINT
       });
-      return json(res, health, health.ok ? 200 : 503);
+      const pendingRevocationRecovery = await isEnrollmentRevocationRecoveryPending();
+      const ready = health.ok && !pendingRevocationRecovery;
+      return json(res, {
+        ...health,
+        ok: ready,
+        enrollmentRevocations: {
+          ready: !pendingRevocationRecovery,
+          pendingRecovery: pendingRevocationRecovery
+        }
+      }, ready ? 200 : 503);
     }
 
     if (req.method === "GET" && url.pathname === "/api/health") {
@@ -207,8 +345,159 @@ const server = http.createServer(async (req, res) => {
     if (shouldSerializeAdminStateWrite(req, url)) {
       releaseAdminStateWriteLock = await acquireAdminStateWriteLock();
     }
+    if (shouldSerializeSingboxConfigMutation(req, url)) {
+      releaseSingboxConfigMutationLock = await acquireSingboxConfigMutationLock();
+    }
     if (shouldRollbackAdminStateOnError(req, url)) {
       adminStateSnapshot = structuredClone(adminState);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/enrollment/v1/requests") {
+      return json(res, { requests: await enrollmentService.listRequests() });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/enrollment/v1/relations") {
+      if (!activeRelationCatalog) {
+        try { await getEnrollmentDataAuthorization(); }
+        catch (error) {
+          if (error?.code !== "enrollment_catalog_not_ready"
+            && error?.code !== "enrollment_data_authorization_denied") throw error;
+        }
+      }
+      let catalog = activeRelationCatalog;
+      if (!catalog) {
+        try {
+          catalog = await openRelationServiceBindingCatalog({
+            path: join(dataDir, "relation-service", "catalog.json"),
+            mode: "require-existing"
+          });
+        } catch (error) {
+          const absent = error?.code === "relation_service_binding_catalog_missing"
+            || (error?.code === "relation_service_binding_catalog_file_invalid" && error?.cause?.code === "ENOENT");
+          if (!absent) throw error;
+        }
+      }
+      if (!catalog) return json(res, { relations: [] });
+      const snapshot = await catalog.read();
+      const relations = Object.entries(snapshot.authority.relationGrants || {})
+        .map(([relationId, grant]) => {
+          const binding = grant.binding;
+          const deviceId = binding.identity.deviceId;
+          const device = snapshot.authority.devices[deviceId];
+          const root = snapshot.roots[binding.identity.rootId];
+          return {
+            relationId,
+            deviceId,
+            rootId: binding.identity.rootId,
+            directory: root?.canonicalRoot || "",
+            status: grant.revokedAt !== null || device?.revokedAt !== null ? "revoked" : "active"
+          };
+        })
+        .sort((left, right) => left.deviceId.localeCompare(right.deviceId)
+          || left.directory.localeCompare(right.directory)
+          || left.relationId.localeCompare(right.relationId));
+      return json(res, { relations });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/admin/enrollment/v1/revocations") {
+      const body = parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_REVOKE, await readJson(req));
+      const revocations = await getEnrollmentRevocationService();
+      const result = await revocations.revoke(body);
+      revocationRecoveryBlocked = await revocations.hasPending();
+      return json(res, result, result.status === "complete" ? 200 : 503);
+    }
+
+    const enrollmentOperationMatch = url.pathname.match(/^\/api\/admin\/enrollment\/v1\/operations\/([^/]+)$/);
+    if (req.method === "GET" && enrollmentOperationMatch) {
+      const revocations = await getEnrollmentRevocationService();
+      const result = await revocations.get(decodeURIComponent(enrollmentOperationMatch[1]));
+      if (!result) throw createHttpError("enrollment_revocation_operation_not_found", 404, "Revocation operation does not exist");
+      return json(res, result);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/enrollment/v1/directories") {
+      return json(res, { directories: await sharedDirectoryService.list() });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/admin/enrollment/v1/directories") {
+      const body = parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_DIRECTORY_REGISTER, await readJson(req));
+      return json(res, { directory: await sharedDirectoryService.register(body) }, 201);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/enrollment/v1/trust") {
+      const signer = await enrollmentService.getTrustMaterial();
+      const origin = enrollmentBootstrapGatewayAddress
+        ? `http://127.0.0.1:${enrollmentBootstrapGatewayAddress.port}`
+        : "";
+      if (!origin) {
+        throw createHttpError("enrollment_channel_not_ready", 503, "Enrollment bootstrap origins are not configured");
+      }
+      const allowedBootstrapOrigins = [origin];
+      enrollmentService.setAllowedBootstrapOrigins(allowedBootstrapOrigins);
+      return json(res, { pin: {
+        serverId: signer.serverId,
+        keyId: signer.keyId,
+        publicKey: signer.publicKey,
+        allowedBootstrapOrigins,
+        bootstrapPathPrefix: "/api/enrollment/v1"
+      } });
+    }
+
+    const enrollmentReconfigureMatch = url.pathname.match(/^\/api\/admin\/enrollment\/v1\/reconfigure\/([^/]+)$/);
+    if (req.method === "GET" && enrollmentReconfigureMatch) {
+      return json(res, await enrollmentReconfigureService.get(decodeURIComponent(enrollmentReconfigureMatch[1])));
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/admin/enrollment/v1/reconfigure") {
+      const body = parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_RECONFIGURE, await readJson(req));
+      // A caller may register a directory and invoke reconfigure directly,
+      // without first reading setup readiness. Initialize the data overlay
+      // writer here so the coordinator cannot issue a code with a skipped receipt.
+      await getEnrollmentDataAuthorization();
+      const result = await enrollmentReconfigureService.run(body);
+      return json(res, result, result.stage === "applied" ? 202 : 200);
+    }
+
+    const enrollmentIssueMatch = url.pathname.match(/^\/api\/admin\/enrollment\/v1\/requests\/([^/]+)\/issue$/);
+    if (req.method === "POST" && enrollmentIssueMatch) {
+      const body = parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_ISSUE, await readJson(req));
+      if (process.env.SFSC_STORAGE_MODE === "directory") {
+        const directoryReadiness = await sharedDirectoryService.inspectActiveRoots();
+        const selectedRootIds = body.rootIds || [body.rootId];
+        if (selectedRootIds.some(rootId => !directoryReadiness.verifiedRootIds.includes(rootId))) {
+          throw createHttpError("directory_root_input_invalid", 400, "Selected directory is outside the configured shared directory or is unavailable");
+        }
+      }
+      return json(res, await enrollmentService.issueCode(decodeURIComponent(enrollmentIssueMatch[1]), body), 201);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/admin/enrollment/v1/channel-code") {
+      parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_CHANNEL_CODE, await readJson(req));
+      if (!enrollmentBootstrapGatewayAddress) throw createHttpError("enrollment_channel_not_ready", 503, "Enrollment bootstrap gateway is unavailable");
+      if (!adminState.tunnel?.id || !adminState.tunnel?.lastAppliedAt || !singboxControlDir) {
+        throw createHttpError("enrollment_channel_not_ready", 503, "Configure the VLESS tunnel and restart supervisor before issuing a channel");
+      }
+      adminState.tunnel.restartRequired = true;
+      await saveAdminState();
+      await writeSingboxConfigFile(adminState);
+      await saveAdminState();
+      const configBytes = await readFile(singboxConfigPath);
+      const expectedConfigSha256 = createHash("sha256").update(configBytes).digest("hex");
+      const restart = await requestSingboxRestart({ controlDir: singboxControlDir, expectedConfigSha256 });
+      await enrollmentDataAuthorization?.markApplied({ expectedConfigSha256, restartResult: restart });
+      await enrollmentBootstrapIssuer.markApplied({
+        tunnel: adminState.tunnel,
+        gatewayPort: enrollmentBootstrapGatewayAddress.port,
+        expectedConfigSha256,
+        restartResult: restart
+      });
+      markSingboxApplied(adminState, { confirmMarkApplied: true });
+      await saveAdminState();
+      return json(res, await enrollmentBootstrapIssuer.issue({
+        tunnel: adminState.tunnel,
+        gatewayPort: enrollmentBootstrapGatewayAddress.port,
+        configSha256: expectedConfigSha256
+      }), 201);
     }
 
     if (req.method === "GET" && url.pathname === "/api/admin/auth/check") {
@@ -231,13 +520,23 @@ const server = http.createServer(async (req, res) => {
       const health = await checkApplianceHealth({
         dataDir,
         singboxControlDir,
+        singboxHost: process.env.SINGBOX_PROBE_HOST,
         singboxPort: Number(process.env.SINGBOX_LISTEN_PORT || process.env.VLESS_PORT || 45678),
         rcloneBin: process.env.RCLONE_BIN,
         storageEndpoint: process.env.S3_ENDPOINT
       }).catch(() => null);
-      // 探针整体失败传 null 而不是抛错：就绪度页面在存储挂掉时更需要能打开，
-      // 而 summarizeSetupReadiness 把探针缺失一律算作未就绪，不会因此谎报。
-      return json(res, summarizeSetupReadiness(adminState, health));
+      // S3 is an optional compatibility path. Ordinary first use is judged by
+      // verified server roots, exact applied overlay receipts, and live grants.
+      const enrollmentEvidence = await collectSetupEnrollmentEvidence();
+      const summary = summarizeSetupReadiness(adminState, health, enrollmentEvidence);
+      if (await isEnrollmentRevocationRecoveryPending()) {
+        summary.ok = false;
+        summary.ready = false;
+        summary.enrollmentRevocations = { ready: false, pendingRecovery: true };
+      } else {
+        summary.enrollmentRevocations = { ready: true, pendingRecovery: false };
+      }
+      return json(res, summary);
     }
 
     const deviceVlessUriMatch = url.pathname.match(/^\/api\/admin\/devices\/([^/]+)\/vless-uri$/);
@@ -262,7 +561,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/admin/tunnel/autofill") {
       const body = parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_TUNNEL_AUTOFILL, await readJson(req));
-      autoFillTunnelConfig(adminState, body);
+      const autofillInput = !Object.hasOwn(body, "serverName") && process.env.REALITY_SERVER_NAME
+        ? { ...body, serverName: process.env.REALITY_SERVER_NAME }
+        : body;
+      autoFillTunnelConfig(adminState, autofillInput);
       await saveAdminState();
       return json(res, {
         tunnel: summarizeAdminState(adminState).tunnel,
@@ -448,7 +750,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/admin/singbox/config") {
       return json(res, {
         path: singboxConfigPath,
-        config: maskSingboxConfig(buildSingboxServerConfig(adminState))
+        config: maskSingboxConfig(await buildManagedSingboxConfig(adminState))
       });
     }
 
@@ -489,12 +791,30 @@ const server = http.createServer(async (req, res) => {
       if (!adminState.tunnel.restartRequired) {
         throw createHttpError("validation_failed", 400, "No pending sing-box config change to apply");
       }
-      const expectedConfigSha256 = createHash("sha256")
-        .update(JSON.stringify(buildSingboxServerConfig(adminState), null, 2))
-        .digest("hex");
+      // Once ordinary directories have been registered, initialize their
+      // data-overlay writer before applying the first tunnel config. Without
+      // this, the supervisor could accept the config while setup readiness
+      // still lacks the data overlay receipt.
+      try {
+        await readFile(join(dataDir, "relation-service", "catalog.json"));
+        await getEnrollmentDataAuthorization();
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      await writeSingboxConfigFile(adminState);
+      await saveAdminState();
+      const configBytes = await readFile(singboxConfigPath);
+      const expectedConfigSha256 = createHash("sha256").update(configBytes).digest("hex");
       const restart = await requestSingboxRestart({
         controlDir: singboxControlDir,
         expectedConfigSha256
+      });
+      await enrollmentDataAuthorization?.markApplied({ expectedConfigSha256, restartResult: restart });
+      await enrollmentBootstrapIssuer.markApplied({
+        tunnel: adminState.tunnel,
+        gatewayPort: enrollmentBootstrapGatewayAddress.port,
+        expectedConfigSha256,
+        restartResult: restart
       });
       markSingboxApplied(adminState, { confirmMarkApplied: true });
       await saveAdminState();
@@ -621,13 +941,279 @@ const server = http.createServer(async (req, res) => {
     }
     jsonError(res, responseError);
   } finally {
+    if (releaseSingboxConfigMutationLock) {
+      releaseSingboxConfigMutationLock();
+    }
     if (releaseAdminStateWriteLock) {
       releaseAdminStateWriteLock();
     }
   }
 });
 
-server.listen(port, host, () => {
+async function isEnrollmentRevocationRecoveryPending() {
+  if (revocationRecoveryBlocked) return true;
+  if (!enrollmentRevocationService) return false;
+  try {
+    const pending = await enrollmentRevocationService.hasPending();
+    if (pending) revocationRecoveryBlocked = true;
+    return pending;
+  } catch {
+    // Readiness fails closed when the persisted revocation journal cannot be read.
+    revocationRecoveryBlocked = true;
+    return true;
+  }
+}
+
+// Older callers close the management listener directly. Keep that lifecycle
+// compatible by closing the enrollment listener whenever the HTTP server closes.
+server.once("close", () => {
+  enrollmentBootstrapGateway.close().catch(error => {
+    console.error(`[sfsc] enrollment_bootstrap_close_failed: ${error?.message || error}`);
+  });
+});
+
+let activeRuntimeAdmission = null;
+
+export async function main({
+  env = process.env,
+  startupAdmission = null,
+  listen = null,
+  readEpochIdentity = null,
+  ownerGateFactory = null,
+  relationCompositionFactory = null,
+  // Product starts omit this test seam, so the V2 startup uses its fixed,
+  // pinned package loader by default.
+  relationRuntimePackageLoaderForTest = null
+} = {}) {
+  activeRelationService = null;
+  activeRelationCatalog = null;
+  enrollmentRevocationService = null;
+  revocationRecoveryBlocked = false;
+  await enrollmentService.initialize();
+  if (env.SFSC_RUNTIME_ADMISSION_REQUIRED === "1") {
+    const {
+      admitStartup,
+      readStartupEpochIdentity,
+      startupAdmissionEnvironment
+    } = await import("./service/startupAdmission.js");
+    const admissionEnvironment = startupAdmissionEnvironment(env);
+    const resolveEpochIdentity =
+      readEpochIdentity || readStartupEpochIdentity;
+    const containerId = admissionEnvironment.containerId
+      || (await resolveEpochIdentity({
+        epochRoot: admissionEnvironment.epochRoot
+      })).containerId;
+    const createOwnerStateSnapshotGate = ownerGateFactory
+      || (await import("./service/ownerStateSnapshot.js"))
+        .createOwnerStateSnapshotGate;
+    const ownerGate = createOwnerStateSnapshotGate({
+      artifactPath: join(
+        root,
+        "server",
+        "runtime",
+        "native",
+        `${process.platform}-${process.arch}`,
+        "sfsc_owner_lock.node"
+      ),
+      manifestPath: join(
+        root,
+        "server",
+        "runtime",
+        "native",
+        `${process.platform}-${process.arch}`,
+        "manifest.json"
+      )
+    });
+    const relationStatePath = env.SFSC_RELATION_STATE_PATH
+      || join(dataDir, "relation-services.json");
+    const composeRelationService = relationCompositionFactory
+      || createSftpRelationServiceStartup;
+    const relationCompositionOptions = {
+      root,
+      managerStatePath: relationStatePath
+    };
+    if (relationRuntimePackageLoaderForTest) {
+      relationCompositionOptions.runtimePackageLoader = relationRuntimePackageLoaderForTest;
+    }
+    const relationComposition = await composeRelationService(
+      relationCompositionOptions
+    );
+    const admit = startupAdmission || admitStartup;
+    activeRuntimeAdmission = await admit({
+      epochRoot: admissionEnvironment.epochRoot,
+      statePath: relationStatePath,
+      ownerGate,
+      containerId,
+      bootstrapNonce: admissionEnvironment.bootstrapNonce,
+      managerOptions: {
+        withExclusiveLock: async (request, task) => {
+          const release = acquireServerStateLock({
+            dataDir: dirname(request.lockPath),
+            statePath: request.statePath,
+            lockPath: request.lockPath,
+            onLockLost: (error) => {
+              console.error(`[sfsc] relation_state_lock_lost: ${error.message}`);
+              process.exit(1);
+            }
+          });
+          try {
+            return await task();
+          } finally {
+            release();
+          }
+        },
+        runtime: relationComposition.runtime,
+        protection: relationComposition.protection,
+        runtimeTimeoutMs: 30_000,
+        protectionTimeoutMs: 10_000
+      }
+    });
+    activeRelationService = relationComposition.createFacade(
+      activeRuntimeAdmission.manager
+    );
+    revocationRecoveryBlocked = true;
+  }
+
+  await new Promise((resolveListen, rejectListen) => {
+    const onError = (error) => {
+      server.off("listening", onListening);
+      rejectListen(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolveListen();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    if (listen) {
+      listen(port, host);
+    } else {
+      server.listen(port, host);
+    }
+  });
+  let bootstrapGatewayAddress;
+  try {
+    bootstrapGatewayAddress = await enrollmentBootstrapGateway.start();
+    enrollmentBootstrapGatewayAddress = bootstrapGatewayAddress;
+    enrollmentService.setAllowedBootstrapOrigins([`http://127.0.0.1:${bootstrapGatewayAddress.port}`]);
+    enrollmentBootstrapIdentity = await enrollmentBootstrapIssuer.initialize({
+      tunnel: adminState.tunnel,
+      gatewayPort: bootstrapGatewayAddress.port
+    });
+    if (activeRelationService) {
+      try {
+        await getEnrollmentDataAuthorization();
+      } catch (error) {
+        if (error?.code !== "enrollment_catalog_not_ready") {
+          revocationRecoveryBlocked = true;
+          console.error(`[sfsc] enrollment_revocation_recovery_blocked: ${error?.code || "enrollment_data_authorization_init_failed"}`);
+        }
+      }
+    }
+    if (activeRelationService && activeRelationCatalog) {
+      enrollmentRevocationService = createEnrollmentRevocationService({
+        catalog: activeRelationCatalog,
+        relationService: activeRelationService,
+        applyOverlay: applyEnrollmentRevocationOverlay
+      });
+      try {
+        await withAdminStateWrite(() => withSingboxConfigMutation(async () => {
+          await enrollmentRevocationService.resumePending();
+        }));
+        revocationRecoveryBlocked = await enrollmentRevocationService.hasPending();
+      } catch (error) {
+        revocationRecoveryBlocked = true;
+        console.error(`[sfsc] enrollment_revocation_recovery_blocked: ${error?.code || "enrollment_revocation_recovery_failed"}`);
+      }
+    } else {
+      revocationRecoveryBlocked = false;
+    }
+    if (activeRelationService) enrollmentService.setDataAuthorizationProvider(async ({ deviceId, relationId }) => withAdminStateWrite(async () => withSingboxConfigMutation(async () => {
+      if (revocationRecoveryBlocked || await enrollmentRevocationService?.hasPending()) {
+        revocationRecoveryBlocked = true;
+        throw createHttpError("enrollment_revocation_recovery_pending", 503, "Enrollment revocation recovery must finish before data authorization can continue");
+      }
+      const dataAuthorization = await getEnrollmentDataAuthorization();
+      await dataAuthorization.materialize({ deviceId, relationId });
+      const current = await activeRelationService.query({ relationId });
+      if (!relationIsRunning(current)) {
+        await activeRelationService.start({
+          relationId,
+            operationId: `rootop_${randomBytes(18).toString("base64url")}`,
+          expectedHandleDigest: ""
+        });
+      }
+      const running = await activeRelationService.query({ relationId });
+      if (!relationIsRunning(running)) {
+        throw createHttpError("enrollment_data_relation_not_ready", 503, "SFTP relation did not become ready");
+      }
+      if (!adminState.tunnel?.id || !adminState.tunnel?.lastAppliedAt || !singboxControlDir) {
+        throw createHttpError("enrollment_data_channel_not_ready", 503, "Configure and apply the server VLESS tunnel before requesting directory authorization");
+      }
+
+      await writeSingboxConfigFile(adminState);
+      await saveAdminState();
+      const configBytes = await readFile(singboxConfigPath);
+      const expectedConfigSha256 = createHash("sha256").update(configBytes).digest("hex");
+      const bootstrapApplied = await enrollmentBootstrapIssuer.isApplied({
+        tunnel: adminState.tunnel,
+        gatewayPort: enrollmentBootstrapGatewayAddress.port,
+        configSha256: expectedConfigSha256
+      });
+      const dataOverlayApplied = await dataAuthorization.isApplied({ expectedConfigSha256 });
+      if (adminState.tunnel.restartRequired === true || !bootstrapApplied || !dataOverlayApplied) {
+        adminState.tunnel.restartRequired = true;
+        await saveAdminState();
+        const restart = await requestSingboxRestart({ controlDir: singboxControlDir, expectedConfigSha256 });
+        await dataAuthorization.markApplied({ expectedConfigSha256, restartResult: restart });
+        await enrollmentBootstrapIssuer.markApplied({
+          tunnel: adminState.tunnel,
+          gatewayPort: enrollmentBootstrapGatewayAddress.port,
+          expectedConfigSha256,
+          restartResult: restart
+        });
+        markSingboxApplied(adminState, { confirmMarkApplied: true });
+        await saveAdminState();
+      }
+      return (await dataAuthorization.prepareDataAuthorization({ deviceId, relationId })).payload;
+    })));
+    enrollmentService.setChannelRenewalProvider(async ({ channelRevision }) => withSingboxConfigMutation(async () => {
+      if (!enrollmentBootstrapGatewayAddress || !adminState.tunnel?.id || !adminState.tunnel?.lastAppliedAt) {
+        throw createHttpError("enrollment_channel_not_ready", 503, "Configure and apply the server VLESS tunnel before renewing a channel");
+      }
+      const current = await enrollmentBootstrapIssuer.current({
+        tunnel: adminState.tunnel,
+        gatewayPort: enrollmentBootstrapGatewayAddress.port
+      });
+      if (current.channelRevision !== channelRevision) {
+        throw createHttpError("enrollment_channel_stale", 409, "Requested channel revision is no longer current");
+      }
+      if (adminState.tunnel.restartRequired === true || !singboxControlDir) {
+        throw createHttpError("enrollment_channel_not_ready", 503, "Apply the current server VLESS tunnel before renewing a channel");
+      }
+      const configBytes = await readFile(singboxConfigPath).catch(() => null);
+      if (!configBytes) throw createHttpError("enrollment_channel_not_ready", 503, "Current sing-box config is unavailable for channel renewal");
+      const configSha256 = createHash("sha256").update(configBytes).digest("hex");
+      const applied = await enrollmentBootstrapIssuer.isApplied({
+        tunnel: adminState.tunnel,
+        gatewayPort: enrollmentBootstrapGatewayAddress.port,
+        configSha256
+      });
+      if (!applied) throw createHttpError("enrollment_channel_not_ready", 503, "Current bootstrap transport has not been applied");
+      const issued = await enrollmentBootstrapIssuer.issue({
+        tunnel: adminState.tunnel,
+        gatewayPort: enrollmentBootstrapGatewayAddress.port,
+        configSha256
+      });
+      return { channelRevision: issued.channelRevision, wrappedCode: issued.wrappedCode };
+    }));
+  } catch (error) {
+    await enrollmentBootstrapGateway.close().catch(() => {});
+    await new Promise(resolveClose => server.close(() => resolveClose())).catch(() => {});
+    enrollmentService.close();
+    releaseStateLock?.();
+    throw error;
+  }
   console.log(`Syncraft server: http://${host}:${port}/`);
   if (!adminToken) {
     console.warn("[sfsc] admin_auth_disabled: management API is UNAUTHENTICATED (SFSC_ALLOW_NO_ADMIN_TOKEN). Never expose this beyond loopback.");
@@ -635,7 +1221,212 @@ server.listen(port, host, () => {
       console.warn(`[sfsc] admin_auth_disabled_non_loopback: HOST=${host} with no admin token exposes full management access on the network.`);
     }
   }
-});
+  return Object.freeze({
+    server,
+    runtimeAdmission: activeRuntimeAdmission,
+    relationService: activeRelationService,
+    bootstrapGatewayAddress,
+    async close() {
+      enrollmentDataAuthorization?.close();
+      enrollmentDataAuthorization = null;
+        activeRelationCatalog = null;
+        enrollmentRevocationService = null;
+      await enrollmentBootstrapGateway.close();
+      if (server.listening) {
+        await new Promise((resolveClose, rejectClose) => {
+          server.close(error => error ? rejectClose(error) : resolveClose());
+        });
+      }
+      enrollmentService.close();
+      releaseStateLock?.();
+    }
+  });
+}
+
+async function getEnrollmentDataAuthorization() {
+  if (!activeRelationService) {
+    throw createHttpError("enrollment_data_authorization_denied", 503, "Relation service is unavailable");
+  }
+  if (enrollmentDataAuthorization) return enrollmentDataAuthorization;
+  if (!enrollmentDataAuthorizationInit) {
+    enrollmentDataAuthorizationInit = (async () => {
+      let catalog;
+      try {
+        catalog = await openRelationServiceBindingCatalog({
+          path: join(dataDir, "relation-service", "catalog.json"),
+          mode: "require-existing"
+        });
+      } catch (error) {
+        const absent = error?.code === "relation_service_binding_catalog_missing"
+          || (error?.code === "relation_service_binding_catalog_file_invalid" && error?.cause?.code === "ENOENT");
+        if (absent) throw createHttpError("enrollment_catalog_not_ready", 503, "Relation catalog is not ready for data authorization");
+        throw error;
+      }
+      activeRelationCatalog = catalog;
+      const authorizer = createEnrollmentDataAuthorization({
+        catalog,
+        enrollmentService,
+        facade: activeRelationService,
+        registryPath: join(dataDir, "sfsc-enrollment-data-registry.json"),
+        authorizedKeysDir: join(dataDir, "relation-service", "authorized-keys"),
+        getTunnel: () => adminState.tunnel,
+        getBootstrapUuid: () => enrollmentBootstrapIdentity?.uuid,
+        getCurrentConfigSha256: async () => createHash("sha256")
+          .update(JSON.stringify(await buildManagedSingboxConfig(adminState), null, 2))
+          .digest("hex")
+      });
+      try {
+        await authorizer.initialize();
+      } catch (error) {
+        authorizer.close();
+        throw error;
+      }
+      enrollmentDataAuthorization = authorizer;
+      return authorizer;
+    })();
+  }
+  try {
+    return await enrollmentDataAuthorizationInit;
+  } finally {
+    enrollmentDataAuthorizationInit = null;
+  }
+}
+
+async function getEnrollmentRevocationService() {
+  if (!activeRelationService) {
+    throw createHttpError("enrollment_revocation_not_ready", 503, "Relation service is unavailable");
+  }
+  if (!activeRelationCatalog) {
+    try {
+      await getEnrollmentDataAuthorization();
+    } catch (error) {
+      if (!activeRelationCatalog || error?.code === "enrollment_catalog_not_ready") {
+        throw createHttpError("enrollment_revocation_not_ready", 503, "Enrollment relation catalog is not ready");
+      }
+    }
+  }
+  if (!enrollmentRevocationService) {
+    enrollmentRevocationService = createEnrollmentRevocationService({
+      catalog: activeRelationCatalog,
+      relationService: activeRelationService,
+      applyOverlay: applyEnrollmentRevocationOverlay
+    });
+  }
+  return enrollmentRevocationService;
+}
+
+async function applyEnrollmentRevocationOverlay() {
+  const dataAuthorization = await getEnrollmentDataAuthorization();
+  if (!adminState.tunnel?.id || !adminState.tunnel?.lastAppliedAt
+    || !singboxControlDir || !enrollmentBootstrapGatewayAddress) {
+    throw createHttpError("enrollment_revocation_overlay_not_applied", 503, "The revoked data overlay cannot be applied until the enrollment channel is ready");
+  }
+  await writeSingboxConfigFile(adminState);
+  await saveAdminState();
+  const configBytes = await readFile(singboxConfigPath);
+  const expectedConfigSha256 = createHash("sha256").update(configBytes).digest("hex");
+  const bootstrapApplied = await enrollmentBootstrapIssuer.isApplied({
+    tunnel: adminState.tunnel,
+    gatewayPort: enrollmentBootstrapGatewayAddress.port,
+    configSha256: expectedConfigSha256
+  });
+  const dataOverlayApplied = await dataAuthorization.isApplied({ expectedConfigSha256 });
+  if (adminState.tunnel.restartRequired === true || !bootstrapApplied || !dataOverlayApplied) {
+    adminState.tunnel.restartRequired = true;
+    await saveAdminState();
+    const restart = await requestSingboxRestart({ controlDir: singboxControlDir, expectedConfigSha256 });
+    if (restart?.ok !== true || restart.configSha256 !== expectedConfigSha256) {
+      throw createHttpError("enrollment_revocation_overlay_not_applied", 503, "The revoked data overlay restart was not confirmed");
+    }
+    await dataAuthorization.markApplied({ expectedConfigSha256, restartResult: restart });
+    await enrollmentBootstrapIssuer.markApplied({
+      tunnel: adminState.tunnel,
+      gatewayPort: enrollmentBootstrapGatewayAddress.port,
+      expectedConfigSha256,
+      restartResult: restart
+    });
+    markSingboxApplied(adminState, { confirmMarkApplied: true });
+    await saveAdminState();
+  }
+  if (!await dataAuthorization.isApplied({ expectedConfigSha256 })) {
+    throw createHttpError("enrollment_revocation_overlay_not_applied", 503, "The revoked data overlay receipt is incomplete");
+  }
+  return { applied: true, configSha256: expectedConfigSha256 };
+}
+
+async function collectSetupEnrollmentEvidence() {
+  const evidence = {
+    directoryEvidenceAvailable: false,
+    activeRootCount: 0,
+    verifiedRootIds: [],
+    unverifiedRootCount: 0,
+    configDigestAvailable: false,
+    bootstrapApplyReceipt: false,
+    dataOverlayApplyReceipt: false,
+    authorizationEvidenceAvailable: false,
+    authorizedRelationRootIds: []
+  };
+
+  try {
+    const roots = await sharedDirectoryService.inspectActiveRoots();
+    evidence.directoryEvidenceAvailable = true;
+    evidence.activeRootCount = roots.activeRootCount;
+    evidence.verifiedRootIds = roots.verifiedRootIds;
+    evidence.unverifiedRootCount = roots.unverifiedRootCount;
+  } catch {
+    // Unavailable catalog or filesystem state remains unverified.
+  }
+
+  let configBytes = null;
+  try {
+    configBytes = await readFile(singboxConfigPath);
+    evidence.configDigestAvailable = configBytes.length > 0;
+  } catch {
+    // Missing or unreadable config cannot produce an applied receipt.
+  }
+  if (configBytes && evidence.configDigestAvailable && enrollmentBootstrapGatewayAddress) {
+    const configSha256 = createHash("sha256").update(configBytes).digest("hex");
+    try {
+      evidence.bootstrapApplyReceipt = await enrollmentBootstrapIssuer.isApplied({
+        tunnel: adminState.tunnel,
+        gatewayPort: enrollmentBootstrapGatewayAddress.port,
+        configSha256
+      });
+    } catch {
+      evidence.bootstrapApplyReceipt = false;
+    }
+    try {
+      // Keep GET /api/admin/setup read-only. Startup and the mutating reconfigure
+      // path own authorizer initialization; an absent in-memory inspector is
+      // reported as unverified until one of those paths initializes it.
+      if (enrollmentDataAuthorization) {
+        evidence.dataOverlayApplyReceipt = await enrollmentDataAuthorization.isApplied({ expectedConfigSha256: configSha256 });
+      }
+    } catch {
+      evidence.dataOverlayApplyReceipt = false;
+    }
+  }
+
+  try {
+    const grants = await enrollmentService.listConsumedGrants();
+    const verified = new Set(evidence.verifiedRootIds);
+    evidence.authorizationEvidenceAvailable = true;
+    evidence.authorizedRelationRootIds = grants.flatMap(grant => grant.bindings
+      .map(binding => binding.identity.rootId)
+      .filter(rootId => verified.has(rootId)));
+  } catch {
+    // A missing or invalid catalog is not evidence that devices are authorized.
+  }
+  return evidence;
+}
+
+if (resolve(process.argv[1] || "") === resolve(fileURLToPath(import.meta.url))) {
+  main().catch((error) => {
+    const normalized = normalizeHttpError(error, "server_error");
+    console.error(`[sfsc] ${normalized.code}: ${startupErrorDetail(error) || normalized.message}`);
+    process.exitCode = 1;
+  });
+}
 
 // E-2: served with every HTML document. Keep in sync with the client copy in
 // client/src/clientServer.js.
@@ -742,6 +1533,15 @@ function shouldRollbackAdminStateOnError(req, url) {
   if (req.method !== "POST") {
     return false;
   }
+  // Reconfiguration owns its recovery through the private operation journal.
+  // Keep the admin write lock for serialization, but never restore a generic
+  // whole-state snapshot after this coordinator may have applied the config.
+  if (url.pathname === "/api/admin/enrollment/v1/reconfigure") {
+    return false;
+  }
+  if (url.pathname === "/api/admin/enrollment/v1/revocations") {
+    return false;
+  }
   return url.pathname.startsWith("/api/admin/")
     || url.pathname === "/api/claims/create"
     || url.pathname === "/api/claims/redeem"
@@ -749,6 +1549,12 @@ function shouldRollbackAdminStateOnError(req, url) {
 }
 
 function shouldSerializeAdminStateWrite(req, url) {
+  if (req.method === "POST" && [
+    "/api/admin/enrollment/v1/reconfigure",
+    "/api/admin/enrollment/v1/revocations"
+  ].includes(url.pathname)) {
+    return true;
+  }
   return shouldRollbackAdminStateOnError(req, url);
 }
 
@@ -765,6 +1571,55 @@ async function acquireAdminStateWriteLock() {
     released = true;
     releaseNext();
   };
+}
+
+async function withSingboxConfigMutation(task) {
+  const release = await acquireSingboxConfigMutationLock();
+  try {
+    return await task();
+  } finally {
+    release();
+  }
+}
+
+async function withAdminStateWrite(task) {
+  const release = await acquireAdminStateWriteLock();
+  try {
+    return await task();
+  } finally {
+    release();
+  }
+}
+
+async function acquireSingboxConfigMutationLock() {
+  const previous = singboxConfigMutationQueue;
+  let releaseNext;
+  singboxConfigMutationQueue = new Promise(resolve => { releaseNext = resolve; });
+  await previous;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    releaseNext();
+  };
+}
+
+function shouldSerializeSingboxConfigMutation(req, url) {
+  if (url.pathname === "/api/admin/singbox/config" && req.method === "GET") return true;
+  if (req.method !== "POST") return false;
+  return url.pathname === "/api/admin/enrollment/v1/reconfigure"
+    || url.pathname === "/api/admin/enrollment/v1/revocations"
+    || url.pathname === "/api/admin/enrollment/v1/channel-code"
+    || url.pathname === "/api/admin/tunnel/generate"
+    || url.pathname === "/api/admin/tunnel/autofill"
+    || url.pathname === "/api/admin/singbox/write"
+    || url.pathname === "/api/admin/singbox/apply"
+    || url.pathname === "/api/admin/singbox/mark-applied"
+    || url.pathname === "/api/admin/users/create"
+    || url.pathname === "/api/admin/users/enable"
+    || url.pathname === "/api/admin/users/disable"
+    || url.pathname === "/api/admin/users/delete"
+    || url.pathname === "/api/claims/create";
 }
 
 // This summary is returned by the unauthenticated /api/health probe, so it is
@@ -1245,7 +2100,7 @@ async function writeFileAtomic(file, body, encoding) {
 }
 
 async function writeSingboxConfigFile(state) {
-  const config = buildSingboxServerConfig(state);
+  const config = await buildManagedSingboxConfig(state);
   try {
     await writeJsonFileAtomic(singboxConfigPath, config);
   } catch (error) {
@@ -1257,6 +2112,24 @@ async function writeSingboxConfigFile(state) {
   }
   state.tunnel.lastConfigWrittenAt = new Date().toISOString();
   return config;
+}
+
+async function buildManagedSingboxConfig(state) {
+  if (!enrollmentBootstrapGatewayAddress) return buildSingboxServerConfig(state);
+  enrollmentBootstrapIdentity = await enrollmentBootstrapIssuer.current({
+    tunnel: state.tunnel,
+    gatewayPort: enrollmentBootstrapGatewayAddress.port
+  });
+  let config = applyEnrollmentBootstrapOverlay(buildSingboxServerConfig(state), {
+    bootstrapUser: enrollmentBootstrapIdentity,
+    gatewayPort: enrollmentBootstrapGatewayAddress.port
+  });
+  if (enrollmentDataAuthorization) config = await enrollmentDataAuthorization.applyOverlay(config);
+  return config;
+}
+
+function relationIsRunning(value) {
+  return value?.state === "running" || value?.status === "running" || value?.relation?.state === "running";
 }
 
 async function refreshMinioBuckets(state) {

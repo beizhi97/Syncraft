@@ -10,6 +10,7 @@ services:
       SERVER_DATA_ROOT: /app-data
       SINGBOX_CONFIG_PATH: /server-singbox/config.json
       SINGBOX_CONTROL_DIR: /singbox-control
+      SINGBOX_PROBE_HOST: sing-box
       SFSC_TRUST_PROXY: "1"
       SFSC_TRUSTED_PROXY_IPS: 172.16.0.0/12
       SFSC_REQUIRE_ADMIN_TOKEN: "1"
@@ -20,7 +21,7 @@ services:
       VLESS_PUBLIC_HOST: ${VLESS_PUBLIC_HOST:?set VLESS_PUBLIC_HOST before starting the server}
       VLESS_PUBLIC_PORT: ${VLESS_PUBLIC_PORT:-}
       VLESS_PORT: ${VLESS_PORT:-45678}
-      VLESS_LISTEN_PORT: 45678
+      VLESS_LISTEN_PORT: ${VLESS_PORT:-45678}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       S3_CLIENT_ENDPOINT: ${S3_CLIENT_ENDPOINT:-http://minio:9000}
       S3_BUCKET: ${S3_BUCKET:-home-sync}

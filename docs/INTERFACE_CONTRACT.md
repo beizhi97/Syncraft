@@ -14,9 +14,59 @@
 - profile: `version: 1`
 - 服务端状态: `version: 1`
 
+## Enrollment 管理端路由
+
+以下路由均受管理 token 保护。`GET /api/admin/enrollment/v1/directories` 返回登记目录路径和 `pending`/`active` 状态；`POST` 只接受 `{path}`，路径必须指向已存在目录。首次登记以 catalog 的 pending root 为恢复点，之后调用目录 guard 实测并激活；首次选择路径即授权服务端在该目录安装 `.syncraft-root.json`。登记过程不创建或删除用户文件，已有未知 marker、root identity/mount 变化或 revision 冲突必须失败关闭。空 catalog 初始化仅包含 pending root 且必须同时持久化独立 SFTP host key；enrollment signer 不得复用 host key。
+
+`GET /api/admin/enrollment/v1/requests` 列出待审批申请。`POST /api/admin/enrollment/v1/requests/{requestId}/issue` 兼容旧 `{rootId}`，新 `{rootIds:[...]}` 必须是非空、无重复的有效 root ID 数组；两种形式不能混用。服务端要求本次选择的每个 root 都 active，一次签发同一个一次性身份验证码及各 root 独立的 binding；任一 root 无效则整次拒绝。旧单 root 请求仍返回 `binding`；`rootIds` 请求返回 `bindings` 数组，不返回单个 `binding`。同一申请重放时，所选 root 集合可以换序但必须与首次签发的集合完全相同，返回首次持久化的 binding 顺序；改变集合失败关闭。消费后的 identity grant 尚不授予同步目录权限。`GET /api/admin/enrollment/v1/trust` 使用启动时实际绑定的 loopback gateway origin 返回签名公钥 pin。`POST /api/admin/enrollment/v1/channel-code` 只接受 `{}`；端点写入 overlay 配置、按配置文件真实字节计算摘要、经 supervisor 重启并核对回执后才签发包装码。
+
+`POST /api/admin/enrollment/v1/reconfigure` 只接受 `{operationId, publicHost?, publicPort?}`，operation ID 必须是 `op_` 前缀加 16–128 个字母、数字、下划线或连字符。它从当前 tunnel 继承协议、监听端口、transport、安全参数、REALITY 身份及全部目录/设备/关系状态；只允许覆盖公网 host/port。操作先把 tunnel 快照和 sing-box 配置原始字节保存到 0600 journal，再写候选配置、等待 supervisor 对精确 SHA-256 的成功回执，依次登记 data authorization 与 bootstrap 双 overlay 已应用回执；REALITY 模式还须通过当前 bootstrap 身份完成本机 VLESS/REALITY loopback gateway challenge 探测后才签发通道码。内部探针 `GET /api/enrollment/v1/transport-probe?challenge={48位小写十六进制}` 只绑定 `127.0.0.1`；合法请求返回 `ok:true`、`service` 为 `sfsc-enrollment-bootstrap`，并原样回显 challenge，不创建申请或修改授权状态。探针失败沿用现有操作回滚边界且不签发码。`GET /api/admin/enrollment/v1/reconfigure/{operationId}` 使用相同管理 token 查询操作；只有 `complete` 返回持久化包装码。相同 ID 和相同输入可续做或重放终态，相同 ID 的不同输入返回 `enrollment_reconfigure_conflict`。失败时仅在当前 tunnel endpoint fingerprint 和配置摘要仍与本操作候选一致、且恢复配置能逐字节重建原快照时才回滚；否则状态为 `repair-needed` 且不返回通道码。操作日志不得记录包装码。
+
+`POST /api/enrollment/v1/data-authorization` 只在受限 loopback gateway 接收，body 精确为 `{relationId}`，`X-SFSC-Authorization` 必须以已消费设备公钥签署 binding、精确 method/path/body 摘要和 nonce。服务端重新检查 catalog.authority 当前设备、relation 和 active root，再由服务端流程物化 authorized_keys/catalog relation、启动 relation facade、最后合成数据 overlay 并经 supervisor 写入/重启/核对真实配置摘要。成功响应精确为 `{payload,signature}`，signature 是独立服务端 enrollment Ed25519 key 对 canonical payload UTF-8 的签名；payload 的 keyId 必须等于 `/api/admin/enrollment/v1/trust` pin 的 keyId。失败的物化或重启不返回授权 payload。
+
+`GET /api/admin/enrollment/v1/relations` 返回 enrollment relation 的 `relationId`、`deviceId`、`rootId`、目录路径与 `active`/`revoked` 状态，不返回 identity、密钥或 runtime handle。`POST /api/admin/enrollment/v1/revocations` 仅接受精确 `{operationId,target}`；target 只能是 `{kind:"relation",relationId}` 或 `{kind:"device",deviceId}`。relation 撤销只撤销该 relation grant；device 撤销永久撤销该 enrollment device，并固定撤销时该设备全部 relation grants。它们不等同于 `/api/admin/users/disable` 或 `delete`。
+
+撤销操作先持久化 authority revocation 与 operation journal，再逐个停用固定 relation 列表并重建/应用 data overlay。相同 operationId 和相同目标可继续执行；同 ID 绑定其他目标或 authority identity 时返回 409 `enrollment_revocation_operation_conflict`。`GET /api/admin/enrollment/v1/operations/{operationId}` 读取脱敏 journal，不等待 runtime stop/restart；返回 `pending` 或 `cleanup_required` 不表示已完成。只有每个 relation 已由 manager inventory 确认为 stopped/absent，且配置摘要对应的受控 sing-box restart receipt 已应用，POST 才返回 200 `complete`；未收敛返回 503，readiness 与数据授权保持阻断，重试或重启继续撤销，绝不恢复已撤销 authority。
+
+机器路由索引：GET `/api/admin/enrollment/v1/requests`；POST `/api/admin/enrollment/v1/requests/{requestId}/issue`；GET `/api/admin/enrollment/v1/relations`；POST `/api/admin/enrollment/v1/revocations`；GET `/api/admin/enrollment/v1/operations/{operationId}`；GET `/api/admin/enrollment/v1/directories`；POST `/api/admin/enrollment/v1/directories`；GET `/api/admin/enrollment/v1/trust`；POST `/api/admin/enrollment/v1/channel-code`；POST `/api/admin/enrollment/v1/reconfigure`；GET `/api/admin/enrollment/v1/reconfigure/{operationId}`；GET `/api/enrollment/v1/transport-probe`（loopback 内部探针）；POST `/api/enrollment/v1/data-authorization`。
+
+目录登记稳定错误码沿用 guard 证据分类：`directory_root_input_invalid` (400)、`directory_root_missing` (404)、`directory_root_link_denied` (403)、`directory_root_permission_denied` (403)、`directory_root_marker_collision` (409)、`directory_root_marker_mismatch` (409)、`directory_root_marker_missing` (409)、`directory_root_mount_changed` (409)、`directory_root_overlap` (409)、`directory_root_registration_review_required` (409)、`directory_root_space_insufficient` (409)、`directory_root_mount_unavailable` (503)、`directory_root_registration_incomplete` (503)、`directory_root_space_unavailable` (503)、`directory_root_not_ready` (503)、`directory_root_io_failed` (500)、`directory_root_record_invalid` (500) 和 `directory_root_replaced` (409)。失败时不会覆盖未知 marker。
+
+稳定错误状态映射：stable errorCode directory_root_input_invalid with HTTP 400；stable errorCode directory_root_io_failed with HTTP 500；stable errorCode directory_root_link_denied with HTTP 403；stable errorCode directory_root_marker_collision with HTTP 409；stable errorCode directory_root_marker_mismatch with HTTP 409；stable errorCode directory_root_marker_missing with HTTP 409；stable errorCode directory_root_missing with HTTP 404；stable errorCode directory_root_mount_changed with HTTP 409；stable errorCode directory_root_mount_unavailable with HTTP 503；stable errorCode directory_root_not_ready with HTTP 503；stable errorCode directory_root_overlap with HTTP 409；stable errorCode directory_root_permission_denied with HTTP 403；stable errorCode directory_root_record_invalid with HTTP 500；stable errorCode directory_root_registration_incomplete with HTTP 503；stable errorCode directory_root_registration_review_required with HTTP 409；stable errorCode directory_root_replaced with HTTP 409；stable errorCode directory_root_space_insufficient with HTTP 409；stable errorCode directory_root_space_unavailable with HTTP 503。
+
+### 同步恢复稳定错误码
+
+恢复 API 失败时返回 `{ok:false,error,errorCode,message}`；`error` 和 `errorCode` 使用同一稳定码，HTTP 状态如下：
+
+| `errorCode` | HTTP | 含义 |
+| --- | ---: | --- |
+| `sync_recovery_preflight_failed` | 500 | 双向运行的恢复预检或运行结束 journal 持久化失败 |
+| `sync_recovery_restore_hash_mismatch` | 409 | 恢复内容哈希与保存的恢复版本不一致，目标内容保留供检查 |
+| `sync_recovery_restore_preview_expired` | 410 | 还原预览已过期 |
+| `sync_recovery_restore_preview_required` | 409 | 缺少当前关系绑定的还原预览 |
+| `sync_recovery_restore_staging_invalid` | 500 | 受保护暂存副本缺失或内容不一致 |
+| `sync_recovery_restore_target_exists` | 409 | 还原目标已存在，不覆盖目标 |
+| `sync_recovery_restore_target_invalid` | 400 | 还原目标路径无效或越出同步根目录 |
+| `sync_recovery_review_required` | 409 | 恢复区、关系基准或预检状态需要人工复核 |
+| `sync_recovery_trusted_relation_required` | 409 | 任务缺少可信、稳定的同步关系 |
+| `sync_recovery_version_not_found` | 404 | 请求的恢复版本或文件不存在 |
+| `first_sync_conflict_command_failed` | 502 | 冲突保护扫描命令失败 |
+| `first_sync_conflict_preview_expired` | 410 | 首次冲突预览已过期 |
+| `first_sync_conflict_preview_required` | 409 | 保存冲突副本需要当前关系的有效预览 |
+| `first_sync_conflict_review_required` | 409 | 关系、listing、journal 或目标状态需要人工复核 |
+| `first_sync_conflict_save_required` | 409 | 首次双向初始化前必须保存冲突双方副本 |
+| `first_sync_conflict_scan_failed` | 502 | 本地或远端冲突扫描结果无法验证 |
+| `first_sync_conflict_set_changed` | 409 | 预览后冲突集合或源内容发生变化 |
+| `first_sync_conflict_source_changed` | 409 | 暂存期间冲突源内容发生变化 |
+| `first_sync_conflict_stage_invalid` | 409 | 受保护暂存内容缺失或已变化 |
+| `first_sync_conflict_staging_invalid` | 500 | 受保护暂存目录结构无效 |
+| `first_sync_conflict_target_exists` | 409 | 冲突副本目标已被未知文件占用 |
+| `first_sync_conflict_target_invalid` | 409 | 冲突副本写入后的文件校验失败 |
+| `first_sync_conflict_trusted_relation_required` | 409 | 首次冲突保护缺少可信的目录关系 |
+
 客户端必须拒绝未知 SyncKey 版本。服务端在新增不兼容协议时，应新增版本而不是改变 v1 字段语义。`ADMIN_STATE_VERSION` 和 `PROFILE_VERSION` 分别是所有服务端状态、服务端签发 profile、离线 profile 与 legacy profile 生产者的单一版本源；读取到高于当前实现的 admin state 版本时必须拒绝启动，不得静默降级。
 
-入口请求必须先通过 HTTP 层媒体类型防护和共享请求 schema 归一化，再进入业务实现。服务端和客户端本地 `POST` 写入口带请求体时必须使用精确 `Content-Type: application/json`（允许 `; charset=utf-8` 等参数），否则返回 `415 unsupported_media_type`；该媒体类型防护优先于管理 token 鉴权和未匹配路由兜底，因此受保护 POST 或不存在的 POST 路径只要携带非 JSON body，也必须先返回 `415 unsupported_media_type`。只有既无正数 `Content-Length`、也无 `Transfer-Encoding` 的真正空 body 才可省略 `Content-Type`；零字节 chunked 请求仍必须声明 JSON。共享 body parser 必须累计原始 Buffer、在拼接前执行 2 MiB 字节限制，并在完整收包后统一 UTF-8 解码，不能逐 chunk 字符串拼接。客户端本地写入口还必须先拒绝 cross-site、非 `http:` 或非同一 loopback host/port 的 Origin。当前机器可读入口（32 个）位于 `src/core/protocolSchemas.js`，通过 `parseProtocolRequest(PROTOCOL_REQUESTS.*)` 约束关键写接口的请求信封：服务端 `/api/admin/tunnel/generate`、`/api/admin/tunnel/autofill`、`/api/admin/singbox/write`、`/api/admin/singbox/apply`、`/api/admin/singbox/mark-applied`、`/api/admin/storage/save`、`/api/admin/storage/buckets/refresh`、`/api/admin/storage/buckets/create`、`/api/admin/storage/buckets/enable`、`/api/admin/storage/buckets/disable`、`/api/admin/storage/buckets/clear`、`/api/admin/storage/buckets/delete-empty`、`/api/admin/users/create`、`/api/admin/users/enable`、`/api/admin/users/disable`、`/api/admin/users/delete`、`/api/claims/create`、`/api/claims/redeem`、`/api/devices/heartbeat`、`/api/profile/encode`、`/api/vless/parse`、`/api/singbox/client-config`、`/api/jobs/preview`，以及客户端本地 `/api/binaries/check`、`/api/client/shutdown`、`/api/profile/import`、`/api/jobs/save`、`/api/singbox/start`、`/api/singbox/stop`、`/api/sync/preview`、`/api/sync/run`、`/api/sync/stop`。该 schema 只负责入口字段白名单、基础类型和稳定错误码，不替代 profile、rclone、heartbeat HMAC、admin state 等深层合同；新增或修改这些入口字段时必须同时更新 `src/core/protocolSchemas.js`、本文档和 `tests/core.test.js` 的 schema 回归。入口 schema 的嵌套对象字段也必须做字段级白名单：`schedule` 只允许 `mode`、`intervalMinutes`、`time`；`reality` 只允许 `serverName`、`fingerprint`、`publicKey`、`privateKey`、`shortId`；`defaults` 只允许 `localProxyPort`、`transfers`、`streams`、`checkers`、`chunkSize`、`retries`、`lowLevelRetries`、`bandwidthLimit` 和嵌套 `schedule`；客户端 job 的 `safety` 只允许 `version`、`recoveryRetentionDays`、`deleteLimit.maxFiles`、`deleteLimit.maxPercent`、`bidirectional.initialized`、`bidirectional.initialMode`；`/api/profile/encode` 的 `heartbeat` 只允许 `scheme`、`secret`。嵌套白名单中的未知字段必须丢弃。`bandwidthLimit` 允许 rclone `--bwlimit` 兼容字符串或 UI 对象形态（`enabled`、`mode`、`value`、`unit`、`startTime`、`endTime`），数组必须返回 `400 validation_failed`。schema 白名单里的标量槽位（如 `transfers`、`publicPort`、`expiresAt`）不得接受对象或数组，走私嵌套结构必须返回 `400 validation_failed`。唯一的例外是 `/api/devices/heartbeat`：其 `diagnostics`、`storage`、`sync`、`auth` 与 legacy sync 字段必须按到达形态透传，因为心跳 HMAC 签名覆盖整个请求体，schema 层改写会破坏合法客户端的签名；这些字段的深层校验由验签后的 `normalizeDeviceSync`、`normalizeRuntimeDiagnostics` 等归一化承担。
+入口请求必须先通过 HTTP 层媒体类型防护和共享请求 schema 归一化，再进入业务实现。服务端和客户端本地 `POST` 写入口带请求体时必须使用精确 `Content-Type: application/json`（允许 `; charset=utf-8` 等参数），否则返回 `415 unsupported_media_type`；该媒体类型防护优先于管理 token 鉴权和未匹配路由兜底，因此受保护 POST 或不存在的 POST 路径只要携带非 JSON body，也必须先返回 `415 unsupported_media_type`。只有既无正数 `Content-Length`、也无 `Transfer-Encoding` 的真正空 body 才可省略 `Content-Type`；零字节 chunked 请求仍必须声明 JSON。共享 body parser 必须累计原始 Buffer、在拼接前执行 2 MiB 字节限制，并在完整收包后统一 UTF-8 解码，不能逐 chunk 字符串拼接。客户端本地写入口还必须先拒绝 cross-site、非 `http:` 或非同一 loopback host/port 的 Origin。当前机器可读入口（52 个）位于 `src/core/protocolSchemas.js`，通过 `parseProtocolRequest(PROTOCOL_REQUESTS.*)` 约束关键写接口的请求信封：服务端 `/api/admin/tunnel/generate`、`/api/admin/tunnel/autofill`、`/api/admin/singbox/write`、`/api/admin/singbox/apply`、`/api/admin/singbox/mark-applied`、`/api/admin/enrollment/v1/directories`、`/api/admin/enrollment/v1/requests/{requestId}/issue`、`/api/admin/enrollment/v1/channel-code`、`/api/admin/enrollment/v1/reconfigure`、`/api/admin/enrollment/v1/revocations`、`/api/admin/storage/save`、`/api/admin/storage/buckets/refresh`、`/api/admin/storage/buckets/create`、`/api/admin/storage/buckets/enable`、`/api/admin/storage/buckets/disable`、`/api/admin/storage/buckets/clear`、`/api/admin/storage/buckets/delete-empty`、`/api/admin/users/create`、`/api/admin/users/enable`、`/api/admin/users/disable`、`/api/admin/users/delete`、`/api/admin/sync-spaces/create`、`/api/claims/create`、`/api/claims/redeem`、`/api/devices/heartbeat`、`/api/profile/encode`、`/api/vless/parse`、`/api/singbox/client-config`、`/api/jobs/preview`，以及客户端本地 `/api/binaries/check`、`/api/client/shutdown`、`/api/enrollment/channel/import`、`/api/enrollment/request`、`/api/enrollment/consume`、`/api/enrollment/data-authorizations/refresh`、`/api/enrollment/connection/repair`、`/api/profile/import`、`/api/jobs/save`、`/api/singbox/start`、`/api/singbox/stop`、`/api/sync/preview`、`/api/sync/safety-plan`、`/api/sync/bisync/conflicts/preview`、`/api/sync/bisync/conflicts/save`、`/api/sync/bisync/conflicts/operations`、`/api/sync/bisync/conflicts/resume`、`/api/sync/bisync/initialize`、`/api/jobs/{jobId}/recovery/restore-preview`、`/api/jobs/{jobId}/recovery/restore`、`/api/jobs/{jobId}/recovery/restore-cancel`、`/api/sync/run`、`/api/sync/stop`。该 schema 只负责入口字段白名单、基础类型和稳定错误码，不替代 profile、rclone、heartbeat HMAC、admin state 等深层合同；新增或修改这些入口字段时必须同时更新 `src/core/protocolSchemas.js`、本文档和 `tests/core.test.js` 的 schema 回归。入口 schema 的嵌套对象字段也必须做字段级白名单：`schedule` 只允许 `mode`、`intervalMinutes`、`time`；`reality` 只允许 `serverName`、`fingerprint`、`publicKey`、`privateKey`、`shortId`；`defaults` 只允许 `localProxyPort`、`transfers`、`streams`、`checkers`、`chunkSize`、`retries`、`lowLevelRetries`、`bandwidthLimit` 和嵌套 `schedule`；客户端 job 的 `safety` 只允许 `version`、`recoveryRetentionDays`、`deleteLimit.maxFiles`、`deleteLimit.maxPercent`、`bidirectional.initialized`、`bidirectional.initialMode`；`/api/profile/encode` 的 `heartbeat` 只允许 `scheme`、`secret`。嵌套白名单中的未知字段必须丢弃。`bandwidthLimit` 允许 rclone `--bwlimit` 兼容字符串或 UI 对象形态（`enabled`、`mode`、`value`、`unit`、`startTime`、`endTime`），数组必须返回 `400 validation_failed`。schema 白名单里的标量槽位（如 `transfers`、`publicPort`、`expiresAt`）不得接受对象或数组，走私嵌套结构必须返回 `400 validation_failed`。唯一的例外是 `/api/devices/heartbeat`：其 `diagnostics`、`storage`、`sync`、`auth` 与 legacy sync 字段必须按到达形态透传，因为心跳 HMAC 签名覆盖整个请求体，schema 层改写会破坏合法客户端的签名；这些字段的深层校验由验签后的 `normalizeDeviceSync`、`normalizeRuntimeDiagnostics` 等归一化承担。
 
 ## 2. SyncKey
 
@@ -180,7 +230,35 @@ SyncKey payload：
 | `bucket_not_found` | 404 | 同步仓库不存在 |
 | `client_error` | 400 | 客户端本地 API 通用兜底错误 |
 | `client_port_in_use` | 409 | 客户端本地 API 端口被非 SFSC 进程占用 |
+| `data_authorization_invalid` | 400 | 签名目录授权格式或签名无效 |
+| `data_authorization_mismatch` | 403 | 签名目录授权与当前设备、关系或通道不匹配 |
+| `data_authorization_trust_failed` | 401 | 目录授权签名者不匹配已 pin 的服务端密钥 |
+| `connection_repair_busy` | 409 | 同步或另一项连接修复正在进行 |
+| `connection_repair_cleanup_failed` | 500 | 本次探测未确认清理，不能宣告修复完成 |
+| `connection_repair_invalid` | 400 | 连接修复请求无效或 operation ID 输入冲突 |
+| `connection_repair_list_failed` | 502 | 无法列出待修复的远端目标 |
+| `connection_repair_probe_conflict` | 409 | 无法证明探测路径属于本次操作，未做更改 |
+| `connection_repair_read_failed` | 502 | 无法读取连接修复目标 |
+| `connection_repair_write_failed` | 502 | 无法写入连接修复目标 |
 | `danger_confirmation_required` | 400 | 危险操作缺少显式确认 |
+| `directory_root_input_invalid` | 400 | 目录登记路径或操作输入无效 |
+| `directory_root_io_failed` | 500 | 目录标记或文件操作失败 |
+| `directory_root_link_denied` | 403 | 目录路径包含被拒绝的符号链接 |
+| `directory_root_marker_collision` | 409 | 目录中已有未知标记，拒绝覆盖 |
+| `directory_root_marker_mismatch` | 409 | 目录标记与 catalog 记录不匹配 |
+| `directory_root_marker_missing` | 409 | 已登记目录的保护标记缺失 |
+| `directory_root_missing` | 404 | 选择的目录不存在 |
+| `directory_root_mount_changed` | 409 | 目录挂载身份已变化 |
+| `directory_root_mount_unavailable` | 503 | 无法确认目录挂载状态 |
+| `directory_root_not_ready` | 503 | 目录当前不可用于受保护操作 |
+| `directory_root_overlap` | 409 | 新目录与已登记目录重叠 |
+| `directory_root_permission_denied` | 403 | 服务进程无权访问目录 |
+| `directory_root_record_invalid` | 500 | 持久化目录记录无效 |
+| `directory_root_registration_incomplete` | 503 | 目录登记未完成，需要恢复检查 |
+| `directory_root_registration_review_required` | 409 | 目录或 host key 状态需要人工检查 |
+| `directory_root_replaced` | 409 | 受保护目录已被替换 |
+| `directory_root_space_insufficient` | 409 | 目录可用空间不足 |
+| `directory_root_space_unavailable` | 503 | 无法读取目录可用空间 |
 | `device_disabled` | 409 | 设备已停用 |
 | `heartbeat_auth_invalid` | 401 | 设备心跳签名无效、过期或与请求体不匹配 |
 | `heartbeat_auth_required` | 401 | 新 profile 设备心跳缺少 HMAC 认证字段 |
@@ -196,6 +274,59 @@ SyncKey payload：
 | `claim_redeem_rate_limited` | 429 | 同一来源和同一 SyncKey 摘要在窗口内兑换失败次数过多 |
 | `claim_redeem_failed` | 502 | 客户端兑换 SyncKey 时网络请求失败，或远端服务返回非 2xx 且没有合同登记的 redeem 错误码；若已收到远端 HTTP 响应，客户端保留远端 status，无 HTTP 响应时使用 502 |
 | `device_not_found` | 404 | 心跳设备未登记 |
+| `enrollment_auth_invalid` | 401 | 设备对指定 enrollment binding 的请求签名无效 |
+| `enrollment_auth_capacity` | 429 | 设备授权请求 nonce 容量已满，服务端拒绝继续消费请求 |
+| `enrollment_auth_expired` | 401 | 设备授权请求签名时间与服务端当前时间相差超过默认五分钟窗口；该错误本身不能判断哪一端时钟不准 |
+| `enrollment_auth_replayed` | 409 | 设备授权请求 nonce 已使用 |
+| `enrollment_binding_mismatch` | 403 | enrollment grant、binding、设备或目录授权之间的绑定不一致 |
+| `enrollment_catalog_not_ready` | 503 | 服务端 enrollment 目录或签发配置尚未就绪 |
+| `enrollment_channel_mismatch` | 409 | 引导通道的服务器、修订或申请绑定不一致 |
+| `enrollment_channel_invalid` | 409 | 客户端尚未导入有效的签名通道配置 |
+| `enrollment_channel_stale` | 409 | 请求的引导通道 revision 已不是当前 revision |
+| `enrollment_channel_not_ready` | 503 | 服务端尚无受限首次接入通道配置，不能签发通道码 |
+| `enrollment_channel_expired` | 410 | 签名通道或引导窗口已过期 |
+| `enrollment_code_expired` | 410 | 一次性身份验证码已过期 |
+| `enrollment_code_invalid` | 400 | 一次性身份验证码格式无效或不匹配 |
+| `enrollment_code_used` | 409 | 一次性身份验证码已消费 |
+| `enrollment_device_revoked` | 403 | enrollment 设备已撤销 |
+| `enrollment_data_authorization_denied` | 403 | 当前设备没有该关系的签名数据授权 |
+| `enrollment_data_channel_not_ready` | 503 | 数据通道尚未配置或未由 supervisor 确认应用 |
+| `enrollment_data_relation_not_ready` | 503 | 受保护的目录关系服务尚未运行 |
+| `enrollment_data_relation_start_failed` | 503 | 无法启动受保护的目录关系服务 |
+| `enrollment_endpoint_invalid` | 400 | 客户端引导端点或路径无效 |
+| `enrollment_identity_conflict` | 409 | 已登记设备身份与本次申请冲突 |
+| `enrollment_identity_missing` | 409 | 本地持久化设备身份缺失或损坏 |
+| `enrollment_proxy_unavailable` | 503 | 首次接入的本地 sing-box SOCKS 代理不可用 |
+| `enrollment_public_key_mismatch` | 403 | 授权签名的公钥指纹与已登记设备不匹配 |
+| `enrollment_relation_conflict` | 409 | 关系身份或稳定目录绑定冲突 |
+| `enrollment_relation_denied` | 403 | 设备没有该同步关系的有效授权 |
+| `enrollment_relation_revoked` | 409 | 同步关系已撤销 |
+| `enrollment_request_exists` | 409 | 当前设备已有重复或冲突的身份申请 |
+| `enrollment_request_invalid` | 400 | 身份申请或 enrollment 对象格式无效 |
+| `enrollment_request_mismatch` | 403 | 一次性身份验证码不属于当前申请、设备、密钥或通道 |
+| `enrollment_request_not_found` | 404 | 服务端找不到对应的身份申请 |
+| `enrollment_reconfigure_busy` | 409 | 隧道或数据 overlay 变更已在进行 |
+| `enrollment_reconfigure_conflict` | 409 | operation ID 已关联不同输入 |
+| `enrollment_reconfigure_invalid` | 400 | 重配置请求或 operation ID 无效 |
+| `enrollment_reconfigure_needs_repair` | 503 | 无法证明安全回滚或当前配置归属，需要管理员修复 |
+| `enrollment_reconfigure_not_found` | 404 | 找不到指定的重配置操作 |
+| `enrollment_reconfigure_state_invalid` | 500 | 持久化重配置操作记录无效 |
+| `enrollment_reconfigure_write_failed` | 500 | 无法持久化重配置操作记录 |
+| `enrollment_revocation_identity_conflict` | 409 | 撤销操作期间关系 authority identity 与持久化快照不一致 |
+| `enrollment_revocation_incomplete` | 503 | 撤销操作尚未完成，必须查询或继续同一操作 |
+| `enrollment_revocation_invalid` | 400 | 撤销 operationId 或 target 格式无效 |
+| `enrollment_revocation_operation_conflict` | 409 | 相同 operationId 已绑定到其他撤销目标或 identity |
+| `enrollment_revocation_operation_not_found` | 404 | 找不到撤销操作 |
+| `enrollment_revocation_not_ready` | 503 | relation service 或 enrollment catalog 尚未就绪，未开始撤销 |
+| `enrollment_revocation_overlay_not_applied` | 503 | 撤销后的数据 overlay 未收到受控应用确认 |
+| `enrollment_revocation_recovery_pending` | 503 | 尚有撤销恢复未收敛，新的数据授权暂时拒绝 |
+| `enrollment_response_invalid` | 502 | 客户端收到的首次接入响应不是有效 JSON 合同 |
+| `enrollment_signer_invalid` | 500 | 服务端 enrollment 签名器无法完成可信签发 |
+| `enrollment_state_invalid` | 500 | 持久化 enrollment 状态无效或不完整 |
+| `enrollment_state_conflict` | 409 | enrollment 状态版本已变化或与当前写入冲突 |
+| `enrollment_transport_failed` | 502 | 经专用隧道发送首次接入请求失败 |
+| `enrollment_trust_failed` | 401 | 通道 pin 不匹配、服务端公钥漂移或 receipt 签名验证失败 |
+| `enrollment_trust_verifier_required` | 500 | 客户端未提供独立复制的服务端密钥 pin，无法验证通道签名 |
 | `missing_rclone_binary` | 503 | 客户端缺少 rclone 组件 |
 | `missing_singbox_binary` | 503 | 客户端缺少 sing-box 组件 |
 | `not_found` | 404 | 本地 API 或资源不存在 |
@@ -209,6 +340,10 @@ SyncKey payload：
 | `secret_vault_missing` | 409 | 客户端本地 secret vault 缺少 profile/job 引用的密钥 |
 | `secret_vault_unprotected` | 503 | Windows 上无法为本地 secret vault 应用仅限当前用户的 ACL，运行时拒绝把密钥明文写入磁盘 |
 | `server_error` | 500 | 服务端通用兜底错误 |
+| `sftp_access_marker_conflict` | 409 | 本机或远端访问标记与授权根目录不符，拒绝覆盖 |
+| `sftp_access_marker_invalid` | 400 | 访问标记输入无效或缺少已验证的根目录 ID |
+| `sftp_access_marker_missing` | 400 | 已初始化关系的本机或远端访问标记缺失，拒绝重建或继续 |
+| `sftp_access_marker_write_failed` | 500 | 无法安全创建本机或远端访问标记 |
 | `server_singbox_config_write_failed` | 500 | 服务端 sing-box 配置文件写入失败 |
 | `server_state_corrupt` | 500 | 服务端 `sfsc-state.json` 损坏，启动时不得静默覆盖 |
 | `server_state_locked` | 409 | 服务端数据目录已有写入者持有 `sfsc-state.lock` |
@@ -219,6 +354,7 @@ SyncKey payload：
 | `singbox_restart_unavailable` | 503 | 服务端未配置或无法访问 sing-box supervisor 控制目录 |
 | `storage_request_failed` | 502 | MinIO/S3 请求失败，包括 DNS、连接拒绝、超时或 S3 非 2xx 响应；若接口明确声明支持部分成功（例如 bucket refresh/create 的管理状态仍成功持久化），可在 HTTP 2xx 响应体内以 `ok:false` / `errorCode:"storage_request_failed"` 表示远端存储步骤失败 |
 | `sync_already_running` | 409 | 已有其他同步任务正在运行，当前请求的 job 不能复用该运行 |
+| `sync_relation_migration_required` | 409 | bidirectional 同步关系的身份、实际根、授权或 legacy bisync 状态无法安全复用；客户端必须在评审或迁移完成前阻断保存、预览和运行 |
 | `sync_id_unavailable` | 409 | 同步空间名称已被占用 |
 | `sync_space_access_denied` | 403 | 设备在该同步空间没有有效成员资格，或空间已停用 |
 | `sync_space_membership_exists` | 409 | 设备已经是该同步空间的成员 |
@@ -446,13 +582,11 @@ GET /api/admin/devices/{id}/vless-uri
 GET /api/admin/setup
 ```
 
-该接口受管理 token 保护，返回首次运行向导的四步就绪度。响应顶层必须且只包含 `complete`、`currentStepId` 和 `steps`；`steps[]` 的顺序必须固定为 `storage` → `tunnel` → `device` → `synckey`，即真实依赖顺序，控制台导航也必须按同一顺序排列。每一步必须包含 `id`、`title`、`hint`、`ready`、`blocked`、`blockedBy`、`blockedReason` 和 `evidence`。
+该接口受管理 token 保护，返回普通目录首用的三步就绪度。响应顶层必须且只包含 `complete`、`currentStepId` 和 `steps`；`steps[]` 的顺序固定为 `directory` → `repair` → `pairing`。每一步必须包含 `id`、`title`、`hint`、`ready`、`blocked`、`blockedBy`、`blockedReason` 和 `evidence`。
 
-就绪状态必须从证据推导，不得从「默认值为真」推导。存储就绪要求实时探针可用、endpoint 可达、数据目录可写，且 root 口令不再等于出厂占位口令（唯一来源是 `DEFAULT_STORAGE_SECRET_PLACEHOLDER`）；隧道就绪要求 `lastConfigWrittenAt` 与 `lastAppliedAt` 均已写入、`restartRequired` 为假、sing-box 进程存活且端口在监听。判定不得使用 `tunnel.protocol` 是否有值（它有硬编码默认值 `vless-tcp-none`）、不得使用 `storage.buckets` 非空（空列表时会被补一个 `source: "configured"` 的回落 bucket）、不得使用 `/api/health` 的字面 `ok: true`。探针整体不可用时所有依赖探针的步骤必须判为未就绪，不得因「没测到问题」而放行。
+目录步骤要求 catalog 中至少有一个 active root，且服务端重新校验其 marker、挂载身份和读写权限。修复步骤要求当前配置写入和应用时间存在、`restartRequired` 为假、sing-box 进程与端口通过实时探针，并且 bootstrap 与 data overlay 的 supervisor 回执都匹配配置文件当前 SHA-256。配对步骤要求至少一个未撤销的已消费设备 grant 绑定到当前已实测可用目录。MinIO / S3 配置、桶数量和存储探针不构成普通目录首用的前置条件，相关旧入口继续作为兼容路径提供。缺失目录、应用回执或授权证据必须保持未就绪；不得以默认值、目录记录数量或 `/api/health` 的字面 `ok: true` 代替证据。此三步只表示服务端目录、连接应用和配对证据齐备，不等同于客户端首次双向文件同步已通过。
 
-`ready` 与 `blocked` 是两件事：`blocked` 表示前置步骤未完成，`blockedBy` 指向第一个未就绪的步骤 id，使任一时刻只有一步被呈现为可操作，管理员不会看到四个红灯同时亮而无从下手。注册设备会把隧道重新弄脏（新设备意味着 sing-box 配置多一个 VLESS 用户，`createManagedUser` 因此置 `restartRequired = true`），所以四步不是纯线性流程，向导必须能表达「回到隧道再应用一次」。
-
-该接口刻意独立于 `GET /api/admin/state`：就绪度需要带超时的实时网络探针，而管理摘要是被控制台高频轮询的同步纯函数，合并会把探针延迟摊到每次状态刷新上。响应不得包含存储 secret、管理 token 或出厂占位口令原文。控制台概览的服务、隧道、存储三盏灯必须读该接口的证据；就绪度未取到时必须显示为未验证，不得显示为正常。`complete` 为真时首次配置面板与导航入口收起，但判定必须是显式等于 `true`，不得用真值判断，否则就绪度取不到（`null`）时入口会连同问题一起消失。
+`ready` 与 `blocked` 是两件事：`blocked` 表示前置步骤未完成，`blockedBy` 指向第一个未就绪的步骤 id。该接口刻意独立于 `GET /api/admin/state`：就绪度需要带超时的实时探针与 catalog/receipt 读取，而管理摘要是被控制台高频轮询的同步纯函数。响应不得包含存储 secret、管理 token 或出厂占位口令原文。就绪度未取到时界面必须显示为未验证，不得显示为正常。`complete` 为真时首次配置面板与导航入口收起，但判定必须是显式等于 `true`。
 
 ### 危险操作确认
 
@@ -567,6 +701,8 @@ POST /api/admin/tunnel/autofill
 该 2xx 响应是 admin tunnel autofill response contract：顶层必须且只包含 `tunnel` 和 `state`。`tunnel` 必须与 `state.tunnel` 完全一致，并遵守 admin tunnel summary contract；`state` 必须遵守 admin state summary contract。响应不得返回未遮罩的 REALITY private key、存储密钥、SyncKey、导入 URI 或 heartbeat secret；VLESS URI 只允许作为 `sampleUri` 或用户摘要中的展示字段出现。
 
 `POST /api/admin/tunnel/autofill` 与 `POST /api/admin/tunnel/generate` 的请求可显式带 `transportPath`；该字段只在 `vless-ws-tls` 时生效，必须是安全绝对 URL 路径。接口只有在服务端成功持久化 `sfsc-state.json` 后才算生效。若状态持久化失败，接口必须返回 `500 server_state_write_failed`，并回滚本次对 tunnel 协议、host/port、REALITY 摘要、`tunnel.restartRequired` 和 `tunnel.lastConfigWrittenAt` 的内存修改；`vless-ws-tls` 还必须同时回滚传输路径。控制台不得展示未持久化的“自动补全 tunnel”状态。
+
+全新部署的普通首用界面只收集管理员实际掌握的外部访问地址和端口；首次连接采用 `vless-reality-tcp` 并复用本接口的 REALITY key 生成器。`www.microsoft.com` 与 `chrome` 是仓库内置配置默认值，不是已验证的公网可达性或伪装目标验收结论。首次设置成功还必须经过 `/api/admin/singbox/apply` 的 supervisor 精确摘要回执；随后才可进入持久化 enrollment reconfigure 流程签发通道码。失败时界面不得声称连接已配置或已签发通道码。
 
 ### 存储配置和仓库管理
 
@@ -989,7 +1125,7 @@ Content-Type: application/json
 
 客户端本地所有 `POST` 写入口只面向同一台机器上的 SFSC UI、启动器、调度器、smoke 和本地自动化。进入共享请求 schema 前，运行时必须拒绝浏览器跨站写入：`Sec-Fetch-Site: cross-site` 或 `Origin` 不是同一 loopback host/port 时返回 `403 local_write_forbidden`。带请求体的 `POST` 必须使用 `Content-Type: application/json`，否则返回 `415 unsupported_media_type`；空 body 的控制入口可继续兼容无 `Content-Type` 的本地 shutdown/stop 调用。该保护不替代 loopback 监听边界，二者都必须保留。
 
-客户端本地写接口进入运行逻辑前也必须调用共享请求 schema：`/api/profile/import` 只接收导入码、claim/token 别名或 legacy VLESS `uri`；legacy VLESS 兼容输入还可携带 `clientName` 和 `options.localProxyPort`，其中 `options` 必须做字段级白名单，未知字段必须丢弃，`options.localProxyPort` 必须是 1..65535 的整数；`/api/jobs/save`、`/api/sync/preview`、`/api/sync/run` 只接收顶层 `job` 对象和允许的确认字段。字段类型错误返回 `400 validation_failed`，未填写导入内容返回 `400 import_code_required`，不得把未知字段继续传入深层同步执行逻辑。
+客户端本地写接口进入运行逻辑前也必须调用共享请求 schema：`/api/profile/import` 只接收导入码、claim/token 别名或 legacy VLESS `uri`；legacy VLESS 兼容输入还可携带 `clientName` 和 `options.localProxyPort`，其中 `options` 必须做字段级白名单，未知字段必须丢弃，`options.localProxyPort` 必须是 1..65535 的整数；`/api/jobs/save`、`/api/sync/preview`、`/api/sync/safety-plan`、`/api/sync/bisync/conflicts/preview`、`/api/sync/bisync/conflicts/save`、`/api/sync/bisync/conflicts/operations`、`/api/sync/bisync/conflicts/resume`、`/api/sync/bisync/initialize`、`/api/jobs/{jobId}/recovery/restore-preview`、`/api/jobs/{jobId}/recovery/restore`、`/api/jobs/{jobId}/recovery/restore-cancel`、`/api/sync/run` 只接收顶层 `job` 对象和允许的确认字段。字段类型错误返回 `400 validation_failed`，未填写导入内容返回 `400 import_code_required`，不得把未知字段继续传入深层同步执行逻辑。
 
 启动阶段错误约定：
 
@@ -1002,6 +1138,12 @@ Content-Type: application/json
 - `GET /api/health`
 - `GET /api/client/status`
 - `POST /api/client/shutdown`
+- `GET /api/enrollment/session`
+- `POST /api/enrollment/channel/import`
+- `POST /api/enrollment/request`
+- `POST /api/enrollment/consume`
+- `POST /api/enrollment/connection/repair`
+- `GET /api/enrollment/connection/repair/{operationId}`
 - `POST /api/binaries/check`
 - `POST /api/profile/import`
 - `GET /api/profile`
@@ -1010,13 +1152,52 @@ Content-Type: application/json
 - `POST /api/singbox/start`
 - `POST /api/singbox/stop`
 - `POST /api/sync/preview`
+- `POST /api/sync/bisync/conflicts/preview`
+- `POST /api/sync/bisync/conflicts/save`
+- `POST /api/sync/bisync/conflicts/operations`
+- `POST /api/sync/bisync/conflicts/resume`
 - `POST /api/sync/safety-plan`
 - `POST /api/sync/bisync/initialize`
 - `POST /api/sync/run`
 - `POST /api/sync/stop`
 - `GET /api/sync/history`
+
+#### 首次双向冲突保护与重启续做
+
+四个本地路由均使用严格的共享请求 schema，并与同步、恢复及连接修复共用客户端数据操作 admission：
+
+| 路由 | 请求 | 成功响应 |
+| --- | --- | --- |
+| `POST /api/sync/bisync/conflicts/preview` | `{job}` | `{preview:{previewId,operationId,relationId,baselineId,rootId,createdAt,conflicts}}` |
+| `POST /api/sync/bisync/conflicts/save` | `{job,previewId}` | `{saved:{operationId,status,conflicts}}` |
+| `POST /api/sync/bisync/conflicts/operations` | `{job}` | `{operations:[{operationId,status,createdAt,savedAt,conflicts}]}` |
+| `POST /api/sync/bisync/conflicts/resume` | `{job,operationId}` | `{saved:{operationId,status,createdAt,savedAt,conflicts}}` |
+
+`operations` 只列出当前未初始化可信 relation 的 journal；operation 和暂存区按 relation/baseline/root 派生路径。客户端重启后，`previewId` 的内存映射可能已失效，但 `operations` 仍从本地受保护 journal 读取精确 operation。状态为 `saving` 时调用 `resume` 续做；状态为 `saved` 时复用其 `operationId` 调用初始化。已初始化 relation 返回空列表。journal 只在旧全局 manifest 的 type、version、owner 和 relation/baseline/root 都精确匹配时迁移；未知或其他 relation 的旧文件不会被覆盖。
+
+首次初始化只接受 `{job,safetyPlanId,confirmBidirectionalInitialization:true,conflictOperationId}`。初始化前需再次扫描并确认冲突集合及双方原始内容未变化；不同步冲突、journal 归属错误或未知目标都失败关闭。冲突与恢复模块收到的 `relation.rclone.workdir` 由客户端从受保护 runtime 根目录和稳定 baseline id 派生；HTTP 请求及持久化任务不能指定该路径。客户端 UI 应保留 operations 列表并允许用户显式续做，不得要求用户删除状态或重新初始化来恢复保存过程。
+
+#### 恢复 API 路由与错误状态
+
+恢复 API 的四条路由成功响应分别为：`GET /api/jobs/{jobId}/recovery` 返回 `{jobId,versions}`；`POST .../restore-preview` 返回 `{jobId,preview}`；`POST .../restore` 返回 `{jobId,restored,destinationPath,sourceSha256,runId}`；`POST .../restore-cancel` 返回 `{jobId,cancelled}`。恢复版本只适用于具有可信、稳定 relation 的任务；经精确旧 fingerprint、alias、workdir 和 initialized state 验证的非 SFTP `legacy_compatible` 任务保留原同步基准，但没有新恢复版本，调用恢复 API 返回 `409 sync_recovery_trusted_relation_required`。预览和还原只接受当前 job/relation 的预览，不返回同步根外绝对路径或受保护暂存路径；还原使用排他创建，校验 hash 不匹配时保留目标内容供检查。错误码和 HTTP 状态见本节“同步恢复稳定错误码”表。
+
+#### 同步启动及运行语义
+
+`POST /api/sync/run` 在第一次异步准备前取得 admission；准备中的同任务请求共享 promise，当前运行中的同任务请求重放当前状态，不同任务返回 `409 sync_already_running`。停止中的同 normalized job fingerprint 返回已记录的 stopping 状态，不同 fingerprint 冲突。运行准备先检查本地状态、密钥库和二进制，再生成带当前 job/profile/授权的 `runPlan`；危险任务还要校验有效安全计划。`runSyncExclusive` 写入 app-scoped rclone remote config 后才启动对应 sing-box/data tunnel，随后进行双向恢复预检并启动 rclone。config 写入失败时任务尚未启动：不新增 sync history、不启动 rclone；若 tunnel 原先未运行，不为该失败单独留下新进程。SFTP 的 `ALL_PROXY` 必须指向 data sing-box 的 SOCKS listen port。
+
+调度器只运行已保存任务；危险任务每次触发重新计算计划和根目录安全状态。不同到期任务不会排入无限队列，运行期只允许一个同步准备/执行。首次初始化永不由调度器触发。数据 tunnel 自身退出时最多自动重试 3 次；自动计划遇到已识别的瞬时网络错误也最多重试 3 次。每次重试重新读取授权、构造同步计划并校验安全计划；权限、认证、目录 root、marker 或主机密钥错误不得自动重试。最终失败错误码写入 scheduler 状态。
 - `GET /api/logs`
 - `GET /api/diagnostics/export`
+
+P3 首次接入使用独立本地流程，不更改旧 `SFSC1-` / `sfsc://import/v1#` profile 格式。`POST /api/enrollment/channel/import` 只接受 `{ code }`，其中包装码包含既有签名 channel config 和管理员复制来的 OOB pin；包装本身不构成签名或信任证明。客户端必须按 pin 验证 channel config 签名和 bootstrap origin/path。`GET /api/enrollment/session` 与 `GET /api/client/status.enrollment` 只返回接入阶段、短申请识别码及可供首次人工核对的服务器密钥指纹，不返回私钥、完整通道码、身份验证码或 underlying VLESS 配置；`POST /api/enrollment/request` 只接受 `{}`，`POST /api/enrollment/consume` 只接受 `{ code }`。
+
+`POST /api/enrollment/connection/repair` 是客户端 loopback 管理写入口，只接受 `{operationId, relationId, jobId?}`；`operationId` 必须为 UUIDv4，`relationId` 必须是当前本地已验签授权中的关系，`jobId`（若提供）必须指向同一关系的本地 SFTP 任务。响应立即返回 `{operation}` 持久化操作摘要，后台检查并尝试恢复本机连接，不改目录绑定、关系身份或同步基准。状态为 `running`、`succeeded`、`failed` 或 `needs_attention`；进度仅记录阶段、检查状态和与本操作 ID 绑定的探测文件路径/SHA-256 归属证明，不记录凭据。`GET /api/enrollment/connection/repair/{operationId}` 返回同一摘要，并可在重启后恢复未终结操作；相同 ID 和相同 relation/job 输入可安全重试，不同输入返回 `connection_repair_invalid`，同步或另一修复运行时返回 `connection_repair_busy`。探测路径归属无法证明时返回 `connection_repair_probe_conflict` 且不改文件；只有本次探测已确认清理，操作才能报告成功。
+
+客户端在新建私钥前必须使用 ACL-first 持久化路径保护 enrollment session；请求 ID 与 Ed25519 身份在远端请求前落盘，允许重启后使用相同身份和请求重试。重复导入相同 server ID 但不同 key ID 或公钥必须返回 `enrollment_trust_failed`，不得自动替换 pin。首次申请需以本地私钥签名 request proof；消费请求必须以同一身份签名精确 `POST /api/enrollment/v1/consume` 原始 body 字节哈希。客户端只在验证管理员码绑定当前 server/device/request/public key/channel revision，并验过 pin 公钥对消费 receipt 的 Ed25519 签名后，才记录“身份已验证”。消费码不得进入本地状态、日志或 URL。
+
+首次申请和消费都必须使用该签名通道的专用 sing-box VLESS 配置和本地 SOCKS 连接器；不得直接调用远端 fetch/HTTP，不得使用 direct 出站兜底。缺少通道、内置 sing-box 或启动代理失败时明确报错。消费成功后若尚无独立签名目录授权，只能展示身份已验证并等待授权；不得显示同步就绪、创建同步任务、改写既有 sync relation 或重置 bisync 基准。获得签名目录授权后可创建 SFTP 双向任务，但签名授权只证明服务器准许连接，不代表同步已成功。自动重试使用既有本地身份；服务器公钥变化须由用户重新核对后才能建立新的信任记录。
+
+客户端本地 `POST /api/enrollment/data-authorizations/refresh` 只接受 `{}`，对已消费回执里的每个 binding 逐一请求远端 `POST /api/enrollment/v1/data-authorization`。远端请求体精确为 `{ relationId }`，`X-SFSC-Authorization` 必须由设备密钥签名并覆盖完整 binding、精确 method/path 和原始 body 字节；响应直接为 `{ payload, signature }`，服务器 Ed25519 签名覆盖 `canonicalJson(payload)` 的 UTF-8 字节，客户端只接受 pin 中 `serverId/keyId` 一致、binding/设备/公钥匹配且未过期的授权。若授权有效但服务端受保护的 SFTP relation runtime 无法启动，远端返回 `503 enrollment_data_relation_start_failed` 和不含路径/密钥的可操作提示；该运行故障不得降为目录未授权或泛化 `server_error`。服务端诊断可记录底层稳定 manager/helper code，不应把这些内部码、helper 路径或密钥返回给设备。数据通道 URI 必须和 bootstrap UUID 不同，host public key 行必须是单行 OpenSSH Ed25519 且其 `SHA256:` 指纹匹配。任务请求只能提交选择的 `relationId`，不能提交 caller 自称已验证的上下文、SFTP transport、私钥或 known_hosts 内容；客户端从已验签授权构造 job，且将 PKCS8 Ed25519 私钥文件与 known_hosts 文件在设置 owner-only ACL 后才写内容。SFTP 的授权根 `/` 对应服务端已 chroot 的目录，rclone 使用该虚拟根的空相对路径；任务使用独立数据 sing-box 与 loopback SOCKS 代理，rclone host key 验证始终开启。已配对设备续期使用远端 `POST /api/enrollment/v1/channel-renewal`，精确请求体为 `{ channelRevision }`。`X-SFSC-Authorization` 必须由持久设备密钥对原始完整 consumed binding、精确 `POST`/path/body SHA-256 和 nonce 签名。服务端依据当前 catalog 再校验 consumed grant、设备和 relation 未撤销，并要求请求体的 `channelRevision` 等于当前已应用 bootstrap transport revision；该值不要求等于 binding 中记录的首次配对 revision。成功响应精确为 `{ payload, signature }`；payload 精确包含 `protocol`、`version`、`kind: "channel-renewal"`、`serverId`、`keyId`、`deviceId`、`channelRevision` 和 `wrappedCode`，外层签名覆盖 `canonicalJson(payload)` 的 UTF-8 字节。`wrappedCode` 可直接交给现有 channel import 校验器，仍须按已 pin 的服务端密钥验签。当前 transport 变更后，旧 binding 仍用于数据授权；续期只为当前 transport 签发新码，不修改已消费 receipt、binding、关系授权或同步基准。重试使用新 nonce；同一当前 revision 下重发不会重新配对或重置关系。已签名 channel config 到期后仍可用当前已应用 transport 续期；请求 revision 不同于当前 revision 返回 `enrollment_channel_stale`，当前 bootstrap transport 未配置或未应用返回 `enrollment_channel_not_ready`，撤销的设备/关系按相应授权错误拒绝。不能要求重输一次性身份码，也不能把身份验证或目录授权标成同步成功。
 
 客户端本地接口不属于公网协议，不应被服务端或第三方直接依赖。
 
@@ -1166,6 +1347,8 @@ Content-Type: application/json
 ```
 
 客户端 UI 可以只提交用户可编辑字段。重新保存已从 `/api/client/status.jobs` 或 `/api/jobs` 加载的任务时，客户端 UI 必须以展示安全 job 摘要为 draft 基线，保留 `id`、`remoteFolder`、`serverSpace`、`checkers`、`retries`、`dryRun`、`localProxyPort` 等未展示但可编辑或用户配置字段，再用表单字段覆盖当前编辑值；不得因为页面未展示某字段而丢失该字段或创建重复任务。客户端 UI 读取 `transfers`、`streams` 等数值表单字段时必须严格要求正整数并阻止非法请求，不得把空值、0、小数或非数字静默替换成默认值。客户端 job 请求 schema 必须对白名单字段归一化，只允许用户可编辑字段 `id`、`name`、`localPath`、`direction`、`remoteFolder`、`serverSpace`、`transfers`、`streams`、`checkers`、`s3UploadConcurrency`、`s3ChunkSize`、`chunkSize`、`cutoff`、`retries`、`lowLevelRetries`、`dryRun`、`destructiveSync`、`bandwidthLimit`、`schedule` 和 `localProxyPort` 进入运行时。运行时必须先读取已导入 profile，并用 `buildJobFromProfile()` 补齐 `clientName`、`remoteName`、`bucketName`、`remotePrefix`、`s3Endpoint`、`accessKeyId`、`secretAccessKey`、`checkers`、`s3ChunkSize`、`cutoff`、`retries`、`lowLevelRetries` 和 `localProxyPort` 等执行字段；其中 job 请求已显式包含的用户配置优先，缺失字段才使用 profile defaults。job 请求体中的 `clientName`、`remoteName`、`bucketName`、`bucket`、`remotePrefix`、`s3Endpoint`、`endpoint`、`accessKeyId`、`secretAccessKey`、`s3SecretAccessKey`、`storageBackend`、`uri` 和 `vlessUri` 必须视为展示摘要残留或恶意覆盖输入，`POST /api/jobs/save`、`POST /api/sync/preview` 和 `POST /api/sync/run` 都不得用这些字段覆盖 profile 派生的执行材料，也不得把这些字段写入 `jobs.json`、secret vault、rclone 配置或 sing-box 配置。`direction: "bidirectional"` 时必须忽略 `destructiveSync`。
+
+SFTP job 同样只接受上述用户可编辑 tuning 字段：`transfers`、`streams`、`checkers`、`retries`、`lowLevelRetries` 是 1..1024 的正整数，`cutoff`/`chunkSize` 是非空字符串且最多 64 个字符，`bandwidthLimit`、`safety` 与 `schedule` 使用本文各自的归一化合同。客户端必须从本机已验签的目录授权重建 SFTP host、port、user、SSH 私钥、known_hosts、host-key fingerprint、credential revision 和数据通道 URI；请求中的同名或附加传输材料不得覆盖这些签发值。SFTP SOCKS 端口先尝试绑定检查 job 显式端口或默认端口 `18082`；若端口被占用，最多另选 3 个由本机 OS 分配的候选端口，失败时返回 `503 singbox_start_failed`，不得复用未知 listener。归一化后的 `localProxyPort` 与 `sftpTransport.socksProxy` 必须一致，并供该次预览/安全计划/运行使用，使 rclone `ALL_PROXY`、`--sftp-socks-proxy` 和本次 data sing-box inbound 的 listen port 相等。SFTP safety-plan 指纹不把此本地临时代理端口视为目录或数据范围变化。只有已验签、已初始化的 SFTP 双向任务可保存 interval/daily/startup 自动计划；未初始化任务及其他 risky job 必须保持手动计划。每次自动运行仍须重新校验授权、marker 和当前删除阈值计划。
 
 成功响应：
 
@@ -1323,7 +1506,7 @@ POST /api/sync/run
 Content-Type: application/json
 ```
 
-请求格式与 `/api/jobs/save` 的 `job` 相同。运行前必须先检查本地 JSON 状态可写、secret vault 健康、内置 `rclone.exe` 和内置 `sing-box.exe`，再用预览生成的 `remoteConfig.args` 写入 app-scoped rclone config；rclone config 写入成功后，若 sing-box 尚未运行，才自动启动本地 sing-box，最后启动 rclone sync。启动 sing-box 时必须先把配置写入 app-scoped `sing-box-client.json`，再执行 `sing-box check -c <config>`；check 失败必须返回 `500 singbox_start_failed`，不得启动 `sing-box run`。`sing-box run` spawn 后不能立即视为可用，必须等待本地 loopback 代理端口监听成功；若进程快速退出或端口就绪超时，也必须返回 `singbox_start_failed`。同一次 `/api/sync/run` 必须只生成一个 normalized job 快照，并把该快照同时用于 job 指纹、rclone preview/config、sing-box 端口、同步历史和心跳摘要，避免指纹与实际执行参数读取到不同 profile/defaults 状态。同一次 `/api/sync/run` 必须以归一化后的 job `localProxyPort` 为单一来源；rclone `ALL_PROXY` 端口必须等于 sing-box client config `inbounds[0].listen_port`，旧 `jobs.json` 缺少 `localProxyPort` 时也必须从 profile defaults 兜底，不得用原始 `job.localProxyPort || 18081` 覆盖 profile defaults。若 `sync-history.json` 或其他本地状态文件损坏，必须在启动 sing-box 或写 rclone 配置前返回 `409 local_state_corrupt`。缺少内置组件、sing-box 启动失败或 rclone config 写入失败都属于启动前失败，必须直接返回对应错误码，不得写入同步历史；rclone config 写入失败返回 `500 rclone_config_failed`，不得启动 rclone sync，若 sing-box 原本未运行也不得留下新启动的 sing-box 进程，`processes.sync.metrics.syncState` 必须保持 `idle`，错误 message 中的 stdout/stderr/detail 必须脱敏 S3 secret、SyncKey、`sfsc://import/v1#` 和 VLESS URI。
+请求格式与 `/api/jobs/save` 的 `job` 相同。运行前必须先检查本地 JSON 状态可写、secret vault 健康、内置 `rclone.exe` 和内置 `sing-box.exe`，再用预览生成的 `remoteConfig.args` 写入 app-scoped rclone config；rclone config 写入成功后，启动本次 runPlan 对应的 sing-box/data tunnel 和 rclone。启动 sing-box 时必须先把配置写入 app-scoped配置文件，再执行 `sing-box check -c <config>`；check 失败必须返回 `500 singbox_start_failed`，不得启动 `sing-box run`。`sing-box run` spawn 后不能立即视为可用，必须等待由本次客户端进程启动的 loopback listener 就绪；若进程快速退出或端口就绪超时，也必须返回 `singbox_start_failed`。`runPlan` 用于本次同步执行。安全计划 helper 会独立重建并规范化任务、重新读取当前授权并再次校验，不能假设安全检查始终复用同一个 normalized job 快照。SFTP 的 `ALL_PROXY`、`--sftp-socks-proxy` 和本次 data sing-box inbound 必须共用同一端口；若 job/default 端口不可绑定，客户端最多尝试 3 个本机 OS 分配端口，最终配置必须来自同一个 runPlan。若 `sync-history.json` 或其他本地状态文件损坏，必须在启动 sing-box 或写 rclone 配置前返回 `409 local_state_corrupt`。缺少内置组件、sing-box 启动失败或 rclone config 写入失败都属于启动前失败，必须直接返回对应错误码，不得写入同步历史；rclone config 写入失败返回 `500 rclone_config_failed`，不得启动 rclone sync，若 sing-box 原本未运行也不得留下新启动的 sing-box 进程，`processes.sync.metrics.syncState` 必须保持 `idle`，错误 message 中的 stdout/stderr/detail 必须脱敏 S3 secret、SyncKey、`sfsc://import/v1#` 和 VLESS URI。只有新 trusted relation 每轮执行可信恢复 journal prepare/verify/start/complete；经原 fingerprint、alias、workdir 与 initialized state 精确确认的非 SFTP `legacy_compatible` 任务继续原手动 bisync，不创建新恢复命名空间，也不声称有新恢复版本。普通自动计划仅允许已初始化、已授权的 SFTP 双向任务；调度每轮重建当前安全计划并校验删除门槛、授权与 marker，未初始化或超限时不得启动 rclone。
 
 成功响应：
 
@@ -1398,18 +1581,21 @@ GET /api/logs
 
 `GET /api/diagnostics/export` 返回一份客户端本地脱敏诊断包，供用户在设置页下载后交给支持人员排查。该成功响应是 client diagnostic export contract：响应顶层必须且只包含 `ok`、`filename` 和 `bundle`，且 `ok` 必须为 `true`；`bundle.schemaVersion` 当前为 `1`，内容包括生成时间、支持摘要、客户端状态摘要、协议/构建诊断、任务/调度/心跳/同步历史、运行环境、发布 manifest 摘要、组件文件摘要、本地状态文件摘要和最近日志。`bundle.summary` 是支持人员优先阅读的一层摘要，至少包含版本、发布 manifest 是否可用、发布 manifest 版本/构建时间/错误码、profile 导入状态、客户端名、服务端地址、组件是否齐全、缺失组件、local state/vault 健康、心跳错误码、心跳设备状态/启用状态/在线状态/bucket/prefix、服务端协议、心跳兼容状态、同步执行兼容策略、最近同步状态/错误码、冲突数量、缺失日志和截断日志；完整细节仍以 `status`、`environment` 和 `logs` 为准。诊断包 summary 的 `heartbeatOk`、`heartbeatErrorCode` 和 `heartbeatRemoteErrorCode` 必须来自当前 heartbeat；心跳设备状态、服务端协议和兼容性字段必须读取“当前成功 heartbeat，否则最近一次成功 heartbeat”的快照，避免当前网络失败时丢失最近可靠的服务端上下文。诊断包中的 `bundle.logs.electron`、`bundle.logs.singbox`、`bundle.logs.rclone` 必须是结构化日志元信息对象，字段必须且只包含 `path`、`exists`、`size`、`modifiedAt`、`maxChars`、`truncated` 和 `text`；`text` 只保留最近片段，超过 `maxChars` 时 `truncated` 为 `true`。诊断包必须递归脱敏密钥、token、SyncKey、VLESS URI、`heartbeatSecret`、`heartbeatAuthNonces` 和日志中的存储密钥值，不得泄露 `secretAccessKey` 原文。
 
+诊断包中若存在 `bundle.status.enrollment.lastError`，它只包含稳定 enrollment 错误码和规范 UTC 记录时间；不得加入原始请求、密钥、验证码、签名信封或原始错误文本。该记录不携带可信时差测量，不得据此判断哪一端时钟不准。
+
 诊断包是可外发的公开支持材料，不等同于本机 UI 状态接口。`bundle.status`、`bundle.environment`、`bundle.logs` 和 `bundle.summary` 不得包含 Windows/Unix 绝对路径、本机用户名、真实 secret vault key/ref、同步当前文件名、最近同步文件名、冲突文件名或原始日志中的本地文件路径；路径类字段必须降级为 basename、`redacted` 或结构化存在性/大小/错误码，`missingRefs` 只能保留与缺失数量一致的 `redacted` 占位，`currentFile` / `heartbeatDeviceCurrentFile` 和 `conflicts.files[]` 必须脱敏。普通本地状态接口可以继续给客户端 UI 展示本机操作所需的路径和同步文件线索，但一旦进入 `/api/diagnostics/export`，必须按公开诊断包规则处理。
 
 诊断包 summary 必须显式包含 `heartbeatCompatibilityStatus`、`heartbeatCompatibilitySeverity` 和 `heartbeatCompatibilitySyncRunPolicy`；这三个字段必须来自同一份“当前成功 heartbeat，否则最近一次成功 heartbeat”的兼容性快照。
 
-诊断包 `bundle.environment` 至少包含 Node/平台/架构、是否便携根目录运行、关键目录、`releaseManifest` 发布包摘要、sing-box/rclone 文件存在性与大小、profile/jobs/secrets/sync-history/claim-recovery/last-successful-heartbeat 状态文件存在性、大小和修改时间，以及 Electron/sing-box/rclone 日志文件摘要。`bundle.environment.stateFiles` 必须包含 `profile`、`jobs`、`secrets`、`syncHistory`、`claimRecovery` 和 `lastSuccessfulHeartbeat` 摘要，其中 `claimRecovery` 对应 `data/claim-recovery.json`，`lastSuccessfulHeartbeat` 对应 `data/last-successful-heartbeat.json`。`releaseManifest` 至少包含 manifest 路径、存在性、解析状态、schemaVersion、package、version、builtAt、fileCount、supportDocuments、requiredFiles、errorCode 和 message；manifest 缺失使用 `release_manifest_missing`，manifest 无法解析或结构不符合预期使用 `release_manifest_invalid`。`supportDocuments` 必须列出随包交付的 `INTERFACE_CONTRACT`、`API_MATRIX` 和 `DEPLOYMENT_AND_MIGRATION_GUIDE` 是否登记在 manifest 中，包含 `ok` 和每个文件的 `name`、`path`、`present`、`valid`、`size`、`sha256`；`requiredFiles` 必须按包类型列出启动器、app `package.json`、本地 HTTP 入口、路径解析、本地状态 store、诊断包、进程/sync/rclone 进度/profile import 运行模块、客户端 launcher 源文件、客户端 UI HTML/JS/CSS、共享 core 入口、支持文档、二进制 lock 和内置 sing-box/rclone 是否登记在 manifest 中。`valid` 要求该 manifest 条目的 `size > 0` 且 `sha256` 是 64 位小写十六进制，`supportDocuments.ok` 和 `requiredFiles.ok` 必须只有在对应文件都存在且 valid 时才为 true。诊断摘要中的 `releaseManifestSupportDocsMissing` 应列出缺失或无效的支持文档名称；`releaseManifestRequiredFilesMissing` 应列出缺失或无效的关键运行文件名称。该摘要用于支持人员判断用户是否使用了错误包、缺少组件、本地状态文件异常、合同文档缺失、manifest 关键文件登记不完整或日志未生成；它不得包含环境变量中的 token 或密钥值。
+诊断包 `bundle.environment` 至少包含 Node/平台/架构、是否便携根目录运行、关键目录、`releaseManifest` 发布包摘要、sing-box/rclone 文件存在性与大小、profile/jobs/secrets/sync-history/sync-recovery/claim-recovery/last-successful-heartbeat 状态文件存在性、大小和修改时间，以及 Electron/sing-box/rclone 日志文件摘要。`bundle.environment.stateFiles` 必须且只包含 `profile`、`jobs`、`secrets`、`syncHistory`、`syncRecovery`、`claimRecovery` 和 `lastSuccessfulHeartbeat` 七项摘要；`syncRecovery` 对应恢复状态目录，`claimRecovery` 对应 `data/claim-recovery.json`，`lastSuccessfulHeartbeat` 对应 `data/last-successful-heartbeat.json`。`releaseManifest` 至少包含 manifest 路径、存在性、解析状态、schemaVersion、package、version、builtAt、fileCount、supportDocuments、requiredFiles、errorCode 和 message；manifest 缺失使用 `release_manifest_missing`，manifest 无法解析或结构不符合预期使用 `release_manifest_invalid`。`supportDocuments` 必须列出随包交付的 `INTERFACE_CONTRACT`、`API_MATRIX` 和 `DEPLOYMENT_AND_MIGRATION_GUIDE` 是否登记在 manifest 中，包含 `ok` 和每个文件的 `name`、`path`、`present`、`valid`、`size`、`sha256`；`requiredFiles` 必须按包类型列出启动器、app `package.json`、本地 HTTP 入口、路径解析、本地状态 store、诊断包、进程/sync/rclone 进度/profile import 运行模块、客户端 launcher 源文件、客户端 UI HTML/JS/CSS、共享 core 入口、支持文档、二进制 lock 和内置 sing-box/rclone 是否登记在 manifest 中。`valid` 要求该 manifest 条目的 `size > 0` 且 `sha256` 是 64 位小写十六进制，`supportDocuments.ok` 和 `requiredFiles.ok` 必须只有在对应文件都存在且 valid 时才为 true。诊断摘要中的 `releaseManifestSupportDocsMissing` 应列出缺失或无效的支持文档名称；`releaseManifestRequiredFilesMissing` 应列出缺失或无效的关键运行文件名称。该摘要用于支持人员判断用户是否使用了错误包、缺少组件、本地状态文件异常、合同文档缺失、manifest 关键文件登记不完整或日志未生成；它不得包含环境变量中的 token 或密钥值。
 
-`GET /api/client/status` 是客户端 UI 的本地状态合同，返回：
+`GET /api/client/status` 是客户端 UI 的本地状态合同。成功响应顶层精确包含 `appVersion`、`binaries`、`clientVersion`、`diagnostics`、`enrollment`、`heartbeat`、`jobs`、`lastSuccessfulHeartbeat`、`lastSync`、`mode`、`ok`、`paths`、`processes`、`profileImported`、`profileSummary`、`releaseManifest`、`safeguards`、`scheduler`、`syncHistory`。HTTP 合同由 `assertClientStatusContract` 按精确字段检查。其余字段定义如下：
 
 - `ok: true`: 本地运行时健康标记；启动器和 smoke 可用它判断已运行实例是否为 SFSC 客户端。
 - `mode: "client-exe-runtime"`: 本地运行时模式标识，用于区分服务端控制台和客户端本地 API。
 - `appVersion` / `clientVersion`: 客户端运行时版本，用于诊断客户端与服务端发布批次；默认来自根 `package.json` 版本生成的包元数据，可用 `SFSC_CLIENT_VERSION` 显式覆盖。
 - `diagnostics`: 客户端诊断块，包含客户端角色、运行版本、可选构建标识和各协议版本；用于和服务端 `/api/health.diagnostics` 对齐。
+- `enrollment`: 首次接入状态摘要，使用展示安全字段描述已验证通道、申请和已消费身份状态；不得包含私钥、一次性验证码或完整通道配置。只有记录到最近一次稳定 enrollment 错误时，才可增加 `lastError: { code, recordedAt }`；`code` 必须是稳定 `enrollment_*` 错误码，`recordedAt` 必须是规范 UTC 时间。不得保存或返回请求体、密钥、验证码、签名材料或原始错误文本。
 - `releaseManifest`: 客户端发布包 manifest 摘要，至少包含 `path`、`exists`、`ok`、`schemaVersion`、`package`、`version`、`builtAt`、`fileCount`、`supportDocuments`、`requiredFiles`、`errorCode` 和 `message`；正式包名目前允许 `SyncraftDesktop` 和 `SyncraftClient`，分别对应 Electron 桌面包和旧式 Node 便携包。设置抽屉必须可见展示发布包状态、包构建时间、合同文档登记状态和关键文件登记状态，便于不用打开诊断 JSON 即可判断是否运行了正式交付包。`supportDocuments.ok` 为 `false` 时表示发行包缺少接口合同或 API 矩阵登记，`requiredFiles.ok` 为 `false` 时表示发行包关键运行文件未被 manifest 覆盖，均应视为非完整交付包；UI 必须直接提示缺少的合同文档名称和缺失/无效的关键运行文件名称，诊断包也必须列出这些名称。
 - `paths`: 本地关键目录摘要，至少包含 `root`、`binRoot` 和 `dataRoot`，用于诊断便携包路径和运行时数据位置。客户端启动时可通过 `SFSC_CLIENT_DATA_ROOT` 或 `SFSC_DATA_ROOT` 显式指定数据目录；未指定时优先使用包根 `data`，若包根数据目录无法创建或写入，必须 fallback 到当前 Windows 用户的 `%LOCALAPPDATA%\Syncraft\data`，并在 `paths.dataRoot` 暴露实际使用目录。
 - `binaries`: 客户端组件摘要，`singbox` 和 `rclone` 至少包含 `path`、`exists`、`ok`、`errorCode`、`message`；缺少组件时必须分别使用 `missing_singbox_binary` 或 `missing_rclone_binary`，让状态页和诊断包无需等待启动/同步失败即可定位缺失组件。`GET /api/client/status.binaries.ok` 是轻量存在性检查；`POST /api/binaries/check` 会额外运行版本命令，响应中的 `ok` 必须表示文件存在且版本检测成功，版本检测失败使用 `binary_version_check_failed`。
@@ -1418,19 +1604,27 @@ GET /api/logs
 - `jobs`: 已保存任务的展示安全摘要；该数组供客户端 UI 预填和展示，不是同步执行 DTO。每项可以包含用户可编辑字段和非敏感派生字段，例如 `id`、`name`、`localPath`、`direction`、`remoteFolder`、`serverSpace`、`transfers`、`streams`、`dryRun`、`destructiveSync`、`bandwidthLimit`、`schedule`、`checkers`、`s3UploadConcurrency`、`s3ChunkSize`、`cutoff`、`retries`、`lowLevelRetries`、`localProxyPort`、`bucketName`、`remoteName` 和 `remotePrefix`；不得包含 `accessKeyId`、`secretAccessKey`、`s3SecretAccessKey`、`heartbeatSecret`、`heartbeatAuthNonces`、`vlessUri`、SyncKey、claim code、token 或完整 profile。同步预览/运行继续由本地运行时读取水合 job/profile 后生成执行配置；`GET /api/jobs` 也返回同类展示安全摘要。
 - `scheduler`: 本地计划任务运行摘要，包含 `enabled`、`intervalMs`、`updatedAt`、`nextRun`、`lastTriggeredAt`、`lastError` 和每个非手动任务的 `jobs[]` 摘要。`scheduler.enabled` 必须是布尔值，`scheduler.intervalMs` 必须是非负整数；`scheduler.updatedAt`、`scheduler.nextRun` 和 `scheduler.lastTriggeredAt` 必须为 `null` 或字符串。`scheduler.lastError` 和 `scheduler.jobs[].lastError` 必须为空字符串或稳定 snake_case 错误码；`scheduler.jobs[]` 中每项至少包含非空字符串 `id`、`name`、`scheduleText`、对象 `schedule`、`nextRun`、`lastTriggeredAt` 和 `lastError`。
 - `processes.singbox` / `processes.sync`: 本地进程状态，`processes.singbox.name` 必须为 `sing-box`，`processes.sync.name` 必须为 `rclone-sync`；每个进程摘要至少包含 `name`、`running`、`pid`、`startedAt` 和 `lastExit`，其中 `running` 必须是布尔值，未运行时 `pid` 必须为 `null`。`processes.sync.metrics` 包含当前同步进度，`processes.sync.metrics.syncState` 必须为 `idle`、`syncing`、`error`、`stopping` 或 `offline`。客户端页面顶部状态、body 状态 class、进度区和停止中样式必须以 `processes.sync.metrics.syncState` 为当前状态来源；`processes.sync.running` 只能辅助判断同步中，不能覆盖 `stopping` 或 `error`。
+- `processes.dataSingbox`: SFTP 数据专用 sing-box 进程摘要，精确名称为 `sftp-data-sing-box`，字段合同与 `processes.singbox` 相同；其 loopback SOCKS 端口必须与该次 rclone `ALL_PROXY` 端口一致。
 - `heartbeat`: 最近一次服务端心跳结果，未配置或尚未上报时必须为 `null`；存在时必须遵守心跳摘要合同。`heartbeat.ok` 必须是布尔值；成功心跳必须包含 `serverDiagnostics`、`compatibility` 和脱敏 `device` 快照；失败心跳必须包含稳定 `errorCode: "heartbeat_failed"`；仅当服务端返回共享稳定错误码时，才可包含服务端 `remoteErrorCode`。
 - `lastSuccessfulHeartbeat`: 最近一次成功服务端心跳结果，未成功上报过时必须为 `null`；存在时必须遵守成功心跳摘要合同，且必须保留 `compatibility` 供客户端 UI 和本地写接口执行兼容性确认。失败心跳不得覆盖该字段；客户端重启后必须从 `data/last-successful-heartbeat.json` 恢复该字段，导入新 profile 后必须删除该持久化快照。
 - `syncHistory`: 最近 20 次同步运行记录。
 - `lastSync`: `syncHistory[0]` 或 `null`。
+- `safeguards.localState.files`: 精确包含 `profile`、`jobs`、`secrets`、`syncHistory`、`syncRecovery`、`claimRecovery`、`lastSuccessfulHeartbeat` 七项；各项含 `exists` 和 `ok`，损坏时使用 `local_state_corrupt`。`syncRecovery.path` 指向恢复状态目录摘要，覆盖 legacy state 和关系独立 manifest。
 - `safeguards`: 本地安全边界状态，必须表明不启用 TUN、不修改系统代理、不修改路由、不修改 DNS，并给出 app-scoped rclone config 路径。`safeguards.tun`、`safeguards.systemProxy`、`safeguards.routeMutation` 和 `safeguards.dnsMutation` 必须固定为 `false`；`safeguards.rcloneConfigScope` 必须是指向 app-scoped `rclone.conf` 的非空字符串。
 
 `safeguards.secretVault` 暴露本地密钥库健康摘要，包含后端、路径、引用数、缺失引用数量、`ok` 状态、`protected` 布尔值和 `protection` 保护摘要。公开 HTTP 状态和诊断包不得暴露真实 vault key，例如 `profile:...:storage.secretAccessKey` 或 `job:...:secretAccessKey:...`；`missingRefs` 只能保留与缺失数量一致的脱敏占位，UI 只依据数组长度展示“缺少几项”。当前 file backend 在 Windows 上必须在写入 `data/secrets.json` 后收紧当前用户 ACL；非 Windows 平台可报告 `mode: "not_applicable"`。即使密钥库缺失，`GET /api/client/status` 也应返回该摘要，并继续基于未水合的 profile/jobs 本地 JSON 返回 `profileImported: true`、`profileSummary` 和展示安全 `jobs[]`，方便用户确认当前设备状态并重新导入 SyncKey。
 
-`safeguards.localState` 暴露客户端本地 JSON 状态文件健康摘要，覆盖 `profile.json`、`jobs.json`、`secrets.json`、`sync-history.json`、`claim-recovery.json` 和 `last-successful-heartbeat.json`。若某个文件存在但不是合法 JSON，状态接口仍必须返回 200，并在对应文件项中标记 `ok: false`、`errorCode: "local_state_corrupt"`；损坏的 `claim-recovery.json` 或 `last-successful-heartbeat.json` 也必须作为 `local_state_corrupt` 暴露。读取 profile/jobs 时应降级为空状态以保证设置页和诊断导出可打开。会修改状态的入口，例如 `/api/profile/import`、`/api/jobs/save` 和 `/api/sync/run`，不得在损坏的状态文件上继续写入或覆盖既有 profile/jobs/secrets/sync-history/claim-recovery/last-successful-heartbeat，应返回 `409 local_state_corrupt`。
+`safeguards.localState` 暴露客户端本地 JSON 状态文件健康摘要，覆盖 `profile.json`、`jobs.json`、`secrets.json`、`sync-history.json`、`sync-recovery.json`、`claim-recovery.json` 和 `last-successful-heartbeat.json`。若某个文件存在但不是合法 JSON，状态接口仍必须返回 200，并在对应文件项中标记 `ok: false`、`errorCode: "local_state_corrupt"`；损坏的 `sync-recovery.json`、`claim-recovery.json` 或 `last-successful-heartbeat.json` 也必须作为 `local_state_corrupt` 暴露。读取 profile/jobs 时应降级为空状态以保证设置页和诊断导出可打开。会修改状态的入口，例如 `/api/profile/import`、`/api/jobs/save` 和 `/api/sync/run`，不得在损坏的状态文件上继续写入或覆盖既有 profile/jobs/secrets/sync-history/sync-recovery/claim-recovery/last-successful-heartbeat，应返回 `409 local_state_corrupt`。
 
 客户端设置抽屉必须可见展示 `diagnostics.protocols`、`diagnostics.buildId`、`diagnostics.buildTime`、`releaseManifest.version`、`releaseManifest.builtAt`、`releaseManifest.supportDocuments` 和 `releaseManifest.requiredFiles` 摘要，便于不用打开 JSON 即可判断客户端版本/协议和发布包批次。协议展示必须覆盖 `claim`、`profile`、`adminState`、`clientStatus` 和 `heartbeat`，避免 UI 只显示部分协议字段而掩盖双端漂移。
 
-客户端本地运行时必须根据已保存 job 的 `schedule` 自动触发同步：`manual` 不触发；`interval` 到间隔后触发；`daily` 到指定本地时间后触发；`startup` 在客户端启动后触发一次。若已有同步正在运行，本轮计划不得并发启动第二个 rclone 进程；同步启动阶段也必须 single-flight，覆盖启动 sing-box、写入 rclone config、记录 sync history running 状态到 rclone 子进程启动之间的窗口，避免手动 `/api/sync/run` 和调度器同时启动两套 rclone。调度失败应写入稳定错误码到 `scheduler.lastError`，不应破坏 `/api/client/status`。当自动调度触发时发现本地 secret vault 缺失，应记录 `secret_vault_missing` 到 `scheduler.lastError` 和对应 `scheduler.jobs[].lastError`，不得启动 rclone 进程、不得写入 app-scoped `rclone.conf`，也不得新增 `sync-history.json` 记录。
+客户端本地运行时必须根据已保存 job 的 `schedule` 自动触发同步：`manual` 不触发；`interval` 到间隔后触发；`daily` 到指定本地时间后触发；`startup` 在客户端启动后触发一次。非手动风险计划只允许已签名授权且已初始化的 SFTP 双向 job；legacy S3 双向仍为手动兼容路径。每次自动运行均重新构造当前安全计划并校验授权、marker、初始化状态和删除阈值；过期、超限或需首次初始化时失败关闭。若已有同步正在运行，本轮计划不得并发启动第二个 rclone 进程；同步启动阶段也必须 single-flight，覆盖启动 sing-box、写入 rclone config、记录 sync history running 状态到 rclone 子进程启动之间的窗口，避免手动 `/api/sync/run` 和调度器同时启动两套 rclone。有限重试仅针对本工具 data sing-box 退出或已识别临时数据通道断线，最多 3 次且每次重新做安全计划；授权、root、marker、权限、host-key 等错误不可自动重试。调度失败应写入稳定错误码到 `scheduler.lastError`，不应破坏 `/api/client/status`。当自动调度触发时发现本地 secret vault 缺失，应记录 `secret_vault_missing` 到 `scheduler.lastError` 和对应 `scheduler.jobs[].lastError`，不得启动 rclone 进程、不得写入 app-scoped `rclone.conf`，也不得新增 `sync-history.json` 记录。
+
+危险任务（双向任务和启用删除传播的镜像任务）只有在用户明确确认自动同步后才能保存 interval/daily/startup 计划。每次计划触发都必须重新生成针对当前已保存任务的短时安全计划，重新枚举根目录并校验目录 marker、可信 relation 与既有 bisync 基准；双向任务从当前 primary listing 估算可能传播的删除数量和比例，任一值超过任务 `safety.deleteLimit` 时本轮必须失败关闭。首次初始化仍须独立由用户确认，调度器不得自动执行 `--resync`。运行中的触发不排队重复同一任务，不并发启动第二个 rclone；实际失败必须保留稳定错误码到 `scheduler.lastError` 与对应 job 状态。
+
+每轮已初始化的双向同步必须按 relation/baseline/root 绑定恢复 namespace 建立唯一 UUID run journal，检查本地与远端 owner marker、namespace 空间和 listing pair，持久化 `prepared` 后复核预检收据并写入 `running`，rclone 退出后持久化 `completed` 或 `failed`。进程崩溃留下的 `running` 记录在重启后必须被保留为可检查的未完成版本；确认没有同步进程后，后续同步可将其收束为 `failed` 并建立新的唯一 run，不能重置 identity、relation、目录 root 或 bisync baseline。准备阶段崩溃须从持久 journal 继续同一 run；未知内容、标记不符、根变化、listing 不可验证或恢复副本路径冲突都必须中止，不得清理未知内容或重建基准。
+
+恢复客户端 API 的请求和响应字段是封闭合同：`POST /api/jobs/{jobId}/recovery/restore-preview` 只接受 `{runId,side,path,destinationPath}`；`POST .../restore` 和 `POST .../restore-cancel` 只接受 `{previewId}`。列表返回 `{jobId,versions:[{runId,createdAt,status,files:[{side,path}]}]}`；预览只返回 `previewId`、run/side/path、同步根内的相对目标、源 SHA-256 和过期时间，不返回绝对 source、暂存路径或 secret。还原必须基于当前短时预览、源 SHA-256 和排他创建；目标已存在时以 `sync_recovery_restore_target_exists` 拒绝，不得覆盖。
 
 客户端心跳成功后，应保存服务端响应中的 `diagnostics` 为本地 `heartbeat.serverDiagnostics`，并保存设备摘要中的 `compatibility`。设置抽屉必须同时展示本机协议、服务端协议和兼容状态；服务端协议和兼容状态必须读取“当前成功 heartbeat，否则最近一次成功 heartbeat”的快照，当前心跳失败时仍应在心跳状态区展示失败，但不得让设置抽屉和本地写接口使用不同的兼容性来源。
 

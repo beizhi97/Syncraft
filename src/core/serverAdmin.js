@@ -22,6 +22,8 @@ import {
 // 两处必须引用同一个常量：各写一份字面量就会改一处漏一处，而漏掉的那处要么放行
 // 出厂口令上生产，要么把未配置的部署报成已就绪。
 export const DEFAULT_STORAGE_SECRET_PLACEHOLDER = "change-this-minio-root-password";
+export const DEFAULT_REALITY_SERVER_NAME = "www.apple.com";
+const LEGACY_REALITY_DEFAULT_SERVER_NAME = "www.microsoft.com";
 
 const DEFAULTS = {
   publicServerUrl: "https://pass.971223.xyz:2025",
@@ -79,7 +81,7 @@ export function createDefaultAdminState(env = {}) {
       transportPath: "",
       remark: "sfsc-home",
       reality: {
-        serverName: env.REALITY_SERVER_NAME || "www.microsoft.com",
+        serverName: env.REALITY_SERVER_NAME || DEFAULT_REALITY_SERVER_NAME,
         fingerprint: env.REALITY_FINGERPRINT || "chrome",
         publicKey: env.REALITY_PUBLIC_KEY || "",
         privateKey: env.REALITY_PRIVATE_KEY || "",
@@ -459,8 +461,12 @@ export function autoFillTunnelConfig(state, input = {}) {
           publicKey: current.publicKey,
           privateKey: current.privateKey
         };
+    const savedServerName = current.serverName === LEGACY_REALITY_DEFAULT_SERVER_NAME
+      && !current.publicKey && !current.privateKey && !current.shortId
+      ? DEFAULT_REALITY_SERVER_NAME
+      : current.serverName || DEFAULT_REALITY_SERVER_NAME;
     patch.reality = {
-      serverName: inputFieldOrDefault(input, "serverName", current.serverName || "www.microsoft.com"),
+      serverName: inputFieldOrDefault(input, "serverName", savedServerName),
       fingerprint: inputFieldOrDefault(input, "fingerprint", current.fingerprint || "chrome"),
       publicKey: keypair.publicKey,
       privateKey: keypair.privateKey,
@@ -1933,7 +1939,7 @@ function cleanClaimServerOrigin(input) {
 
 function normalizeRealityConfig(input = {}) {
   return {
-    serverName: cleanServerName(input.serverName || "www.microsoft.com"),
+    serverName: cleanServerName(input.serverName || DEFAULT_REALITY_SERVER_NAME),
     fingerprint: String(input.fingerprint || "chrome").trim(),
     publicKey: String(input.publicKey || "").trim(),
     privateKey: String(input.privateKey || "").trim(),

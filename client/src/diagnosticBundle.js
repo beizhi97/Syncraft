@@ -5,6 +5,7 @@ import { redactLogText } from "./processRunner.js";
 // basename() treats backslashes as ordinary characters on POSIX and leaked the
 // full local path into diagnostic bundles (C-7).
 import { win32 } from "node:path";
+import { normalizeEnrollmentDiagnosticError } from "./enrollmentDiagnostics.js";
 
 const SENSITIVE_KEY_RE = /^(secret|secretAccessKey|secret_access_key|heartbeatSecret|heartbeatAuthNonces|password|privateKey|private_key|authorization|adminToken|token|tKey|claimCode|vlessUri)$/i;
 const LOCAL_PATH_KEY_RE = /^(cwd|appRoot|root|dataRoot|binRoot|localPath|rcloneConfigScope|currentFile|heartbeatDeviceCurrentFile)$/i;
@@ -126,6 +127,7 @@ function buildDiagnosticStatus(status = null) {
   return {
     diagnostics: input.diagnostics || null,
     appVersion: stringField(input.appVersion || input.clientVersion || input.diagnostics?.version),
+    enrollment: summarizeDiagnosticEnrollment(input.enrollment),
     profileImported: Boolean(input.profileImported),
     profileSummary: summarizeDiagnosticProfileSummary(input.profileSummary),
     binaries: summarizeDiagnosticBinaries(input.binaries),
@@ -138,6 +140,11 @@ function buildDiagnosticStatus(status = null) {
     lastSync: summarizeDiagnosticSyncRun(input.lastSync),
     jobs: Array.isArray(input.jobs) ? input.jobs.map(summarizeDiagnosticJob) : []
   };
+}
+
+function summarizeDiagnosticEnrollment(enrollment = null) {
+  const lastError = normalizeEnrollmentDiagnosticError(enrollment?.lastError);
+  return lastError ? { lastError } : { lastError: null };
 }
 
 function summarizeDiagnosticProfileSummary(summary = null) {

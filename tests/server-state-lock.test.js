@@ -141,6 +141,19 @@ test("a live lock is never stolen by a second acquire in the same host", () => {
   }
 });
 
+test("release removes only its own process exit and signal listeners", () => {
+  const { root, lockPath } = makeLockDir();
+  const before = new Map(["exit", "SIGINT", "SIGTERM"].map(event => [event, process.listenerCount(event)]));
+  try {
+    const release = acquireServerStateLock({ dataDir: root, statePath: join(root, "sfsc-state.json"), lockPath });
+    for (const event of before.keys()) assert.equal(process.listenerCount(event), before.get(event) + 1);
+    release();
+    for (const event of before.keys()) assert.equal(process.listenerCount(event), before.get(event));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("concurrent stale lock reclaim yields exactly one owner", async () => {
   const { root, lockPath } = makeLockDir();
   try {

@@ -1,5 +1,6 @@
 param(
-  [switch]$SkipBinaryCheck
+  [switch]$SkipBinaryCheck,
+  [string]$OutputRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,9 +11,11 @@ $projectRoot = Resolve-Path (Join-Path $clientRoot "..")
 $rootPackage = Get-Content -LiteralPath (Join-Path $projectRoot "package.json") -Raw | ConvertFrom-Json
 $appVersion = $rootPackage.version
 $sourceFingerprint = Get-SourceTreeFingerprint $projectRoot
-$distRoot = Join-Path $projectRoot "dist\SyncraftClient"
-$zipPath = Join-Path $projectRoot "dist\SyncraftClient.zip"
-$checksumPath = Join-Path $projectRoot "dist\SyncraftClient.zip.sha256"
+$outputRootPath = if ($OutputRoot) { $OutputRoot } else { Join-Path $projectRoot "dist" }
+$outputRootFull = [System.IO.Path]::GetFullPath($outputRootPath)
+$distRoot = Join-Path $outputRootFull "SyncraftClient"
+$zipPath = Join-Path $outputRootFull "SyncraftClient.zip"
+$checksumPath = Join-Path $outputRootFull "SyncraftClient.zip.sha256"
 $cscExe = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 
 $nodeExe = $env:SFSC_NODE
@@ -40,13 +43,18 @@ $projectRootFull = [System.IO.Path]::GetFullPath($projectRoot)
 $distRootFull = [System.IO.Path]::GetFullPath($distRoot)
 $zipPathFull = [System.IO.Path]::GetFullPath($zipPath)
 $checksumPathFull = [System.IO.Path]::GetFullPath($checksumPath)
-if (!$distRootFull.StartsWith($projectRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+$projectRootPrefix = $projectRootFull.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+$outputRootPrefix = $outputRootFull.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+if (!$outputRootFull.StartsWith($projectRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "Refusing to write outside project root: $outputRootFull"
+}
+if (!$distRootFull.StartsWith($outputRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
   throw "Refusing to write outside project root: $distRootFull"
 }
-if (!$zipPathFull.StartsWith($projectRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+if (!$zipPathFull.StartsWith($outputRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
   throw "Refusing to write outside project root: $zipPathFull"
 }
-if (!$checksumPathFull.StartsWith($projectRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+if (!$checksumPathFull.StartsWith($outputRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
   throw "Refusing to write outside project root: $checksumPathFull"
 }
 
@@ -112,6 +120,14 @@ $manifestFiles = @(
   @{ name = "app/client/src/clientServer.js"; path = Join-Path $distRootFull "app\client\src\clientServer.js" },
   @{ name = "app/client/src/paths.js"; path = Join-Path $distRootFull "app\client\src\paths.js" },
   @{ name = "app/client/src/store.js"; path = Join-Path $distRootFull "app\client\src\store.js" },
+  @{ name = "app/client/src/enrollmentSession.js"; path = Join-Path $distRootFull "app\client\src\enrollmentSession.js" },
+  @{ name = "app/client/src/enrollmentDiagnostics.js"; path = Join-Path $distRootFull "app\client\src\enrollmentDiagnostics.js" },
+  @{ name = "app/client/src/sftpAccessMarker.js"; path = Join-Path $distRootFull "app\client\src\sftpAccessMarker.js" },
+  @{ name = "app/client/src/connectionRepair.js"; path = Join-Path $distRootFull "app\client\src\connectionRepair.js" },
+  @{ name = "app/client/src/firstBisyncConflict.js"; path = Join-Path $distRootFull "app\client\src\firstBisyncConflict.js" },
+  @{ name = "app/client/src/syncRecovery.js"; path = Join-Path $distRootFull "app\client\src\syncRecovery.js" },
+  @{ name = "app/src/core/dataAuthorization.js"; path = Join-Path $distRootFull "app\src\core\dataAuthorization.js" },
+  @{ name = "app/client/src/bootstrapTransport.js"; path = Join-Path $distRootFull "app\client\src\bootstrapTransport.js" },
   @{ name = "app/client/src/diagnosticBundle.js"; path = Join-Path $distRootFull "app\client\src\diagnosticBundle.js" },
   @{ name = "app/client/src/processRunner.js"; path = Join-Path $distRootFull "app\client\src\processRunner.js" },
   @{ name = "app/client/src/rcloneStats.js"; path = Join-Path $distRootFull "app\client\src\rcloneStats.js" },
@@ -122,6 +138,7 @@ $manifestFiles = @(
   @{ name = "app/client/public/app.js"; path = Join-Path $distRootFull "app\client\public\app.js" },
   @{ name = "app/client/public/styles.css"; path = Join-Path $distRootFull "app\client\public\styles.css" },
   @{ name = "app/src/core/index.js"; path = Join-Path $distRootFull "app\src\core\index.js" },
+  @{ name = "app/src/core/channelImportCode.js"; path = Join-Path $distRootFull "app\src\core\channelImportCode.js" },
   @{ name = "resources/app/docs/INTERFACE_CONTRACT.md"; path = Join-Path $distRootFull "resources\app\docs\INTERFACE_CONTRACT.md" },
   @{ name = "resources/app/docs/API_MATRIX.md"; path = Join-Path $distRootFull "resources\app\docs\API_MATRIX.md" },
   @{ name = "resources/app/docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md"; path = Join-Path $distRootFull "resources\app\docs\DEPLOYMENT_AND_MIGRATION_GUIDE.md" },

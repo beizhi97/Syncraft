@@ -1,8 +1,12 @@
-# Windows Client
+# Syncraft Windows Client
 
-This is the Windows portable client for Syncraft. It follows the shared interface contract in `../docs/INTERFACE_CONTRACT.md` for SyncKey import, local jobs, diagnostics, heartbeat reporting, and sync execution.
+This is the Windows portable client for Syncraft, distributed as a ZIP folder rather than an installer. Its directory-first product flow for N1/Linux ordinary-directory mode is: import a channel configuration code, submit a device identity request, enter the administrator-issued identity verification code, select an authorized server directory and a local Windows folder, review first-run bidirectional conflicts, and explicitly confirm initialization before enabling automatic sync. The channel code and identity code serve different steps.
 
-The desktop build is packaged as a portable folder containing:
+The client can repair its connection and continue existing authorized tasks. Reconfiguring the server connection and receiving a new channel code do not require deleting a saved task or resetting its relation/baseline. MinIO/S3 profile import remains a compatibility path; it is not the default first-run workflow. The client follows the shared interface contract in `../docs/INTERFACE_CONTRACT.md`.
+
+The project is currently in product acceptance-candidate work. A locally built ZIP is not evidence of public release or production readiness. No new public-network performance conclusion is claimed here.
+
+The desktop ZIP contains a portable application folder, not a Windows installer. The unpacked folder contains:
 
 ```text
 Syncraft.exe
@@ -17,6 +21,8 @@ The runtime creates `data/` next to the executable after launch. Release package
 `Syncraft.exe` is an Electron desktop app. It opens its own window and runs only the bundled `sing-box.exe` and `rclone.exe`.
 
 The desktop window uses a restricted preload bridge for native folder picking. The renderer can call `window.sfscDesktop.pickFolder()`, but Node.js integration remains disabled.
+
+The actual N1 ordinary-directory installer is `../server/install-n1-directory-appliance.sh`; read [`../server/DEPLOYMENT.md`](../server/DEPLOYMENT.md) for its requirements and steps. It does not deploy or remove MinIO. The older S3/MinIO appliance path remains available as a compatibility mode.
 
 ## Build
 

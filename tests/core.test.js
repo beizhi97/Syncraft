@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { runInNewContext } from "node:vm";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ADMIN_STATE_VERSION,
@@ -70,6 +70,8 @@ import {
   updateTunnelConfig,
   verifyHeartbeatAuth
 } from "../src/core/index.js";
+import { selectBisyncEngine } from "../src/core/syncEngine.js";
+import { normalizeSftpTransport } from "../src/core/storage.js";
 import { ensureMinioClaimAccess, removeMinioDeviceAccess, setMinioDeviceAccessEnabled } from "../src/minioProvisioner.js";
 import {
   assertAdminClaimSummaryContract,
@@ -325,7 +327,8 @@ test("top-level docs present the productized contract baseline", async () => {
   for (const text of [serverDesign, clientDesign, softwareDesignSpec, storageSource]) {
     assert.doesNotMatch(text, /\bMVP\b|\bdemo\b|\bprototype\b|proof of concept|\bPOC\b|演示版|样例版|试用版/i);
   }
-  assert.match(storageSource, /Only S3-compatible MinIO storage is supported/);
+  assert.match(storageSource, /storageBackend === "sftp"/);
+  assert.match(storageSource, /normalizeSftpTransport/);
 });
 
 test("N1 smoke report is framed as historical and points to revalidation", async () => {
@@ -1697,6 +1700,86 @@ test("protocol request schemas normalize key client and server request envelopes
     (error) => error.code === "validation_failed"
   );
 
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_DIRECTORY_REGISTER, {
+    path: " /srv/syncraft/projects "
+  }), { path: "/srv/syncraft/projects" });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_CHANNEL_CODE, {}), {});
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_REVOKE, {
+    operationId: "revop_0123456789abcdef",
+    target: { kind: "relation", relationId: "rel_0123456789abcdef" }
+  }), {
+    operationId: "revop_0123456789abcdef",
+    target: { kind: "relation", relationId: "rel_0123456789abcdef" }
+  });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_REVOKE, {
+    operationId: "revop_0123456789abcdef",
+    target: { kind: "device", deviceId: "dev_0123456789abcdef" }
+  }), {
+    operationId: "revop_0123456789abcdef",
+    target: { kind: "device", deviceId: "dev_0123456789abcdef" }
+  });
+  for (const body of [
+    {},
+    { operationId: "revop_0123456789abcdef", target: { kind: "relation", relationId: "rel_0123456789abcdef", identity: {} } },
+    { operationId: "revop_0123456789abcdef", target: { kind: "device", deviceId: "dev_0123456789abcdef", handle: {} } },
+    { operationId: "revop_0123456789abcdef", target: { kind: "unknown", relationId: "rel_0123456789abcdef" } },
+    { operationId: "revop_0123456789abcdef", target: { kind: "relation", relationId: "invalid" } }
+  ]) {
+    assert.throws(
+      () => parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_REVOKE, body),
+      error => error.code === "enrollment_revocation_invalid"
+    );
+  }
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_RECONFIGURE, {
+    operationId: "op_0123456789abcdef",
+    publicHost: " n1.example.test ",
+    publicPort: 45678
+  }), {
+    operationId: "op_0123456789abcdef",
+    publicHost: "n1.example.test",
+    publicPort: 45678
+  });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_RECONFIGURE, {
+    operationId: "op_0123456789abcdef"
+  }), { operationId: "op_0123456789abcdef" });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_ISSUE, {
+    rootId: "root_0123456789abcdef"
+  }), { rootId: "root_0123456789abcdef" });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_ISSUE, {
+    rootIds: ["root_0123456789abcdef", "root_fedcba9876543210"]
+  }), { rootIds: ["root_0123456789abcdef", "root_fedcba9876543210"] });
+  for (const body of [
+    { rootId: "root_0123456789abcdef", rootIds: ["root_0123456789abcdef"] },
+    { rootIds: [] },
+    { rootIds: ["root_0123456789abcdef", "root_0123456789abcdef"] },
+    { rootIds: ["invalid"] },
+    { rootIds: ["root_0123456789abcdef"], ignored: true }
+  ]) {
+    assert.throws(
+      () => parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_ISSUE, body),
+      error => error.code === "validation_failed"
+    );
+  }
+  assert.throws(
+    () => parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_DIRECTORY_REGISTER, { path: "x", extra: true }),
+    error => error.code === "validation_failed"
+  );
+  assert.throws(
+    () => parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_CHANNEL_CODE, { anything: true }),
+    error => error.code === "validation_failed"
+  );
+  for (const body of [
+    {},
+    { operationId: "not-an-operation" },
+    { operationId: "op_0123456789abcdef", publicPort: "45678" },
+    { operationId: "op_0123456789abcdef", publicHost: "n1.example.test", listenPort: 45678 }
+  ]) {
+    assert.throws(
+      () => parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_RECONFIGURE, body),
+      error => error.code === "enrollment_reconfigure_invalid"
+    );
+  }
+
   assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.SERVER_ADMIN_TUNNEL_GENERATE, {
     protocol: " vless-reality-tcp ",
     publicHost: " pass.971223.xyz ",
@@ -1940,6 +2023,9 @@ test("protocol request schemas normalize key client and server request envelopes
       bandwidthLimit: " 20M ",
       schedule: { mode: "manual" },
       localProxyPort: 18082,
+      storageBackend: "sftp",
+      relationId: "rel_abcdefghijklmnop",
+      rootPath: "",
       clientName: "evil-pc",
       remoteName: "evil-minio",
       bucketName: "evil-bucket",
@@ -1974,11 +2060,21 @@ test("protocol request schemas normalize key client and server request envelopes
       destructiveSync: false,
       bandwidthLimit: "20M",
       schedule: { mode: "manual" },
-      localProxyPort: 18082
+      localProxyPort: 18082,
+      storageBackend: "sftp",
+      relationId: "rel_abcdefghijklmnop",
+      rootPath: "",
+      clientName: "evil-pc",
+      remoteName: "evil-minio"
     },
     confirmCompatibilityWarning: true,
     confirmDestructiveSync: false
   });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_ENROLLMENT_DATA_AUTHORIZATIONS_REFRESH, {}), {});
+  assert.throws(
+    () => parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_ENROLLMENT_DATA_AUTHORIZATIONS_REFRESH, { relationId: "forged" }),
+    error => error.code === "validation_failed"
+  );
   assert.throws(
     () => parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_SYNC_RUN, { job: { dryRun: "true" } }),
     (error) => error.code === "validation_failed"
@@ -2263,6 +2359,33 @@ test("protocol request schemas whitelist nested objects and reject smuggled stru
   assert.deepEqual(heartbeat.lastExit, { ok: true });
   assert.deepEqual(heartbeat.conflicts, { count: 0, files: [] });
   assert.deepEqual(heartbeat.auth, { scheme: "sfsc-hmac-sha256-v1", nonce: "nonce-value", timestamp: "t", signature: "s" });
+});
+
+test("client recovery and connection-repair APIs enforce strict request schemas", () => {
+  const uuid = "123e4567-e89b-42d3-a456-426614174000";
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_CONNECTION_REPAIR, {
+    operationId: uuid, relationId: "rel_0123456789abcdef", jobId: "job-1"
+  }), { operationId: uuid, relationId: "rel_0123456789abcdef", jobId: "job-1" });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_SYNC_RECOVERY_RESTORE_PREVIEW, {
+    runId: uuid, side: "path2", path: "folder/file.txt", destinationPath: "folder/file.recovered.txt"
+  }), { runId: uuid, side: "path2", path: "folder/file.txt", destinationPath: "folder/file.recovered.txt" });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_SYNC_RECOVERY_RESTORE, { previewId: uuid }), { previewId: uuid });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_SYNC_BISYNC_CONFLICT_OPERATIONS, { job: { localPath: "D:\\Sync", direction: "bidirectional" } }),
+    { job: { localPath: "D:\\Sync", direction: "bidirectional" } });
+  assert.deepEqual(parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_SYNC_BISYNC_CONFLICT_RESUME, {
+    job: { localPath: "D:\\Sync", direction: "bidirectional" }, operationId: uuid
+  }), { job: { localPath: "D:\\Sync", direction: "bidirectional" }, operationId: uuid });
+  for (const [request, body] of [
+    [PROTOCOL_REQUESTS.CLIENT_CONNECTION_REPAIR, { operationId: uuid, relationId: "rel_0123456789abcdef", probePath: "forged" }],
+    [PROTOCOL_REQUESTS.CLIENT_CONNECTION_REPAIR, { operationId: uuid, relationId: "rel_0123456789abcdef", jobId: {} }],
+    [PROTOCOL_REQUESTS.CLIENT_SYNC_RECOVERY_RESTORE_PREVIEW, { runId: uuid, side: "path3", path: "x", destinationPath: "y" }],
+    [PROTOCOL_REQUESTS.CLIENT_SYNC_RECOVERY_RESTORE_PREVIEW, { runId: uuid, side: "path1", path: "x", destinationPath: "y", overwrite: true }],
+    [PROTOCOL_REQUESTS.CLIENT_SYNC_RECOVERY_RESTORE, { previewId: uuid, destinationPath: "forged" }],
+    [PROTOCOL_REQUESTS.CLIENT_SYNC_BISYNC_CONFLICT_OPERATIONS, { job: { localPath: "D:\\Sync" }, stateFile: "C:\\private" }],
+    [PROTOCOL_REQUESTS.CLIENT_SYNC_BISYNC_CONFLICT_RESUME, { job: { localPath: "D:\\Sync" }, operationId: "bad" }]
+  ]) {
+    assert.throws(() => parseProtocolRequest(request, body), error => error.code === "validation_failed");
+  }
 });
 
 test("shared JSON body reader preserves split UTF-8 and enforces the byte limit", async () => {
@@ -2684,7 +2807,7 @@ test("interface contract documents client status health and diagnostic fields", 
   assert.match(design, /POST \/api\/sync\/preview/);
   assert.match(design, /GET \/api\/diagnostics\/export/);
   assert.match(matrix, /\| GET \| `\/api\/health` \| 启动器、smoke、运维探活 \| 客户端本地健康、版本和协议诊断 \|/);
-  assert.match(matrix, /\| GET \| `\/api\/client\/status` \| 客户端 UI、smoke \| 本机状态、profile、任务、心跳、诊断、发布 manifest \|/);
+  assert.match(matrix, /\| GET \| `\/api\/client\/status` \| 客户端 UI、smoke \| `\{\.\.\.status,enrollment\}`/);
   assert.match(contract, /GET \/api\/client\/status/);
   assert.match(contract, /`ok: true`/);
   assert.match(contract, /`mode: "client-exe-runtime"`/);
@@ -2918,7 +3041,8 @@ test("interface contract documents sync preview and run execution contracts", as
   assert.match(contract, /启动前失败/);
   assert.match(contract, /不得写入同步历史/);
   assert.match(contract, /`500 rclone_config_failed`/);
-  assert.match(contract, /rclone config 写入成功后，若 sing-box 尚未运行，才自动启动本地 sing-box/);
+  assert.match(contract, /rclone config 写入成功后，启动本次 runPlan 对应的 sing-box\/data tunnel 和 rclone/);
+  assert.match(contract, /config 写入失败时任务尚未启动：不新增 sync history、不启动 rclone/);
   assert.match(contract, /不得启动 rclone sync，若 sing-box 原本未运行也不得留下新启动的 sing-box 进程/);
   assert.match(contract, /`processes\.sync\.metrics\.syncState` 必须保持 `idle`/);
   assert.match(contract, /错误 message 中的 stdout\/stderr\/detail 必须脱敏/);
@@ -4035,11 +4159,25 @@ test("server smoke script covers deployment health and management checks", async
   // themselves stay excluded because the lock records their identity.
   const fingerprintHelper = await readFile(join(projectRoot, "scripts", "lib", "build-fingerprint.ps1"), "utf8");
   assert.match(fingerprintHelper, /"client\\resources\\bin\\win32\\binaries\.lock\.json",/);
+  assert.match(fingerprintHelper, /"native",/);
+  assert.match(fingerprintHelper, /^\s*"server",\s*$/m);
+  assert.match(bundle, /Copy-TreeIntoBundle \(Join-Path \$repoRoot "native"\) "native"/);
+  assert.match(bundle, /Copy-TreeIntoBundle \(Join-Path \$repoRoot "server"\) "server"/);
+  assert.match(fingerprintHelper, /__pycache__/);
+  assert.match(fingerprintHelper, /\\\.py\[co\]\$/);
+  assert.match(fingerprintHelper, /\^server\/data\(\/\|\$\)/);
+  assert.match(fingerprintHelper, /\^server\/sing-box\/config\\\.json\$/);
+  assert.match(fingerprintHelper, /\^server\/sing-box\/\.\*\\\.\(key\|pem\)\$/);
+  assert.match(fingerprintHelper, /\(\^\|\/\)\\\.env\$/);
   assert.match(fingerprintHelper, /\^client\/resources\/bin\/\(\?!win32\/binaries\\\.lock\\\.json\$\)/);
   assert.doesNotMatch(fingerprintHelper, /\^client\/resources\/bin\(\/\|\$\)/);
   assert.match(smoke, /SFSC_SMOKE_BASE_URL/);
   assert.match(smoke, /from "\.\/lib\/runtimeContracts\.mjs"/);
   assert.match(deploy, /scripts\/lib\/runtimeContracts\.mjs/);
+  assert.match(deploy, /--exclude=__pycache__/);
+  assert.match(deploy, /--exclude=\*\/__pycache__/);
+  assert.match(deploy, /--exclude=\*\.pyc/);
+  assert.match(deploy, /\.py\[co\]\$/);
   assert.match(deployment, /scripts\/lib\/runtimeContracts\.mjs/);
   assert.match(applyN1, /app = "singbox-folder-sync"/);
   assert.match(applyN1, /type = "n1-singbox-apply-report"/);
@@ -4479,11 +4617,14 @@ test("server smoke script covers deployment health and management checks", async
   assert.match(bundle, /release-artifacts\/windows-client/);
   assert.match(bundle, /SyncraftDesktop\.zip/);
   assert.match(bundle, /SyncraftClient\.zip/);
-  assert.match(bundle, /Compress-Archive/);
+  assert.match(bundle, /\$zipBuilder = Join-Path \$repoRoot "scripts\\lib\\release-zip\.mjs"/);
+  assert.match(bundle, /& node \$zipBuilder \$stageRoot \$zipPath \$BundleName/);
   assert.match(bundle, /lib\\report-secrets\.ps1/);
   assert.match(bundle, /Assert-ReportFileSafe \$source "release bundle report \$relativeDestination"/);
   assert.match(bundle, /Assert-StagedReportsSafe/);
   assert.match(bundle, /Write-SafeJsonReport \$bundleManifestPath \$bundleManifest "release bundle manifest" 6/);
+  assert.match(bundle, /preflightReportDir = Join-Path \$repoRoot "\.tmp\\release-bundle-\$preflightRunId\\reports"/);
+  assert.match(bundle, /-ClientPackageRoot \$resolvedClientPackageRoot -ReleaseBundleRoot \$resolvedOutputDir/);
   assert.match(preflight, /scripts\/audit-release\.mjs/);
   assert.match(preflight, /SFSC_NODE/);
   assert.match(preflight, /Node\.js not found/);
@@ -4491,6 +4632,11 @@ test("server smoke script covers deployment health and management checks", async
   assert.match(preflight, /\[switch\]\$AllowSkips/);
   assert.match(preflight, /\[string\]\$ReportPath = ""/);
   assert.match(preflight, /\[string\]\$JsonReportPath = ""/);
+  assert.match(preflight, /\[string\]\$ClientPackageRoot = ""/);
+  assert.match(preflight, /\[string\]\$ReleaseBundleRoot = ""/);
+  assert.match(preflight, /\$env:SFSC_CLIENT_PACKAGE_ROOT = \$resolvedClientPackageRoot/);
+  assert.match(preflight, /\$env:SFSC_RELEASE_BUNDLE_ROOT = \$resolvedReleaseBundleRoot/);
+  assert.match(preflight, /-ArchiveRoot \$preflightN1ArchiveRoot/);
   assert.match(preflight, /\$stepResults = @\(\)/);
   assert.match(preflight, /function Add-StepResult/);
   assert.match(preflight, /function Get-StepErrorCode/);
@@ -4532,8 +4678,9 @@ test("server smoke script covers deployment health and management checks", async
   assert.match(preflight, /failed/);
   assert.match(preflight, /scripts\/deploy-n1\.ps1/);
   assert.match(preflight, /-BuildArchive/);
-  assert.match(preflight, /dist\\SyncraftDesktop/);
-  assert.match(preflight, /dist\\SyncraftClient/);
+  assert.match(preflight, /Path = Join-Path \$resolvedClientPackageRoot "SyncraftDesktop"/);
+  assert.match(preflight, /Path = Join-Path \$resolvedClientPackageRoot "SyncraftClient"/);
+  assert.match(preflight, /release-bundles/);
   assert.match(preflight, /client-package-smoke-\$packageName\.json/);
   assert.match(preflight, /Client package smoke/);
   assert.match(preflight, /Built client package not found/);
@@ -4547,8 +4694,10 @@ test("server smoke script covers deployment health and management checks", async
   assert.match(preflight, /\$previousClientPackageDir = \$env:SFSC_CLIENT_PACKAGE_DIR/);
   assert.match(preflight, /Remove-Item Env:SFSC_CLIENT_PACKAGE_DIR -ErrorAction SilentlyContinue/);
   assert.match(preflight, /--json-report \$clientPackageJsonReportPath/);
-  assert.match(preflight, /client:desktop-package/);
-  assert.match(preflight, /client:package/);
+  assert.match(preflight, /client\/scripts\/build-desktop\.ps1 -OutputRoot/);
+  assert.match(preflight, /client\/scripts\/build-client\.ps1 -OutputRoot/);
+  assert.match(deploy, /\[string\]\$ArchiveRoot = ""/);
+  assert.match(deploy, /Refusing to write N1 source archive outside project root/);
   assert.match(preflight, /--test/);
   assert.doesNotMatch(preflight, /-Apply/);
 });
@@ -4629,6 +4778,10 @@ test("N1 deploy writes reports without running post-deploy smoke during dry-run 
       await mkdir(join(tempRoot, ...rel.split("/").slice(0, -1)), { recursive: true });
       await writeFile(join(tempRoot, ...rel.split("/")), "ok\n", "utf8");
     }
+    await mkdir(join(tempRoot, "src", "__pycache__"), { recursive: true });
+    await writeFile(join(tempRoot, "src", "__pycache__", "generated.cpython-312.pyc"), Buffer.from([1, 2, 3]));
+    await mkdir(join(tempRoot, "public", "__pycache__"), { recursive: true });
+    await writeFile(join(tempRoot, "public", "__pycache__", "generated.cpython-312.pyc"), Buffer.from([4, 5, 6]));
     await writeFile(
       join(tempRoot, "scripts", "smoke-server.mjs"),
       "console.error('post-deploy smoke should not run without -Apply'); process.exit(31);\n",
@@ -4640,9 +4793,15 @@ test("N1 deploy writes reports without running post-deploy smoke during dry-run 
       "export function assertRuntimeDiagnosticsContract() {}\nexport function assertServerDeviceSummaryContract() {}\n",
       "utf8"
     );
+    const defaultArchivePath = join(tempRoot, ".tmp", "n1-deploy", "sfsc-server-source.tgz");
+    await mkdir(join(tempRoot, ".tmp", "n1-deploy"), { recursive: true });
+    await writeFile(defaultArchivePath, "preserve existing default archive", "utf8");
+    const isolatedArchiveRoot = join(tempRoot, ".tmp", "preflight-run-unique", "n1-deploy");
 
     const archiveRun = await runDeploy(tempRoot, [
       "-BuildArchive",
+      "-ArchiveRoot",
+      isolatedArchiveRoot,
       "-PostDeploySmoke",
       "-SmokeBaseUrl",
       "http://example.invalid:5177",
@@ -4655,6 +4814,16 @@ test("N1 deploy writes reports without running post-deploy smoke during dry-run 
     ]);
     assert.equal(archiveRun.code, 0);
     assert.match(archiveRun.stdout, /Archive validation passed/);
+    assert.match(archiveRun.stdout, /Created archive:/);
+    assert.equal(await fileExists(join(isolatedArchiveRoot, "sfsc-server-source.tgz")), true);
+    const archiveEntries = await new Promise((resolve, reject) => {
+      execFile("tar", ["-tzf", join(isolatedArchiveRoot, "sfsc-server-source.tgz")], (error, stdout, stderr) => {
+        if (error) reject(new Error(stderr || error.message));
+        else resolve(String(stdout).split(/\r?\n/));
+      });
+    });
+    assert.ok(!archiveEntries.some((entry) => entry.includes("__pycache__") || /\.py[co]$/.test(entry)));
+    assert.equal(await readFile(defaultArchivePath, "utf8"), "preserve existing default archive");
     assert.doesNotMatch(archiveRun.stdout, /post-deploy smoke should not run/);
     await assert.rejects(
       readFile(join(tempRoot, "reports", "n1", "server-smoke.json"), "utf8"),
@@ -4679,6 +4848,12 @@ test("N1 deploy writes reports without running post-deploy smoke during dry-run 
         ["Archive validation", "passed", ""]
       ]
     );
+
+    const outsideArchiveRoot = join(tempRoot, "..", `${basename(tempRoot)}-outside-archive`);
+    const rejectedArchiveRoot = await runDeploy(tempRoot, ["-BuildArchive", "-ArchiveRoot", outsideArchiveRoot]);
+    assert.notEqual(rejectedArchiveRoot.code, 0);
+    assert.match(rejectedArchiveRoot.stderr, /Refusing to write N1 source archive outside project root/);
+    assert.equal(await fileExists(outsideArchiveRoot), false);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
@@ -5542,6 +5717,8 @@ test("release bundle script packages delivery artifacts and excludes runtime sec
   const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-release-bundle-"));
   try {
     await writeReleaseBundleFixture(tempRoot);
+    await mkdir(join(tempRoot, "tests", "__pycache__"), { recursive: true });
+    await writeFile(join(tempRoot, "tests", "__pycache__", "generated.cpython-312.pyc"), Buffer.from([1, 2, 3, 4]));
     const result = await runReleaseBundle(tempRoot, [
       "-SkipPreflight",
       "-OutputDir",
@@ -5588,12 +5765,19 @@ test("release bundle script packages delivery artifacts and excludes runtime sec
     assert.equal(await fileExists(bundleSha), true);
     assert.equal(await fileExists(join(bundleRoot, "README.md")), true);
     assert.equal(await fileExists(join(bundleRoot, "docs", "INTERFACE_CONTRACT.md")), true);
+    assert.equal(await fileExists(join(bundleRoot, "native", "sfsc-sftp-service", "go.mod")), true);
+    assert.equal(await fileExists(join(bundleRoot, "native", "sfsc-root-guard", "main_linux.go")), true);
+    assert.equal(await fileExists(join(bundleRoot, "server", "Caddyfile")), true);
+    assert.equal(await fileExists(join(bundleRoot, "server", "sfscctl")), true);
+    assert.equal(await fileExists(join(bundleRoot, "server", "runtime", "sfsc-runtime-launcher")), true);
+    assert.equal(await fileExists(join(bundleRoot, "server", "rootfs", "etc", "s6-overlay", "s6-rc.d", "sfsc-node", "run")), true);
     assert.equal(await fileExists(join(bundleRoot, "server", "sing-box", "config.example.json")), true);
     assert.equal(await fileExists(join(bundleRoot, "server", "sing-box", "config.json")), false);
     assert.equal(await fileExists(join(bundleRoot, "server", "data", "sfsc-state.json")), false);
     assert.equal(await fileExists(join(bundleRoot, "client", "data", "profile.json")), false);
     assert.equal(await fileExists(join(bundleRoot, ".tmp", "scratch.txt")), false);
     assert.equal(await fileExists(join(bundleRoot, "node_modules", "bad.txt")), false);
+    assert.equal(await fileExists(join(bundleRoot, "tests", "__pycache__", "generated.cpython-312.pyc")), false);
 
     const checksum = (await readFile(bundleSha, "utf8")).trim().split(/\s+/)[0];
     const actual = createHash("sha256").update(await readFile(bundleZip)).digest("hex");
@@ -5767,6 +5951,9 @@ test("preflight writes a report file on successful quick checks", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-preflight-report-"));
   try {
     await mkdir(join(tempRoot, "scripts"), { recursive: true });
+    const clientPackageRoot = join(tempRoot, "candidate-packages");
+    await mkdir(join(tempRoot, "dist", "SyncraftClient"), { recursive: true });
+    await writeFile(join(tempRoot, "dist", "SyncraftClient", "sentinel.txt"), "preserve legacy dist", "utf8");
     await writeFile(
       join(tempRoot, "scripts", "preflight-release.ps1"),
       await readFile(join(projectRoot, "scripts", "preflight-release.ps1"), "utf8"),
@@ -5774,12 +5961,17 @@ test("preflight writes a report file on successful quick checks", async () => {
     );
     await writeFile(
       join(tempRoot, "scripts", "deploy-n1.ps1"),
-      "Write-Host '[fixture] deploy check passed'\n",
+      "param([string]$ArchiveRoot)\nWrite-Host \"[fixture] archive root=$ArchiveRoot\"\nWrite-Host '[fixture] deploy check passed'\n",
       "utf8"
     );
     await writeFile(
       join(tempRoot, "scripts", "audit-release.mjs"),
-      "console.log('Release audit passed.');\n",
+      `const expectedClient = process.env.SFSC_EXPECTED_CLIENT_PACKAGE_ROOT.toLowerCase();
+const expectedBundles = process.env.SFSC_EXPECTED_RELEASE_BUNDLE_ROOT.toLowerCase();
+if (process.env.SFSC_CLIENT_PACKAGE_ROOT.toLowerCase() !== expectedClient) process.exit(24);
+if (process.env.SFSC_RELEASE_BUNDLE_ROOT.toLowerCase() !== expectedBundles) process.exit(25);
+console.log('Release audit passed.');
+`,
       "utf8"
     );
 
@@ -5790,9 +5982,15 @@ test("preflight writes a report file on successful quick checks", async () => {
       "-ReportPath",
       reportPath,
       "-JsonReportPath",
-      jsonReportPath
-    ]);
+      jsonReportPath,
+      "-ClientPackageRoot",
+      clientPackageRoot
+    ], {
+      SFSC_EXPECTED_CLIENT_PACKAGE_ROOT: clientPackageRoot,
+      SFSC_EXPECTED_RELEASE_BUNDLE_ROOT: join(clientPackageRoot, "release-bundles")
+    });
     assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /\[fixture\] archive root=.*\.tmp[\\/]preflight-release-[a-f0-9]{32}[\\/]n1-deploy/i);
     assert.match(result.stdout, /Preflight report written/);
     assert.match(result.stdout, /Preflight JSON report written/);
     const report = await readFile(join(tempRoot, "reports", "preflight.txt"), "utf8");
@@ -5818,12 +6016,16 @@ test("preflight writes a report file on successful quick checks", async () => {
     assert.equal(jsonReport.summary.passed, 3);
     assert.equal(jsonReport.summary.skipped, 3);
     assert.equal(jsonReport.context.SkipTests, true);
+    assert.equal(jsonReport.context.ClientPackageRoot.toLowerCase(), clientPackageRoot.toLowerCase());
+    assert.equal(jsonReport.context.ReleaseBundleRoot.toLowerCase(), join(clientPackageRoot, "release-bundles").toLowerCase());
     assert.match(jsonReport.context.JsonReportPath, /reports[\\/]preflight\.json$/);
     assert.match(jsonReport.context.ClientPackageSmokeJsonReportPath, /reports[\\/]client-package-smoke-desktop\.json$/);
     assert.deepEqual(
       jsonReport.context.ClientPackageSmokeJsonReportPaths.map((path) => path.replaceAll("\\", "/").split("/").pop()),
       ["client-package-smoke-desktop.json", "client-package-smoke-portable.json"]
     );
+    assert.equal(await readFile(join(tempRoot, "dist", "SyncraftClient", "sentinel.txt"), "utf8"), "preserve legacy dist");
+    assert.equal(await fileExists(join(tempRoot, ".tmp", "n1-deploy", "sfsc-server-source.tgz")), false);
     assert.deepEqual(
       jsonReport.steps.map((step) => [step.name, step.status, step.errorCode]),
       [
@@ -5851,7 +6053,7 @@ test("strict preflight fails when no client package was built", async () => {
     );
     await writeFile(
       join(tempRoot, "scripts", "deploy-n1.ps1"),
-      "Write-Host '[fixture] deploy check passed'\n",
+      "param([string]$ArchiveRoot)\nWrite-Host \"[fixture] archive root=$ArchiveRoot\"\nWrite-Host '[fixture] deploy check passed'\n",
       "utf8"
     );
     await writeFile(
@@ -5909,7 +6111,7 @@ test("strict preflight fails when only one client package was built", async () =
     );
     await writeFile(
       join(tempRoot, "scripts", "deploy-n1.ps1"),
-      "Write-Host '[fixture] deploy check passed'\n",
+      "param([string]$ArchiveRoot)\nWrite-Host \"[fixture] archive root=$ArchiveRoot\"\nWrite-Host '[fixture] deploy check passed'\n",
       "utf8"
     );
     await writeFile(
@@ -5961,7 +6163,7 @@ test("preflight passes a derived JSON report path to client package smoke", asyn
     );
     await writeFile(
       join(tempRoot, "scripts", "deploy-n1.ps1"),
-      "Write-Host '[fixture] deploy check passed'\n",
+      "param([string]$ArchiveRoot)\nWrite-Host \"[fixture] archive root=$ArchiveRoot\"\nWrite-Host '[fixture] deploy check passed'\n",
       "utf8"
     );
     await writeFile(
@@ -6046,7 +6248,7 @@ test("preflight promotes client package smoke failure check into the summary rep
     );
     await writeFile(
       join(tempRoot, "scripts", "deploy-n1.ps1"),
-      "Write-Host '[fixture] deploy check passed'\n",
+      "param([string]$ArchiveRoot)\nWrite-Host \"[fixture] archive root=$ArchiveRoot\"\nWrite-Host '[fixture] deploy check passed'\n",
       "utf8"
     );
     await writeFile(
@@ -6114,7 +6316,7 @@ test("preflight restores client package environment before running later steps",
     );
     await writeFile(
       join(tempRoot, "scripts", "deploy-n1.ps1"),
-      "Write-Host '[fixture] deploy check passed'\n",
+      "param([string]$ArchiveRoot)\nWrite-Host \"[fixture] archive root=$ArchiveRoot\"\nWrite-Host '[fixture] deploy check passed'\n",
       "utf8"
     );
     await writeFile(
@@ -6184,7 +6386,7 @@ test("preflight runs client package smoke for desktop and portable packages when
     );
     await writeFile(
       join(tempRoot, "scripts", "deploy-n1.ps1"),
-      "Write-Host '[fixture] deploy check passed'\n",
+      "param([string]$ArchiveRoot)\nWrite-Host \"[fixture] archive root=$ArchiveRoot\"\nWrite-Host '[fixture] deploy check passed'\n",
       "utf8"
     );
     await writeFile(
@@ -6277,7 +6479,7 @@ test("client package smoke script validates desktop package shape and runtime st
     assert.equal(passedReport.context.packageName, "SyncraftDesktop");
     assert.equal(passedReport.context.manifestVersion, JSON.parse(pkg).version);
     assert.equal(passedReport.context.manifestBuiltAt, "2026-07-04T00:00:00.000Z");
-    assert.equal(passedReport.context.manifestFileCount, 27);
+    assert.equal(passedReport.context.manifestFileCount, 36);
     assert.equal(passedReport.summary.failed, 0);
     assert.ok(passedReport.summary.passed > 0);
     assert.equal(passedReport.failure, null);
@@ -6294,7 +6496,7 @@ test("client package smoke script validates desktop package shape and runtime st
     assert.equal(portableReport.context.packageRoot, portablePackageRoot);
     assert.equal(portableReport.context.packageName, "SyncraftClient");
     assert.equal(portableReport.context.manifestVersion, JSON.parse(pkg).version);
-    assert.equal(portableReport.context.manifestFileCount, 25);
+    assert.equal(portableReport.context.manifestFileCount, 34);
     assert.ok(portableReport.checks.some((check) => check.includes("portable node runtime")));
     assert.ok(portableReport.checks.some((check) => check.includes("local health readiness endpoint verified")));
 
@@ -6535,7 +6737,7 @@ test("client package smoke script validates desktop package shape and runtime st
   }
 });
 
-test("repository ignore rules exclude runtime state and secrets", async () => {
+test("repository ignore rules exclude runtime state and track safe directory env templates", async () => {
   const attributes = await readFile(join(projectRoot, ".gitattributes"), "utf8");
   const ignore = await readFile(join(projectRoot, ".gitignore"), "utf8");
   const pkg = await readFile(join(projectRoot, "package.json"), "utf8");
@@ -6547,9 +6749,19 @@ test("repository ignore rules exclude runtime state and secrets", async () => {
   assert.match(ignore, /^\.tmp\//m);
   assert.match(ignore, /^server\/\.env$/m);
   assert.match(ignore, /^!server\/\.env\.example$/m);
+  assert.match(ignore, /^!server\/\.env\.directory\.example$/m);
   assert.match(ignore, /^server\/data\//m);
   assert.match(ignore, /^server\/sing-box\/config\.json$/m);
   assert.match(ignore, /^dist\/\*\*\/data\//m);
+  const checkIgnore = (target) => new Promise((resolve) => {
+    execFile("git", ["check-ignore", "--no-index", target], { cwd: projectRoot }, (error, stdout, stderr) => {
+      resolve({ code: error?.code ?? 0, stdout, stderr });
+    });
+  });
+  const safeTemplateIgnore = await checkIgnore("server/.env.directory.example");
+  assert.equal(safeTemplateIgnore.code, 1, safeTemplateIgnore.stdout || safeTemplateIgnore.stderr);
+  const realDirectoryEnvIgnore = await checkIgnore("server/.env.directory");
+  assert.equal(realDirectoryEnvIgnore.code, 0, realDirectoryEnvIgnore.stderr);
   assert.match(pkg, /"audit:compose": "node scripts\/audit-compose\.mjs"/);
   assert.match(pkg, /"audit:release": "node scripts\/audit-release\.mjs"/);
   assert.match(audit, /auditComposeConfig/);
@@ -6614,7 +6826,9 @@ test("repository ignore rules exclude runtime state and secrets", async () => {
   assert.match(audit, /\/api\/jobs\/save must validate the shared protocol schema and confirmations before writing local state/);
   assert.match(audit, /let syncRunInFlight = null/);
   assert.match(audit, /const runPlan = await buildSyncRunPlan\(job\);/);
-  assert.match(audit, /async function runSyncExclusive\(runPlan, options = \{\}\) \{\\n  const \{ normalizedJob, tunnelUri \} = runPlan;/);
+  assert.match(audit, /const runSyncExclusiveSource = sourceWindow\(/);
+  assert.match(audit, /"async function runSyncExclusive\(runPlan, options = \{\}\)"/);
+  assert.match(audit, /if \(\/read\(\?:Stored\)\?Profile\\\(\/\.test\(runSyncExclusiveSource\)\)/);
   assert.match(audit, /must not read profile again inside runSyncExclusive/);
   assert.match(audit, /extractNumberConstant/);
   assert.match(audit, /routeMentionPattern/);
@@ -6702,6 +6916,67 @@ test("source fingerprint hashing does not require Get-FileHash", async () => {
   assert.equal(result.code, 0, result.stderr || result.stdout);
 });
 
+test("source fingerprint covers directory appliance inputs and excludes caches and runtime env", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-fingerprint-appliance-"));
+  try {
+    await mkdir(join(tempRoot, "scripts", "lib"), { recursive: true });
+    await writeFile(
+      join(tempRoot, "scripts", "lib", "build-fingerprint.ps1"),
+      await readFile(join(projectRoot, "scripts", "lib", "build-fingerprint.ps1"), "utf8"),
+      "utf8"
+    );
+    const writeFixture = async (relativePath, content) => {
+      const target = join(tempRoot, ...relativePath.split("/"));
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, content);
+    };
+    const fixtureEnvKey = ["SFSC_ADMIN_", "TOKEN"].join("");
+    await writeFixture("server/install-n1-directory-appliance.sh", "installer-v1\n");
+    await writeFixture("server/README.md", "compatibility documentation v1\n");
+    await writeFixture("server/.env.directory.example", `${fixtureEnvKey}=x\n`);
+    await writeFixture("server/.env.directory", `${fixtureEnvKey}=x\n`);
+    await writeFixture("server/.env", `${fixtureEnvKey}=x\n`);
+    await writeFixture("server/runtime/native/linux-arm64/relation-v2/manifest.json", "{\"sha256\":\"fixture-v1\"}\n");
+    await writeFixture("server/rootfs/etc/s6-overlay/s6-rc.d/sfsc-node/run", "run-v1\n");
+    await writeFixture("server/rootfs/etc/s6-overlay/s6-rc.d/sfsc-node/finish", "finish-v1\n");
+    await writeFixture("native/sfsc-root-guard/main_linux.go", "package main // fixture-v1\n");
+
+    const base = await getFixtureSourceFingerprint(tempRoot);
+    const basePaths = new Set(base.inputs.map((entry) => entry.path));
+    assert.ok(basePaths.has("server/install-n1-directory-appliance.sh"));
+    assert.ok(basePaths.has("server/README.md"));
+    assert.ok(basePaths.has("server/.env.directory.example"));
+    assert.ok(basePaths.has("server/runtime/native/linux-arm64/relation-v2/manifest.json"));
+    assert.ok(basePaths.has("server/rootfs/etc/s6-overlay/s6-rc.d/sfsc-node/run"));
+    assert.ok(basePaths.has("server/rootfs/etc/s6-overlay/s6-rc.d/sfsc-node/finish"));
+    assert.ok(basePaths.has("native/sfsc-root-guard/main_linux.go"));
+    assert.ok(!basePaths.has("server/.env.directory"));
+    assert.ok(!basePaths.has("server/.env"));
+
+    await writeFixture("server/install-n1-directory-appliance.sh", "installer-v2\n");
+    const installerChanged = await getFixtureSourceFingerprint(tempRoot);
+    assert.notEqual(installerChanged.hash, base.hash);
+    await writeFixture("server/install-n1-directory-appliance.sh", "installer-v1\n");
+    await writeFixture("server/runtime/native/linux-arm64/relation-v2/manifest.json", "{\"sha256\":\"fixture-v2\"}\n");
+    const manifestChanged = await getFixtureSourceFingerprint(tempRoot);
+    assert.notEqual(manifestChanged.hash, base.hash);
+    await writeFixture("server/runtime/native/linux-arm64/relation-v2/manifest.json", "{\"sha256\":\"fixture-v1\"}\n");
+
+    const beforeCache = await getFixtureSourceFingerprint(tempRoot);
+    await writeFixture("scripts/__pycache__/audit.cpython-312.pyc", Buffer.from([0, 1, 2, 3]));
+    await writeFixture("tests/__pycache__/core.cpython-312.pyc", Buffer.from([4, 5, 6, 7]));
+    const afterCache = await getFixtureSourceFingerprint(tempRoot);
+    assert.equal(afterCache.hash, beforeCache.hash);
+
+    await writeFixture("server/.env.directory", `${fixtureEnvKey}=y\n`);
+    await writeFixture("server/.env", `${fixtureEnvKey}=y\n`);
+    const afterSecrets = await getFixtureSourceFingerprint(tempRoot);
+    assert.equal(afterSecrets.hash, afterCache.hash);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("release PowerShell scripts use the portable SHA-256 helper", async () => {
   const runtimeScripts = [
     "scripts/build-release-bundle.ps1",
@@ -6716,6 +6991,15 @@ test("release PowerShell scripts use the portable SHA-256 helper", async () => {
     assert.doesNotMatch(source, /\bGet-FileHash\b/, `${relativePath} must not depend on Get-FileHash`);
     assert.match(source, /Get-Sha256HexFromFile/, `${relativePath} must use the portable SHA-256 helper`);
   }
+
+  const releaseBundle = await readFile(join(projectRoot, "scripts", "build-release-bundle.ps1"), "utf8");
+  const releaseAudit = await readFile(join(projectRoot, "scripts", "audit-release.mjs"), "utf8");
+  assert.match(releaseBundle, /\[string\]\$ClientPackageRoot = ""/);
+  assert.match(releaseBundle, /\[string\]\$OutputDir = ""/);
+  assert.match(releaseBundle, /\$resolvedClientPackageRoot "SyncraftDesktop\.zip"/);
+  assert.match(releaseBundle, /\$resolvedClientPackageRoot "SyncraftClient\.zip"/);
+  assert.match(releaseAudit, /SFSC_CLIENT_PACKAGE_ROOT/);
+  assert.match(releaseAudit, /SFSC_RELEASE_BUNDLE_ROOT/);
 });
 
 test("compose config audit enforces fixed image tags", async () => {
@@ -6940,7 +7224,7 @@ test("release audit validates client ZIP checksum sidecar", async () => {
     const actual = createHash("sha256").update(zipContent).digest("hex");
     await writeFile(checksumPath, `${actual}  SyncraftDesktop.zip\n`, "utf8");
     const validChecksum = await runReleaseAudit(tempRoot);
-    assert.equal(validChecksum.code, 0);
+    assert.equal(validChecksum.code, 0, validChecksum.stderr || validChecksum.stdout);
     assert.match(validChecksum.stdout, /Release audit passed/);
 
     await writeFile(zipPath, fakeClientZipContent("SyncraftDesktop", { omit: "resources/app/docs/API_MATRIX.md" }));
@@ -7014,6 +7298,24 @@ test("release audit validates client ZIP checksum sidecar", async () => {
     assert.match(pocPackageName.stderr, /package\.json name must use productized wording instead of MVP\/demo language/);
 
     await writeFile(join(tempRoot, "package.json"), JSON.stringify(rootPackage, null, 2), "utf8");
+    await writeFile(
+      join(tempRoot, "src", "core", "storage.js"),
+      "const prototype = Object.getPrototypeOf(value);\nreturn prototype === Object.prototype || prototype === null;\n",
+      "utf8"
+    );
+    const prototypeJavaScriptIdentifiers = await runReleaseAudit(tempRoot);
+    assert.equal(prototypeJavaScriptIdentifiers.code, 0, prototypeJavaScriptIdentifiers.stderr || prototypeJavaScriptIdentifiers.stdout);
+
+    await writeFile(join(tempRoot, "src", "core", "storage.js"), "// prototype runtime\n", "utf8");
+    const prototypeComment = await runReleaseAudit(tempRoot);
+    assert.notEqual(prototypeComment.code, 0);
+    assert.match(prototypeComment.stderr, /src\/core\/storage\.js:1 must use productized wording instead of MVP\/demo language/);
+
+    await writeFile(join(tempRoot, "src", "core", "storage.js"), "export const label = 'prototype runtime';\n", "utf8");
+    const prototypeProductText = await runReleaseAudit(tempRoot);
+    assert.notEqual(prototypeProductText.code, 0);
+    assert.match(prototypeProductText.stderr, /src\/core\/storage\.js:1 must use productized wording instead of MVP\/demo language/);
+
     await writeFile(join(tempRoot, "src", "core", "storage.js"), "export const label = 'demo runtime';\n", "utf8");
     const demoRuntimeLanguage = await runReleaseAudit(tempRoot);
     assert.notEqual(demoRuntimeLanguage.code, 0);
@@ -7790,28 +8092,28 @@ test("release audit fails when client package manifest required file lists drift
     const buildDesktop = await readFile(join(tempRoot, "client", "scripts", "build-desktop.ps1"), "utf8");
     await writeFile(
       join(tempRoot, "client", "scripts", "build-desktop.ps1"),
-      buildDesktop.replace(/\r?\n\s*@\{ name = "resources\/app\/client\/src\/store\.js"; path = Join-Path \$appRoot "client\\src\\store\.js" \},/, ""),
+      buildDesktop.replace(/\r?\n\s*@\{ name = "resources\/app\/client\/src\/firstBisyncConflict\.js"; path = Join-Path \$appRoot "client\\src\\firstBisyncConflict\.js" \},/, ""),
       "utf8"
     );
     const missingBuildManifestPath = await runReleaseAudit(tempRoot);
     assert.notEqual(missingBuildManifestPath.code, 0);
     assert.match(
       missingBuildManifestPath.stderr,
-      /client\/scripts\/build-desktop\.ps1 manifest files is missing required manifest path resources\/app\/client\/src\/store\.js/
+      /client\/scripts\/build-desktop\.ps1 manifest files is missing required manifest path resources\/app\/client\/src\/firstBisyncConflict\.js/
     );
 
     await writeFile(join(tempRoot, "client", "scripts", "build-desktop.ps1"), buildDesktop, "utf8");
     const packageSmoke = await readFile(join(tempRoot, "scripts", "smoke-client-package.mjs"), "utf8");
     await writeFile(
       join(tempRoot, "scripts", "smoke-client-package.mjs"),
-      packageSmoke.replace(/\r?\n\s*"app\/client\/src\/diagnosticBundle\.js",/, ""),
+      packageSmoke.replace(/\r?\n\s*"app\/client\/src\/syncRecovery\.js",/, ""),
       "utf8"
     );
     const missingSmokeManifestPath = await runReleaseAudit(tempRoot);
     assert.notEqual(missingSmokeManifestPath.code, 0);
     assert.match(
       missingSmokeManifestPath.stderr,
-      /scripts\/smoke-client-package\.mjs portable manifest files is missing required manifest path app\/client\/src\/diagnosticBundle\.js/
+      /scripts\/smoke-client-package\.mjs portable manifest files is missing required manifest path app\/client\/src\/syncRecovery\.js/
     );
 
     await writeFile(join(tempRoot, "scripts", "smoke-client-package.mjs"), packageSmoke, "utf8");
@@ -8539,34 +8841,30 @@ test("release audit fails when client local state corruption safeguards drift", 
       /client\/src\/clientServer\.js must mention async function importProfile\(body = \{\}\) \{\s+return withClientStateLock\(paths, async \(\) => \{\s+await ensureLocalStateWritable\(\);/
     );
 
-    await writeFile(
-      join(tempRoot, "client", "src", "clientServer.js"),
-      clientServer.replace(
-        "if (req.method === \"POST\" && url.pathname === \"/api/jobs/save\") {\n      const body = parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_JOB_SAVE, await readJson(req));\n      requireSyncCompatibilityConfirmation(body);\n      requireDestructiveSyncConfirmation(body);\n      requireManualScheduleForRiskySync(body.job || {});\n      const payload = await withClientStateLock(paths, async () => {\n        await ensureLocalStateWritable();",
-        "if (req.method === \"POST\" && url.pathname === \"/api/jobs/save\") {\n      const body = parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_JOB_SAVE, await readJson(req));\n      requireSyncCompatibilityConfirmation(body);\n      requireDestructiveSyncConfirmation(body);\n      requireManualScheduleForRiskySync(body.job || {});\n      const payload = await withClientStateLock(paths, async () => {"
-      ),
-      "utf8"
+    const missingJobsSaveGuardSource = clientServer.replace(
+      "const payload = await withClientStateLock(paths, async () => {\n        await ensureLocalStateWritable();",
+      "const payload = await withClientStateLock(paths, async () => {"
     );
+    assert.notEqual(missingJobsSaveGuardSource, clientServer, "job-save mutation fixture must remove the writable-state guard");
+    await writeFile(join(tempRoot, "client", "src", "clientServer.js"), missingJobsSaveGuardSource, "utf8");
     const missingJobsSaveGuard = await runReleaseAudit(tempRoot);
     assert.notEqual(missingJobsSaveGuard.code, 0);
     assert.match(
       missingJobsSaveGuard.stderr,
-      /client\/src\/clientServer\.js \/api\/jobs\/save must keep order for \/api\/jobs\/save must validate the shared protocol schema and confirmations before writing local state: await ensureLocalStateWritable\(\);/
+      /client\/src\/clientServer\.js \/api\/jobs\/save must keep order for Client job save must validate its request and confirmations before locking, then guard local state and vault before normalization, saving, and refreshing the scheduler: await ensureLocalStateWritable\(\);/
     );
 
-    await writeFile(
-      join(tempRoot, "client", "src", "clientServer.js"),
-      clientServer.replace(
-        "    syncRunInFlight = null;\n    syncRunInFlightJobFingerprint = \"\";",
-        "    syncRunInFlight = null;"
-      ),
-      "utf8"
+    const missingCleanupSource = clientServer.replace(
+      /(^[ \t]*)syncRunInFlight = null;\r?\n[ \t]*syncRunInFlightJobFingerprint = "";/m,
+      "$1syncRunInFlight = null;"
     );
+    assert.notEqual(missingCleanupSource, clientServer, "cleanup mutation fixture must remove job-fingerprint reset");
+    await writeFile(join(tempRoot, "client", "src", "clientServer.js"), missingCleanupSource, "utf8");
     const missingSingleFlightCleanup = await runReleaseAudit(tempRoot);
     assert.notEqual(missingSingleFlightCleanup.code, 0);
     assert.match(
       missingSingleFlightCleanup.stderr,
-      /client\/src\/clientServer\.js must mention syncRunInFlight = null;\s+syncRunInFlightJobFingerprint = ""/
+      /client\/src\/clientServer\.js runSync must clear the active promise and job fingerprint when the run settles/
     );
 
     await writeFile(
@@ -8639,9 +8937,14 @@ test("release audit fails when client local state corruption safeguards drift", 
 
     await writeFile(join(tempRoot, "tests", "client-http.test.js"), clientHttp, "utf8");
     const store = await readFile(join(tempRoot, "client", "src", "store.js"), "utf8");
+    const missingStoreErrorCodeSource = store.replaceAll(
+      'createHttpError("local_state_corrupt", 409',
+      'createHttpError("invalid_local_state", 409'
+    );
+    assert.notEqual(missingStoreErrorCodeSource, store, "store error-code mutation fixture must change every corrupt-state throw");
     await writeFile(
       join(tempRoot, "client", "src", "store.js"),
-      store.replace('createHttpError("local_state_corrupt", 409', 'createHttpError("invalid_local_state", 409'),
+      missingStoreErrorCodeSource,
       "utf8"
     );
     const missingStoreErrorCode = await runReleaseAudit(tempRoot);
@@ -8655,7 +8958,7 @@ test("release audit fails when client local state corruption safeguards drift", 
     const contract = await readFile(join(tempRoot, "docs", "INTERFACE_CONTRACT.md"), "utf8");
     await writeFile(
       join(tempRoot, "docs", "INTERFACE_CONTRACT.md"),
-      contract.replace("safeguards.localState", "safeguards.localFiles"),
+      contract.replaceAll("safeguards.localState", "safeguards.localFiles"),
       "utf8"
     );
     const missingContractSafeguard = await runReleaseAudit(tempRoot);
@@ -8668,8 +8971,8 @@ test("release audit fails when client local state corruption safeguards drift", 
     await writeFile(
       join(tempRoot, "docs", "INTERFACE_CONTRACT.md"),
       contract.replace(
-        "同一次 `/api/sync/run` 必须以归一化后的 job `localProxyPort` 为单一来源",
-        "同步运行可使用请求中的 localProxyPort"
+        "`runPlan` 用于本次同步执行",
+        "同步执行按当前请求独立构造计划"
       ),
       "utf8"
     );
@@ -8677,14 +8980,16 @@ test("release audit fails when client local state corruption safeguards drift", 
     assert.notEqual(missingProxyPortContract.code, 0);
     assert.match(
       missingProxyPortContract.stderr,
-      /docs\/INTERFACE_CONTRACT\.md must mention 同一次 `\/api\/sync\/run` 必须以归一化后的 job `localProxyPort` 为单一来源/
+      /docs\/INTERFACE_CONTRACT\.md must mention `runPlan` 用于本次同步执行/
     );
+    await writeFile(join(tempRoot, "docs", "INTERFACE_CONTRACT.md"), contract, "utf8");
 
+    const apiMatrix = await readFile(join(tempRoot, "docs", "API_MATRIX.md"), "utf8");
     await writeFile(
-      join(tempRoot, "docs", "INTERFACE_CONTRACT.md"),
-      contract.replace(
-        "同一次 `/api/sync/run` 必须只生成一个 normalized job 快照",
-        "同步运行可以重新读取 profile 默认值"
+      join(tempRoot, "docs", "API_MATRIX.md"),
+      apiMatrix.replace(
+        "计划 helper 独立重建/规范化 job 和授权",
+        "计划 helper 复用全链路唯一的 normalized snapshot"
       ),
       "utf8"
     );
@@ -8692,17 +8997,16 @@ test("release audit fails when client local state corruption safeguards drift", 
     assert.notEqual(missingRunPlanContract.code, 0);
     assert.match(
       missingRunPlanContract.stderr,
-      /docs\/INTERFACE_CONTRACT\.md must mention 同一次 `\/api\/sync\/run` 必须只生成一个 normalized job 快照/
+      /docs\/API_MATRIX\.md must mention 计划 helper 独立重建\/规范化 job 和授权/
     );
+    await writeFile(join(tempRoot, "docs", "API_MATRIX.md"), apiMatrix, "utf8");
 
-    await writeFile(
-      join(tempRoot, "client", "src", "clientServer.js"),
-      clientServer.replace(
-        "async function runSyncExclusive(runPlan, options = {}) {\n  const { normalizedJob, tunnelUri } = runPlan;",
-        "async function runSyncExclusive(runPlan, options = {}) {\n  const { normalizedJob, tunnelUri } = runPlan;\n  await readProfile(paths);"
-      ),
-      "utf8"
+    const runExclusiveReadsProfileSource = clientServer.replace(
+      "async function runSyncExclusive(runPlan, options = {}) {\n  const { normalizedJob, tunnelUri, dataTunnel = false } = runPlan;",
+      "async function runSyncExclusive(runPlan, options = {}) {\n  const { normalizedJob, tunnelUri, dataTunnel = false } = runPlan;\n  await readProfile(paths);"
     );
+    assert.notEqual(runExclusiveReadsProfileSource, clientServer, "runSyncExclusive mutation fixture must add a profile read");
+    await writeFile(join(tempRoot, "client", "src", "clientServer.js"), runExclusiveReadsProfileSource, "utf8");
     const runExclusiveReadsProfile = await runReleaseAudit(tempRoot);
     assert.notEqual(runExclusiveReadsProfile.code, 0);
     assert.match(
@@ -8779,7 +9083,7 @@ test("release audit fails when claim redeem recovery contract drifts", async () 
     await writeFile(
       join(tempRoot, "client", "src", "clientServer.js"),
       clientServer.replace(
-        "      await refreshJobsForProfile(profile);\n      await refreshScheduler();\n      await clearClaimRecovery(claimRecovery, paths);\n      await resetHeartbeatState();\n",
+        "      await refreshJobsForProfile(profile, previousProfile);\n      await refreshScheduler();\n      await clearClaimRecovery(claimRecovery, paths);\n      await resetHeartbeatState();\n",
         "      await clearClaimRecovery(claimRecovery, paths);\n      await refreshJobsForProfile(profile);\n      await refreshScheduler();\n"
       ),
       "utf8"
@@ -9238,16 +9542,16 @@ test("release audit fails when core stable error codes are missing from the inte
 
     await writeFile(join(tempRoot, "docs", "INTERFACE_CONTRACT.md"), contract, "utf8");
     const validContract = await runReleaseAudit(tempRoot);
-    assert.equal(validContract.code, 0);
+    assert.equal(validContract.code, 0, validContract.stderr);
     assert.match(validContract.stdout, /Release audit passed/);
 
     const errorCodeSchemaPath = join(tempRoot, "docs", "protocol", "schemas", "error-codes.json");
     const errorCodeSchema = await readFile(errorCodeSchemaPath, "utf8");
-    await writeFile(
-      errorCodeSchemaPath,
-      errorCodeSchema.replace('"code": "server_error", "status": 500', '"code": "server_error", "status": 418'),
-      "utf8"
-    );
+    const parsedErrorCodeSchema = JSON.parse(errorCodeSchema);
+    const serverErrorEntry = parsedErrorCodeSchema.stableHttpCodes.find((entry) => entry.code === "server_error");
+    assert.ok(serverErrorEntry, "error-code schema fixture must include server_error");
+    serverErrorEntry.status = 418;
+    await writeFile(errorCodeSchemaPath, `${JSON.stringify(parsedErrorCodeSchema, null, 2)}\n`, "utf8");
     const mismatchedSchemaStatus = await runReleaseAudit(tempRoot);
     assert.notEqual(mismatchedSchemaStatus.code, 0);
     assert.match(
@@ -10202,14 +10506,12 @@ test("release audit fails when the client local interface map drifts", async () 
     await writeReleaseAuditFixture(tempRoot);
 
     const matrix = await readFile(join(projectRoot, "docs", "API_MATRIX.md"), "utf8");
-    await writeFile(
-      join(tempRoot, "docs", "API_MATRIX.md"),
-      matrix.replace(
-        "| POST | `/api/jobs/save` | 客户端 UI、本地自动化 | 保存同步任务并刷新调度器；当最近一次成功 heartbeat 返回 `compatibility.policy.syncRun: \"warn\"` 时必须带 `confirmCompatibilityWarning: true` |",
-        "| POST | `/api/jobs/save-renamed` | 客户端 UI、本地自动化 | 保存同步任务并刷新调度器；当最近一次成功 heartbeat 返回 `compatibility.policy.syncRun: \"warn\"` 时必须带 `confirmCompatibilityWarning: true` |"
-      ),
-      "utf8"
+    const renamedMatrixRoute = matrix.replace(
+      "| POST | `/api/jobs/save` |",
+      "| POST | `/api/jobs/save-renamed` |"
     );
+    assert.notEqual(renamedMatrixRoute, matrix, "matrix mutation fixture must rename the implemented client route");
+    await writeFile(join(tempRoot, "docs", "API_MATRIX.md"), renamedMatrixRoute, "utf8");
     const missingMatrixRow = await runReleaseAudit(tempRoot);
     assert.notEqual(missingMatrixRow.code, 0);
     assert.match(
@@ -10278,7 +10580,7 @@ test("release audit fails when the client local interface map drifts", async () 
 
     await writeFile(join(tempRoot, "tests", "client-http.test.js"), clientHttpTest, "utf8");
     const validMap = await runReleaseAudit(tempRoot);
-    assert.equal(validMap.code, 0);
+    assert.equal(validMap.code, 0, validMap.stderr || validMap.stdout);
     assert.match(validMap.stdout, /Release audit passed/);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
@@ -10531,7 +10833,7 @@ export function auditFixtureRoute(req, url) {
       "utf8"
     );
     const validRoute = await runReleaseAudit(tempRoot);
-    assert.equal(validRoute.code, 0);
+    assert.equal(validRoute.code, 0, validRoute.stderr);
     assert.match(validRoute.stdout, /Release audit passed/);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
@@ -10612,7 +10914,7 @@ export function auditFixtureRoute(req, url) {
       "utf8"
     );
     const validRoute = await runReleaseAudit(tempRoot);
-    assert.equal(validRoute.code, 0);
+    assert.equal(validRoute.code, 0, validRoute.stderr);
     assert.match(validRoute.stdout, /Release audit passed/);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
@@ -10672,6 +10974,547 @@ test("buildClientSingboxConfig keeps proxy local and mux disabled", () => {
   assert.equal(config.outbounds[0].server, "pass.971223.xyz");
   assert.equal(config.outbounds[0].multiplex.enabled, false);
   assert.equal(config.outbounds[0].tls.reality.enabled, true);
+});
+
+test("sync engine selector freezes S3/WebDAV and isolates SFTP checksum semantics", () => {
+  const s3 = selectBisyncEngine("s3");
+  const webdav = selectBisyncEngine("webdav");
+  const sftp = selectBisyncEngine("sftp");
+
+  assert.deepEqual(s3, {
+    type: "rclone-bisync",
+    toolVersion: "1.74.3",
+    semanticsVersion: 1,
+    comparison: {
+      compare: ["size", "modtime"],
+      checkAccess: true,
+      checkFirst: true,
+      checkSync: true,
+      conflictLoser: "num",
+      conflictResolve: "none",
+      conflictSuffix: "conflict",
+      recover: false,
+      resilient: true
+    }
+  });
+  assert.equal(webdav, s3);
+  assert.deepEqual(sftp, {
+    type: "rclone-bisync",
+    toolVersion: "1.74.3",
+    semanticsVersion: 2,
+    comparison: {
+      compare: ["size", "modtime", "checksum"],
+      checksum: true,
+      checkAccess: true,
+      checkFirst: true,
+      checkSync: true,
+      conflictLoser: "num",
+      conflictResolve: "none",
+      conflictSuffix: "conflict",
+      recover: false,
+      resilient: true
+    },
+    reservedExcludes: [
+      "/.syncraft-root.json",
+      "/.syncraft-root.stage-*"
+    ]
+  });
+  assert.equal(Object.isFrozen(s3), true);
+  assert.equal(Object.isFrozen(s3.comparison), true);
+  assert.equal(Object.isFrozen(s3.comparison.compare), true);
+  assert.equal(Object.isFrozen(sftp), true);
+  assert.equal(Object.isFrozen(sftp.comparison), true);
+  assert.equal(Object.isFrozen(sftp.reservedExcludes), true);
+  assert.throws(
+    () => selectBisyncEngine("unknown"),
+    (error) => error.code === "sync_engine_unsupported"
+  );
+});
+
+test("S3 rclone preview remains byte-for-byte compatible with the pre-change golden", () => {
+  const preview = buildRclonePreview({
+    name: "projects",
+    localPath: "D:\\Projects",
+    direction: "bidirectional",
+    clientName: "pc-one",
+    remoteName: "legacy-alias",
+    storageBackend: "s3",
+    bucketName: "home-sync",
+    remotePrefix: "devices/pc-one/projects",
+    remoteFolder: "projects",
+    serverSpace: "device",
+    transfers: 4,
+    streams: 8,
+    checkers: 8,
+    accessKeyId: "company-pc1",
+    secretAccessKey: "secret-for-golden"
+  }, {
+    localProxyHost: "127.0.0.1",
+    localProxyPort: 18081,
+    rcloneBin: "C:\\App\\resources\\bin\\win32\\rclone.exe",
+    rcloneConfigPath: "C:\\App\\data\\rclone.conf",
+    bisyncWorkdir: "C:\\App\\data\\runtime\\bisync\\relation"
+  });
+
+  assert.deepEqual(preview, {
+    executable: "C:\\App\\resources\\bin\\win32\\rclone.exe",
+    args: [
+      "bisync",
+      "D:\\Projects",
+      "legacy-alias:home-sync/devices/pc-one/projects",
+      "-P",
+      "--stats=1s",
+      "--check-first",
+      "--transfers",
+      "4",
+      "--checkers",
+      "8",
+      "--multi-thread-streams",
+      "8",
+      "--multi-thread-cutoff",
+      "16M",
+      "--retries",
+      "3",
+      "--low-level-retries",
+      "10",
+      "--config",
+      "C:\\App\\data\\rclone.conf",
+      "--s3-upload-concurrency",
+      "8",
+      "--s3-chunk-size",
+      "16M",
+      "--check-access",
+      "--resilient",
+      "--conflict-resolve",
+      "none",
+      "--conflict-loser",
+      "num",
+      "--conflict-suffix",
+      "conflict",
+      "--workdir",
+      "C:\\App\\data\\runtime\\bisync\\relation"
+    ],
+    env: {
+      HTTP_PROXY: "socks5://127.0.0.1:18081",
+      HTTPS_PROXY: "socks5://127.0.0.1:18081",
+      ALL_PROXY: "socks5://127.0.0.1:18081",
+      NO_PROXY: "127.0.0.1,localhost",
+      RCLONE_CONFIG_LEGACY_ALIAS_SECRET_ACCESS_KEY: "secret-for-golden"
+    },
+    displayCommand: [
+      "$env:HTTP_PROXY=\"socks5://127.0.0.1:18081\"",
+      "$env:HTTPS_PROXY=\"socks5://127.0.0.1:18081\"",
+      "$env:ALL_PROXY=\"socks5://127.0.0.1:18081\"",
+      "$env:NO_PROXY=\"127.0.0.1,localhost\"",
+      "$env:RCLONE_CONFIG_LEGACY_ALIAS_SECRET_ACCESS_KEY=\"se****en\"",
+      "C:\\App\\resources\\bin\\win32\\rclone.exe bisync \"D:\\Projects\" legacy-alias:home-sync/devices/pc-one/projects -P --stats=1s --check-first --transfers 4 --checkers 8 --multi-thread-streams 8 --multi-thread-cutoff 16M --retries 3 --low-level-retries 10 --config \"C:\\App\\data\\rclone.conf\" --s3-upload-concurrency 8 --s3-chunk-size 16M --check-access --resilient --conflict-resolve none --conflict-loser num --conflict-suffix conflict --workdir \"C:\\App\\data\\runtime\\bisync\\relation\""
+    ].join("\n"),
+    remoteConfig: {
+      executable: "C:\\App\\resources\\bin\\win32\\rclone.exe",
+      args: [
+        "config",
+        "create",
+        "legacy-alias",
+        "s3",
+        "provider",
+        "Minio",
+        "env_auth",
+        "false",
+        "access_key_id",
+        "company-pc1",
+        "endpoint",
+        "http://minio:9000",
+        "region",
+        "us-east-1",
+        "--config",
+        "C:\\App\\data\\rclone.conf"
+      ],
+      env: {
+        RCLONE_CONFIG_LEGACY_ALIAS_SECRET_ACCESS_KEY: "secret-for-golden"
+      },
+      displayCommand: [
+        "$env:RCLONE_CONFIG_LEGACY_ALIAS_SECRET_ACCESS_KEY=\"se****en\"",
+        "C:\\App\\resources\\bin\\win32\\rclone.exe config create legacy-alias s3 provider Minio env_auth false access_key_id company-pc1 endpoint http://minio:9000 region us-east-1 --config \"C:\\App\\data\\rclone.conf\""
+      ].join("\n")
+    },
+    storage: {
+      storageBackend: "s3",
+      provider: "Minio",
+      remoteName: "legacy-alias",
+      bucketName: "home-sync",
+      clientName: "pc-one",
+      prefix: "devices/pc-one/projects",
+      remotePath: "legacy-alias:home-sync/devices/pc-one/projects",
+      endpoint: "http://minio:9000",
+      region: "us-east-1"
+    },
+    remotePath: "legacy-alias:home-sync/devices/pc-one/projects",
+    safety: {
+      usesProcessScopedProxy: true,
+      mutatesSystemProxy: false,
+      mutatesRoutes: false,
+      tunRequired: false,
+      muxRequired: false,
+      deleteProtection: true
+    }
+  });
+});
+
+test("bisync recovery backup flags require a relation-bound preflight receipt", () => {
+  const job = {
+    localPath: "D:\\Projects",
+    direction: "bidirectional",
+    remoteName: "remote",
+    storageBackend: "s3",
+    bucketName: "bucket",
+    remotePrefix: "folder",
+    syncRelation: {
+      relationId: "relation_1",
+      baselineId: "baseline_1",
+      rootId: "root_0123456789abcdef"
+    }
+  };
+  const options = { rcloneBin: "rclone" };
+  const withoutReceipt = buildRclonePreview(job, options);
+  assert.equal(withoutReceipt.args.includes("--backup-dir1"), false);
+  assert.equal(withoutReceipt.args.includes("--backup-dir2"), false);
+
+  const namespace = ".syncraft-recovery/relation_1";
+  const runId = "54d8894a-5f3f-49c8-bdfb-8bdc3ad2a16d";
+  const backupDir1 = join(job.localPath, namespace, "runs", runId, "path1");
+  const backupDir2 = `remote:bucket/folder/${namespace}/runs/${runId}/path2`;
+  const receipt = {
+    type: "bisync-recovery-preflight",
+    version: 1,
+    issuer: "sync-recovery-preflight",
+    status: "ready",
+    preflightKind: "existing-relation-migration",
+    migrationStatus: "recorded",
+    relationId: "relation_1",
+    baselineId: "baseline_1",
+    rootId: "root_0123456789abcdef",
+    runId,
+    namespace,
+    namespaceWasEmpty: true,
+    runNamespaceWasEmpty: true,
+    priorListingNamespaceWasEmpty: true,
+    migrationRecordId: "migration-1",
+    backupDir1,
+    backupDir2,
+    excludePattern: `/${namespace}/**`
+  };
+  const withReceipt = buildRclonePreview(job, { ...options, recoveryPreflight: receipt });
+  assert.equal(withReceipt.args[withReceipt.args.indexOf("--backup-dir1") + 1], backupDir1);
+  assert.equal(withReceipt.args[withReceipt.args.indexOf("--backup-dir2") + 1], backupDir2);
+  assert.ok(withReceipt.args.includes("--exclude"));
+  assert.ok(withReceipt.args.includes(receipt.excludePattern));
+  assert.equal(withReceipt.args.includes("--resync"), false);
+
+  assert.throws(
+    () => buildRclonePreview(job, {
+      ...options,
+      recoveryPreflight: { ...receipt, priorListingNamespaceWasEmpty: false }
+    }),
+    /ready, relation-bound preflight receipt/
+  );
+  assert.throws(
+    () => buildRclonePreview(job, {
+      ...options,
+      recoveryPreflight: { ...receipt, backupDir2: "remote:bucket/other/path2" }
+    }),
+    /paths do not match/
+  );
+});
+
+test("SFTP rclone preview uses explicit transport, checksum, and reserved-root filters", () => {
+  const transport = {
+    host: "sync.example.test",
+    port: 2222,
+    user: "sync-device",
+    socksProxy: "127.0.0.1:18081",
+    knownHostsFile: "C:\\App\\data\\known_hosts",
+    keyFile: "C:\\App\\data\\sync-device.key",
+    hostKeyFingerprint: `SHA256:${"A".repeat(43)}`,
+    credentialRevision: "cred_sftp_1"
+  };
+  const job = {
+    name: "projects",
+    localPath: "D:\\Projects",
+    direction: "bidirectional",
+    clientName: "pc-one",
+    remoteName: "sftp-device",
+    storageBackend: "sftp",
+    rootPath: "shares/projects",
+    syncRelation: { rootId: "root_0123456789abcdef" },
+    exclude: ["**/cache/**"],
+    transfers: 4,
+    streams: 8,
+    checkers: 8
+  };
+  const preview = buildRclonePreview(job, {
+    localProxyPort: 18081,
+    rcloneBin: "C:\\App\\resources\\bin\\win32\\rclone.exe",
+    rcloneConfigPath: "C:\\App\\data\\rclone.conf",
+    bisyncWorkdir: "C:\\App\\data\\runtime\\bisync\\sftp",
+    sftpTransport: transport
+  });
+
+  assert.deepEqual(preview.args.slice(0, 3), [
+    "bisync",
+    "D:\\Projects",
+    "sftp-device:shares/projects"
+  ]);
+  assert.ok(preview.args.includes("--check-access"));
+  assert.ok(preview.args.includes("--resilient"));
+  assert.equal(preview.args[preview.args.indexOf("--conflict-resolve") + 1], "none");
+  assert.equal(preview.args[preview.args.indexOf("--conflict-loser") + 1], "num");
+  assert.equal(preview.args[preview.args.indexOf("--conflict-suffix") + 1], "conflict");
+  assert.equal(
+    preview.args[preview.args.indexOf("--check-filename") + 1],
+    ".syncraft-access-root_0123456789abcdef"
+  );
+  assert.equal(preview.args[preview.args.indexOf("--compare") + 1], "size,modtime,checksum");
+  assert.ok(preview.args.includes("--checksum"));
+  assert.equal(
+    preview.args[preview.args.indexOf("--sftp-socks-proxy") + 1],
+    "127.0.0.1:18081"
+  );
+  assert.equal(preview.args.includes("--s3-upload-concurrency"), false);
+  assert.equal(preview.args.includes("--s3-chunk-size"), false);
+  assert.equal(preview.args.includes("--force"), false);
+  assert.equal(preview.args.includes("--resync"), false);
+  assert.deepEqual(
+    preview.args.slice(preview.args.indexOf("--exclude")),
+    [
+      "--exclude", "**/cache/**",
+      "--exclude", "/.syncraft-root.json",
+      "--exclude", "/.syncraft-root.stage-*"
+    ]
+  );
+  assert.deepEqual(preview.remoteConfig.args, [
+    "config",
+    "create",
+    "sftp-device",
+    "sftp",
+    "host",
+    "sync.example.test",
+    "port",
+    "2222",
+    "user",
+    "sync-device",
+    "key_file",
+    "C:\\App\\data\\sync-device.key",
+    "known_hosts_file",
+    "C:\\App\\data\\known_hosts",
+    "socks_proxy",
+    "127.0.0.1:18081",
+    "key_use_agent",
+    "false",
+    "ask_password",
+    "false",
+    "--config",
+    "C:\\App\\data\\rclone.conf"
+  ]);
+  assert.equal(preview.env.RCLONE_CONFIG_SFTP_DEVICE_SOCKS_PROXY, "127.0.0.1:18081");
+  assert.equal(
+    preview.env.RCLONE_CONFIG_SFTP_DEVICE_KNOWN_HOSTS_FILE,
+    "C:\\App\\data\\known_hosts"
+  );
+  assert.equal(preview.env.RCLONE_CONFIG_SFTP_DEVICE_KEY_USE_AGENT, "false");
+  assert.equal(preview.env.RCLONE_CONFIG_SFTP_DEVICE_ASK_PASSWORD, "false");
+  assert.equal(preview.remoteConfig.env.RCLONE_CONFIG_SFTP_DEVICE_SOCKS_PROXY, "127.0.0.1:18081");
+  assert.equal(preview.safety.usesProcessScopedProxy, false);
+  assert.doesNotMatch(preview.displayCommand, /--s3-|--force|--resync|key_pem|key_file_pass|private_key|passphrase|\bpass\b/i);
+
+  const virtualRootPreview = buildRclonePreview({ ...job, rootPath: "" }, {
+    localProxyPort: 18081,
+    rcloneBin: "C:\\App\\resources\\bin\\win32\\rclone.exe",
+    rcloneConfigPath: "C:\\App\\data\\rclone.conf",
+    bisyncWorkdir: "C:\\App\\data\\runtime\\bisync\\sftp",
+    sftpTransport: transport
+  });
+  assert.equal(virtualRootPreview.storage.rootPath, "");
+  assert.equal(virtualRootPreview.remotePath, "sftp-device:");
+  assert.deepEqual(virtualRootPreview.args.slice(0, 3), [
+    "bisync",
+    "D:\\Projects",
+    "sftp-device:"
+  ]);
+
+  const ipv6Preview = buildRclonePreview(job, {
+    localProxyPort: 18081,
+    rcloneBin: "C:\\App\\resources\\bin\\win32\\rclone.exe",
+    rcloneConfigPath: "C:\\App\\data\\rclone.conf",
+    bisyncWorkdir: "C:\\App\\data\\runtime\\bisync\\sftp",
+    sftpTransport: { ...transport, socksProxy: "[::1]:18081" }
+  });
+  assert.equal(ipv6Preview.env.RCLONE_CONFIG_SFTP_DEVICE_SOCKS_PROXY, "[::1]:18081");
+  assert.equal(
+    ipv6Preview.args[ipv6Preview.args.indexOf("--sftp-socks-proxy") + 1],
+    "[::1]:18081"
+  );
+  assert.equal(
+    ipv6Preview.remoteConfig.args[ipv6Preview.remoteConfig.args.indexOf("socks_proxy") + 1],
+    "[::1]:18081"
+  );
+});
+
+test("storage backend selection keeps strict S3 values and a fixed unknown-backend error", () => {
+  const defaultPreview = buildRclonePreview({
+    localPath: "D:\\Projects",
+    direction: "upload"
+  });
+  assert.equal(defaultPreview.storage.storageBackend, "s3");
+
+  for (const storageBackend of ["S3", " s3 ", "SFTP", " sftp ", "webdav", "unknown-backend"]) {
+    assert.throws(
+      () => buildRclonePreview({ storageBackend }),
+      (error) => (
+        error.message === "Unsupported storage backend"
+        && !error.message.includes(storageBackend)
+      ),
+      storageBackend
+    );
+  }
+});
+
+test("SFTP transport validation rejects ambiguous paths, proxies, pins, and secret material", () => {
+  const transport = {
+    host: "sync.example.test",
+    port: 2222,
+    user: "sync-device",
+    socksProxy: "127.0.0.1:18081",
+    knownHostsFile: "C:\\App\\data\\known_hosts",
+    keyFile: "C:\\App\\data\\sync-device.key",
+    hostKeyFingerprint: `SHA256:${"A".repeat(43)}`,
+    credentialRevision: "cred_sftp_1"
+  };
+  const job = {
+    localPath: "D:\\Projects",
+    direction: "bidirectional",
+    remoteName: "sftp-device",
+    storageBackend: "sftp",
+    rootPath: "shares/projects"
+  };
+
+  const normalized = normalizeSftpTransport(transport);
+  assert.equal(Object.isFrozen(normalized), true);
+  assert.deepEqual(normalized, transport);
+
+  for (const field of Object.keys(transport)) {
+    const incomplete = { ...transport };
+    delete incomplete[field];
+    assert.throws(
+      () => buildRclonePreview(job, { sftpTransport: incomplete }),
+      /SFTP transport options/
+    );
+  }
+  for (const [name, override] of [
+    ["proxy URI", { socksProxy: "socks5://127.0.0.1:18081" }],
+    ["non-loopback proxy", { socksProxy: "10.0.0.2:18081" }],
+    ["relative known_hosts", { knownHostsFile: "data/known_hosts" }],
+    ["relative key", { keyFile: "data/client.key" }],
+    ["newline key path", { keyFile: "C:\\App\\data\\client.key\nignored" }],
+    ["bad fingerprint", { hostKeyFingerprint: "SHA256:not-a-fingerprint" }]
+  ]) {
+    assert.throws(
+      () => buildRclonePreview(job, { sftpTransport: { ...transport, ...override } }),
+      /SFTP/,
+      name
+    );
+  }
+
+  for (const rootPath of [
+    "/home/sync",
+    "C:\\home\\sync",
+    "../sync",
+    ".",
+    "shares/./projects",
+    "shares//projects",
+    "shares/projects/",
+    " ",
+    "shares/\nprojects"
+  ]) {
+    assert.throws(
+      () => buildRclonePreview({ ...job, rootPath }, { sftpTransport: transport }),
+      (error) => error.message === "SFTP rootPath must be a canonical relative virtual path",
+      rootPath
+    );
+  }
+  for (const rootPath of [undefined, null, false, 0, [], {}]) {
+    assert.throws(
+      () => buildRclonePreview({ ...job, rootPath }, { sftpTransport: transport }),
+      (error) => error.message === "SFTP rootPath must be a canonical relative virtual path"
+    );
+  }
+  const missingRootPath = { ...job };
+  delete missingRootPath.rootPath;
+  assert.throws(
+    () => buildRclonePreview(missingRootPath, { sftpTransport: transport }),
+    (error) => error.message === "SFTP rootPath must be a canonical relative virtual path"
+  );
+  assert.throws(
+    () => buildRclonePreview({ ...job, remotePath: "sftp-device:other/root" }, { sftpTransport: transport }),
+    /rootPath/
+  );
+  assert.throws(
+    () => buildRclonePreview({ ...job, remotePrefix: "other/root" }, { sftpTransport: transport }),
+    /rootPath/
+  );
+
+  const rawSecret = "SFTP_RAW_SECRET_MUST_NOT_ECHO";
+  for (const payload of [
+    { job: { ...job, password: rawSecret }, options: { sftpTransport: transport } },
+    { job, options: { sftpTransport: { ...transport, key_pem: rawSecret } } },
+    { job: { ...job, privateKey: rawSecret }, options: { sftpTransport: transport } }
+  ]) {
+    assert.throws(
+      () => buildRclonePreview(payload.job, payload.options),
+      (error) => (
+        error.message === "SFTP secret material must stay outside jobs and transport options"
+        && !error.message.includes(rawSecret)
+      )
+    );
+  }
+
+  const pemSentinel = "SFTP_PEM_VALUE_MUST_NOT_ECHO";
+  for (const label of [
+    "PRIVATE KEY",
+    "RSA PRIVATE KEY",
+    "EC PRIVATE KEY",
+    "OPENSSH PRIVATE KEY",
+    "ENCRYPTED PRIVATE KEY"
+  ]) {
+    const privateKeyPem = `-----BEGIN ${label}-----\n${pemSentinel}\n-----END ${label}-----`;
+    for (const payload of [
+      {
+        job: { ...job, notes: { exportedCredential: privateKeyPem } },
+        options: { sftpTransport: transport }
+      },
+      {
+        job,
+        options: { sftpTransport: transport, extra: { archivedNotes: [privateKeyPem] } }
+      },
+      {
+        job: { ...job, clientName: privateKeyPem },
+        options: { sftpTransport: transport }
+      },
+      {
+        job: { ...job, localPath: privateKeyPem },
+        options: { sftpTransport: transport }
+      }
+    ]) {
+      assert.throws(
+        () => buildRclonePreview(payload.job, payload.options),
+        (error) => (
+          error.message === "SFTP secret material must stay outside jobs and transport options"
+          && !error.message.includes(pemSentinel)
+          && !error.message.includes("PRIVATE KEY")
+        ),
+        label
+      );
+    }
+  }
 });
 
 test("buildRclonePreview injects process-scoped proxy env and multi-thread flags", () => {
@@ -11044,6 +11887,16 @@ test("normalizeHttpError maps product-facing error codes", () => {
     status: 418,
     code: "claim_redeem_failed",
     message: "Remote refused claim redeem"
+  });
+
+  assert.deepEqual(normalizeHttpError(createHttpError(
+    "sync_relation_migration_required",
+    409,
+    "This sync relation needs review"
+  ), "client_error"), {
+    status: 409,
+    code: "sync_relation_migration_required",
+    message: "This sync relation needs review"
   });
 
   assert.deepEqual(normalizeHttpError({ code: "made_up_internal_code", status: 418, message: "Internal detail" }, "server_error"), {
@@ -13186,6 +14039,14 @@ bool IsSfscClientHealth(string body) {
   await writeFile(join(appRoot, "client", "src", "store.js"), fakeClientStoreSource(), "utf8");
 
   for (const path of [
+    join(appRoot, "client", "src", "enrollmentSession.js"),
+    join(appRoot, "client", "src", "enrollmentDiagnostics.js"),
+    join(appRoot, "client", "src", "sftpAccessMarker.js"),
+    join(appRoot, "client", "src", "connectionRepair.js"),
+    join(appRoot, "client", "src", "firstBisyncConflict.js"),
+    join(appRoot, "client", "src", "syncRecovery.js"),
+    join(appRoot, "src", "core", "dataAuthorization.js"),
+    join(appRoot, "client", "src", "bootstrapTransport.js"),
     join(appRoot, "client", "src", "diagnosticBundle.js"),
     join(appRoot, "client", "src", "processRunner.js"),
     join(appRoot, "client", "src", "rcloneStats.js"),
@@ -13194,6 +14055,7 @@ bool IsSfscClientHealth(string body) {
     join(appRoot, "client", "public", "app.js"),
     join(appRoot, "client", "public", "styles.css"),
     join(appRoot, "src", "core", "index.js"),
+    join(appRoot, "src", "core", "channelImportCode.js"),
     join(appRoot, "docs", "INTERFACE_CONTRACT.md"),
     join(appRoot, "docs", "API_MATRIX.md"),
     join(appRoot, "docs", "DEPLOYMENT_AND_MIGRATION_GUIDE.md"),
@@ -13256,6 +14118,14 @@ bool IsSfscClientHealth(string body) {
   await writeFile(join(appRoot, "client", "src", "store.js"), fakeClientStoreSource(), "utf8");
 
   for (const path of [
+    join(appRoot, "client", "src", "enrollmentSession.js"),
+    join(appRoot, "client", "src", "enrollmentDiagnostics.js"),
+    join(appRoot, "client", "src", "sftpAccessMarker.js"),
+    join(appRoot, "client", "src", "connectionRepair.js"),
+    join(appRoot, "client", "src", "firstBisyncConflict.js"),
+    join(appRoot, "client", "src", "syncRecovery.js"),
+    join(appRoot, "src", "core", "dataAuthorization.js"),
+    join(appRoot, "client", "src", "bootstrapTransport.js"),
     join(appRoot, "client", "src", "diagnosticBundle.js"),
     join(appRoot, "client", "src", "processRunner.js"),
     join(appRoot, "client", "src", "rcloneStats.js"),
@@ -13264,6 +14134,7 @@ bool IsSfscClientHealth(string body) {
     join(appRoot, "client", "public", "app.js"),
     join(appRoot, "client", "public", "styles.css"),
     join(appRoot, "src", "core", "index.js"),
+    join(appRoot, "src", "core", "channelImportCode.js"),
     join(docsRoot, "INTERFACE_CONTRACT.md"),
     join(docsRoot, "API_MATRIX.md"),
     join(docsRoot, "DEPLOYMENT_AND_MIGRATION_GUIDE.md"),
@@ -13320,6 +14191,14 @@ async function writeFakeReleaseManifest(packageRoot, version, hashOverrides = {}
     "app/client/src/clientServer.js",
     "app/client/src/paths.js",
     "app/client/src/store.js",
+    "app/client/src/enrollmentSession.js",
+    "app/client/src/enrollmentDiagnostics.js",
+    "app/client/src/sftpAccessMarker.js",
+    "app/client/src/connectionRepair.js",
+    "app/client/src/firstBisyncConflict.js",
+    "app/client/src/syncRecovery.js",
+    "app/src/core/dataAuthorization.js",
+    "app/client/src/bootstrapTransport.js",
     "app/client/src/diagnosticBundle.js",
     "app/client/src/processRunner.js",
     "app/client/src/rcloneStats.js",
@@ -13330,6 +14209,7 @@ async function writeFakeReleaseManifest(packageRoot, version, hashOverrides = {}
     "app/client/public/app.js",
     "app/client/public/styles.css",
     "app/src/core/index.js",
+    "app/src/core/channelImportCode.js",
     "resources/app/docs/INTERFACE_CONTRACT.md",
     "resources/app/docs/API_MATRIX.md",
     "resources/app/docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md",
@@ -13348,6 +14228,14 @@ async function writeFakeReleaseManifest(packageRoot, version, hashOverrides = {}
     "resources/app/client/src/clientServer.js",
     "resources/app/client/src/paths.js",
     "resources/app/client/src/store.js",
+    "resources/app/client/src/enrollmentSession.js",
+    "resources/app/client/src/enrollmentDiagnostics.js",
+    "resources/app/client/src/sftpAccessMarker.js",
+    "resources/app/client/src/connectionRepair.js",
+    "resources/app/client/src/firstBisyncConflict.js",
+    "resources/app/client/src/syncRecovery.js",
+    "resources/app/src/core/dataAuthorization.js",
+    "resources/app/client/src/bootstrapTransport.js",
     "resources/app/client/src/diagnosticBundle.js",
     "resources/app/client/src/processRunner.js",
     "resources/app/client/src/rcloneStats.js",
@@ -13358,6 +14246,7 @@ async function writeFakeReleaseManifest(packageRoot, version, hashOverrides = {}
     "resources/app/client/public/app.js",
     "resources/app/client/public/styles.css",
     "resources/app/src/core/index.js",
+    "resources/app/src/core/channelImportCode.js",
     "resources/app/docs/INTERFACE_CONTRACT.md",
     "resources/app/docs/API_MATRIX.md",
     "resources/app/docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md",
@@ -13399,6 +14288,14 @@ function fakeClientZipContent(packageName, options = {}) {
     `${packageName}/app/client/src/clientServer.js`,
     `${packageName}/app/client/src/paths.js`,
     `${packageName}/app/client/src/store.js`,
+    `${packageName}/app/client/src/enrollmentSession.js`,
+    `${packageName}/app/client/src/enrollmentDiagnostics.js`,
+    `${packageName}/app/client/src/sftpAccessMarker.js`,
+    `${packageName}/app/client/src/connectionRepair.js`,
+    `${packageName}/app/client/src/firstBisyncConflict.js`,
+    `${packageName}/app/client/src/syncRecovery.js`,
+    `${packageName}/app/src/core/dataAuthorization.js`,
+    `${packageName}/app/client/src/bootstrapTransport.js`,
     `${packageName}/app/client/src/diagnosticBundle.js`,
     `${packageName}/app/client/src/processRunner.js`,
     `${packageName}/app/client/src/rcloneStats.js`,
@@ -13409,6 +14306,7 @@ function fakeClientZipContent(packageName, options = {}) {
     `${packageName}/app/client/public/app.js`,
     `${packageName}/app/client/public/styles.css`,
     `${packageName}/app/src/core/index.js`,
+    `${packageName}/app/src/core/channelImportCode.js`,
     `${packageName}/runtime/node.exe`,
     `${packageName}/resources/app/docs/INTERFACE_CONTRACT.md`,
     `${packageName}/resources/app/docs/API_MATRIX.md`,
@@ -13429,6 +14327,14 @@ function fakeClientZipContent(packageName, options = {}) {
     `${packageName}/resources/app/client/src/clientServer.js`,
     `${packageName}/resources/app/client/src/paths.js`,
     `${packageName}/resources/app/client/src/store.js`,
+    `${packageName}/resources/app/client/src/enrollmentSession.js`,
+    `${packageName}/resources/app/client/src/enrollmentDiagnostics.js`,
+    `${packageName}/resources/app/client/src/sftpAccessMarker.js`,
+    `${packageName}/resources/app/client/src/connectionRepair.js`,
+    `${packageName}/resources/app/client/src/firstBisyncConflict.js`,
+    `${packageName}/resources/app/client/src/syncRecovery.js`,
+    `${packageName}/resources/app/src/core/dataAuthorization.js`,
+    `${packageName}/resources/app/client/src/bootstrapTransport.js`,
     `${packageName}/resources/app/client/src/diagnosticBundle.js`,
     `${packageName}/resources/app/client/src/processRunner.js`,
     `${packageName}/resources/app/client/src/rcloneStats.js`,
@@ -13439,6 +14345,7 @@ function fakeClientZipContent(packageName, options = {}) {
     `${packageName}/resources/app/client/public/app.js`,
     `${packageName}/resources/app/client/public/styles.css`,
     `${packageName}/resources/app/src/core/index.js`,
+    `${packageName}/resources/app/src/core/channelImportCode.js`,
     `${packageName}/resources/app/docs/INTERFACE_CONTRACT.md`,
     `${packageName}/resources/app/docs/API_MATRIX.md`,
     `${packageName}/resources/app/docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md`,
@@ -13543,7 +14450,8 @@ function makeZipWithEntries(entries) {
     }
     return {
       name: entry.name,
-      data: Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(String(entry.data || ""), "utf8")
+      data: Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(String(entry.data || ""), "utf8"),
+      unixMode: entry.unixMode
     };
   });
   for (const entry of normalizedEntries) {
@@ -13564,7 +14472,7 @@ function makeZipWithEntries(entries) {
 
     const centralHeader = Buffer.alloc(46);
     centralHeader.writeUInt32LE(0x02014b50, 0);
-    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(entry.unixMode ? (3 << 8) | 20 : 20, 4);
     centralHeader.writeUInt16LE(20, 6);
     centralHeader.writeUInt16LE(0, 8);
     centralHeader.writeUInt16LE(0, 10);
@@ -13577,7 +14485,7 @@ function makeZipWithEntries(entries) {
     centralHeader.writeUInt16LE(0, 32);
     centralHeader.writeUInt16LE(0, 34);
     centralHeader.writeUInt16LE(0, 36);
-    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(entry.unixMode ? (((entry.unixMode << 16) >>> 0)) : 0, 38);
     centralHeader.writeUInt32LE(offset, 42);
     centralParts.push(centralHeader, name);
 
@@ -13709,7 +14617,7 @@ async function writeReleaseAuditFixture(tempRoot) {
     "utf8"
   );
   await mkdir(join(tempRoot, "scripts", "lib"), { recursive: true });
-  for (const lib of ["composeAudit.mjs", "releaseSignature.mjs"]) {
+  for (const lib of ["composeAudit.mjs", "releaseSignature.mjs", "release-zip.mjs"]) {
     await writeFile(
       join(tempRoot, "scripts", "lib", lib),
       await readFile(join(projectRoot, "scripts", "lib", lib), "utf8"),
@@ -13764,7 +14672,7 @@ async function writeFakeReleaseBundleZip(tempRoot, bundleName, options = {}) {
     size: Buffer.byteLength(body),
     sha256: createHash("sha256").update(body).digest("hex")
   }));
-  const manifest = JSON.stringify({
+  const manifest = {
     schemaVersion: 1,
     app: "singbox-folder-sync",
     type: "release-bundle-manifest",
@@ -13803,9 +14711,9 @@ async function writeFakeReleaseBundleZip(tempRoot, bundleName, options = {}) {
       bundledReports
     },
     artifacts: []
-  }, null, 2);
+  };
   const fileBodies = {
-    "release-bundle-manifest.json": manifest,
+    "release-bundle-manifest.json": "",
     "scripts/lib/runtimeContracts.mjs": "export function assertRuntimeDiagnosticsContract() {}\n",
     "scripts/lib/reportSecrets.mjs": "export function assertReportSafe() {}\nexport function writeJsonReportSync() {}\n",
     "scripts/lib/report-secrets.ps1": "function Assert-ReportTextSafe {}\nfunction Write-SafeJsonReport {}\n",
@@ -13867,6 +14775,24 @@ async function writeFakeReleaseBundleZip(tempRoot, bundleName, options = {}) {
     "docs/PILOT_SUPPORT_GUIDE.md": "5-10 人小范围试点支持指南\n支持入口\n首问脚本\n分流处理\n升级、回滚、暂停\n支持包内容\n关闭标准\n不得写入真实 SyncKey、sfsc URI、VLESS URI、token、S3 secret 或 SSH key\n",
     "docs/INTERFACE_CONTRACT.md": "interface contract\n",
     "docs/API_MATRIX.md": "api matrix\n",
+    "server/DEPLOYMENT.md": "directory adapter deployment guide\n",
+    "server/appliance.Dockerfile": "FROM node:24\n",
+    "server/.env.directory.example": "SFSC_ADMIN_TOKEN=change-this-admin-token\n",
+    "server/install-n1-appliance.sh": "#!/bin/sh\nexit 0\n",
+    "server/install-n1-directory-appliance.sh": "#!/bin/sh\nexit 0\n",
+    "server/runtime/sfsc-runtime-launcher": "#!/bin/sh\nexit 0\n",
+    "server/runtime/native/linux-arm64/manifest.json": "{}\n",
+    "server/runtime/native/linux-arm64/relation/manifest.json": "{}\n",
+    "server/runtime/native/linux-arm64/relation/sfsc-root-guard": "fixture native executable\n",
+    "server/rootfs/etc/s6-overlay/s6-rc.d/sfsc-node/run": "#!/bin/sh\nexit 0\n",
+    "server/rootfs/etc/s6-overlay/s6-rc.d/sfsc-node/finish": "#!/bin/sh\nexit 0\n",
+    "native/sfsc-sftp-service/go.mod": "module fixture\n",
+    "native/sfsc-relation-supervisor/main_linux.go": "package main\n",
+    "native/sfsc-root-guard/main_linux.go": "package main\n",
+    "server/systemd/sfsc-appliance-directory.service": "[Service]\nExecStart=/usr/local/bin/sfsc-appliance-directory\n",
+    "server/systemd/sfsc-appliance.service": "[Service]\nExecStart=/usr/bin/python3 /opt/sfsc-test/server/runtime/sfsc-runtime-launcher\n",
+    "server/systemd/sfsc-minio.service": "[Service]\nExecStart=/usr/bin/docker run minio\n",
+    "server/systemd/sfsc-directory.env.example": "SFSC_ADMIN_TOKEN=change-this-admin-token\n",
     "release-artifacts/windows-client/SyncraftDesktop.zip": "desktop zip\n",
     "release-artifacts/windows-client/SyncraftDesktop.zip.sha256": `${"a".repeat(64)}  SyncraftDesktop.zip\n`,
     "release-artifacts/windows-client/SyncraftDesktop.release-manifest.json": packageManifest("SyncraftDesktop"),
@@ -13875,11 +14801,21 @@ async function writeFakeReleaseBundleZip(tempRoot, bundleName, options = {}) {
     "release-artifacts/windows-client/SyncraftClient.release-manifest.json": packageManifest("SyncraftClient"),
     ...reportBodies
   };
+  manifest.sourceFingerprint.inputs = Object.entries(fileBodies)
+    .filter(([name]) => name !== "release-bundle-manifest.json")
+    .map(([path, body]) => ({
+      path,
+      size: Buffer.byteLength(body),
+      sha256: createHash("sha256").update(body).digest("hex")
+    }));
+  manifest.sourceFingerprint.fileCount = manifest.sourceFingerprint.inputs.length;
+  fileBodies["release-bundle-manifest.json"] = JSON.stringify(manifest, null, 2);
   const entries = Object.entries(fileBodies)
     .filter(([name]) => name !== options.omit)
     .map(([name, body]) => ({
       name: `${bundleName}/${name}`,
-      data: name === options.corruptReport ? `${body}\ncorrupted after manifest\n` : body
+      data: name === options.corruptReport ? `${body}\ncorrupted after manifest\n` : body,
+      unixMode: name === "server/runtime/sfsc-runtime-launcher" ? 0o100755 : undefined
     }));
   const zipContent = makeZipWithEntries(entries);
   const bundleDir = join(tempRoot, "dist", "release-bundles");
@@ -13945,16 +14881,34 @@ async function writeReleaseBundleFixture(tempRoot) {
     "client/resources/bin/win32/README.md": "download binaries\n",
     "client/data/profile.json": "{\"secret\":\"must not ship\"}\n",
     "server/README.md": "server\n",
+    "server/DEPLOYMENT.md": "directory adapter deployment guide\n",
+    "server/Caddyfile": "# fixture\n",
+    "server/sfscctl": "#!/bin/sh\nexit 0\n",
     "server/Dockerfile": "FROM node:24\n",
+    "server/appliance.Dockerfile": "FROM node:24\n",
     "server/sing-box.Dockerfile": "ARG SING_BOX_IMAGE_TAG=v1.13.14\nFROM ghcr.io/sagernet/sing-box:${SING_BOX_IMAGE_TAG}\nCOPY server/sing-box-supervisor.sh /usr/local/bin/sfsc-sing-box-supervisor\n",
     "server/sing-box-supervisor.sh": "#!/bin/sh\nexec sing-box run -c /etc/sing-box/config.json\n",
     "server/.env.example": "SFSC_ADMIN_TOKEN=change-this-admin-token\n",
+    "server/.env.directory.example": "SFSC_ADMIN_TOKEN=change-this-admin-token\n",
     "server/.env": "SFSC_ADMIN_TOKEN=fixture\n",
     "server/docker-compose.yml": "services: {}\n",
     "server/docker-compose.n1.yml": "services: {}\n",
+    "server/install-n1-directory-appliance.sh": "#!/bin/sh\nexit 0\n",
+    "server/install-n1-appliance.sh": "#!/bin/sh\nexit 0\n",
+    "server/runtime/sfsc-runtime-launcher": "#!/bin/sh\nexit 0\n",
+    "server/runtime/native/linux-arm64/manifest.json": "{}\n",
+    "server/runtime/native/linux-arm64/relation/sfsc-root-guard": "fixture native executable\n",
+    "server/rootfs/etc/s6-overlay/s6-rc.d/sfsc-node/run": "#!/bin/sh\nexit 0\n",
+    "server/rootfs/etc/s6-overlay/s6-rc.d/sfsc-node/finish": "#!/bin/sh\nexit 0\n",
+    "server/systemd/sfsc-appliance-directory.service": "[Service]\nExecStart=/usr/local/bin/sfsc-appliance-directory\n",
+    "server/systemd/sfsc-appliance.service": "[Service]\nExecStart=/usr/bin/python3 /opt/sfsc-test/server/runtime/sfsc-runtime-launcher\n",
+    "server/systemd/sfsc-minio.service": "[Service]\nExecStart=/usr/bin/docker run minio\n",
+    "server/systemd/sfsc-directory.env.example": "SFSC_ADMIN_TOKEN=change-this-admin-token\n",
     "server/sing-box/config.example.json": "{}\n",
     "server/sing-box/config.json": "{\"private_key\":\"must-not-ship\"}\n",
     "server/data/sfsc-state.json": "{}\n",
+    "native/sfsc-sftp-service/go.mod": "module fixture\n",
+    "native/sfsc-root-guard/main_linux.go": "package main\n",
     "scripts/lib/runtimeContracts.mjs": "export function assertRuntimeDiagnosticsContract() {}\n",
     "scripts/lib/reportSecrets.mjs": "export function assertReportSafe() {}\nexport function writeJsonReportSync() {}\n",
     "scripts/smoke-client.mjs": "console.log('client smoke');\n",
@@ -14007,6 +14961,11 @@ async function writeReleaseBundleFixture(tempRoot) {
   await writeFile(
     join(tempRoot, "scripts", "lib", "build-fingerprint.ps1"),
     await readFile(join(projectRoot, "scripts", "lib", "build-fingerprint.ps1"), "utf8"),
+    "utf8"
+  );
+  await writeFile(
+    join(tempRoot, "scripts", "lib", "release-zip.mjs"),
+    await readFile(join(projectRoot, "scripts", "lib", "release-zip.mjs"), "utf8"),
     "utf8"
   );
 
@@ -14198,6 +15157,17 @@ function buildRuntimeContractClientStatusFixture() {
     appVersion: "0.3.0-rc.1",
     clientVersion: "0.3.0-rc.1",
     diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.3.0-rc.1" }),
+    enrollment: {
+      authorizedDirectories: [],
+      deviceId: "",
+      directoryAuthorization: "waiting",
+      phase: "not-started",
+      requestId: "",
+      serverId: "",
+      serverKeyFingerprint: "",
+      signingKeyId: "",
+      status: "not-started"
+    },
     releaseManifest: buildRuntimeContractReleaseManifestSummaryFixture(),
     paths: {
       root: "C:\\SFSC",
@@ -14242,6 +15212,13 @@ function buildRuntimeContractClientStatusFixture() {
         startedAt: null,
         lastExit: null
       },
+      dataSingbox: {
+        name: "sftp-data-sing-box",
+        running: false,
+        pid: null,
+        startedAt: null,
+        lastExit: null
+      },
       sync: {
         name: "rclone-sync",
         running: false,
@@ -14267,7 +15244,7 @@ function buildRuntimeContractClientStatusFixture() {
       rcloneConfigScope: "C:\\SFSC\\data\\rclone.conf",
       localState: {
         ok: true,
-        files: ["profile", "jobs", "secrets", "syncHistory", "claimRecovery", "lastSuccessfulHeartbeat"].map((name) => ({
+        files: ["profile", "jobs", "secrets", "syncHistory", "syncRecovery", "claimRecovery", "lastSuccessfulHeartbeat"].map((name) => ({
           name,
           path: `C:\\SFSC\\data\\${name}.json`,
           exists: true,
@@ -14429,6 +15406,7 @@ function buildRuntimeContractDiagnosticStatusFixture() {
   return {
     diagnostics: buildRuntimeDiagnostics({ role: "client", version: "0.3.0-rc.1" }),
     appVersion: "0.3.0-rc.1",
+    enrollment: { lastError: null },
     profileImported: false,
     profileSummary: {
       clientName: "",
@@ -14606,6 +15584,7 @@ function buildRuntimeContractDiagnosticEnvironmentFixture() {
       jobs: buildRuntimeContractFileSummaryFixture("jobs.json"),
       secrets: buildRuntimeContractFileSummaryFixture("secrets.json"),
       syncHistory: buildRuntimeContractFileSummaryFixture("sync-history.json"),
+      syncRecovery: buildRuntimeContractFileSummaryFixture("sync-recovery"),
       claimRecovery: buildRuntimeContractFileSummaryFixture("claim-recovery.json"),
       lastSuccessfulHeartbeat: buildRuntimeContractFileSummaryFixture("last-successful-heartbeat.json")
     },

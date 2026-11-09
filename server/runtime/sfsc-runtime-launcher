@@ -1,0 +1,1426 @@
+#!/usr/bin/env python3
+"""Serial host launcher for one exact Syncraft runtime epoch."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import hashlib
+import json
+import os
+import re
+import secrets
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from runtime_epoch_ledger import (
+    LedgerError, advance_operation, allocate_epoch, archive_completed_operation,
+    archive_failed_operation,
+    atomic_write, build_epoch_manifest, ensure_ledger_root,
+    commit_recovery_journal, ensure_private_directory, initial_closure_proof, operation_record,
+    pretty_json_bytes, publish_history_closure, read_closure_proof,
+    read_committed_recovery_journal, read_current, read_operation, read_runtime_ready, record_current,
+    seal_epoch, seal_runtime_ready, sha256_bytes, utc_now,
+    validate_operation, validate_succession, write_bootstrap_nonce, write_operation,
+    _require_regular, _state_baseline, _verify_history_closure,
+)
+
+CONTAINER_ID = re.compile(r"^[a-f0-9]{64}$")
+PID_NAMESPACE = re.compile(r"^pid:\[[0-9]+\]$")
+DIGEST = re.compile(r"^[a-f0-9]{64}$")
+MAINTENANCE_RESULT_KEYS = {
+    "schemaVersion", "status", "deploymentId", "targetEpoch", "initialized",
+    "required", "transactionId", "revision", "rawSha256",
+    "scopeProjectionSha256", "historyClosureSha256",
+    "previousHistoryClosureSha256", "closureProofSha256", "completedAt",
+}
+RECOVERY_MANIFEST_KEYS = {
+    "transactionId", "status", "closureProofSha256",
+    "previousHistoryClosureSha256", "afterRevision", "afterRawSha256",
+    "scopeProjectionSha256", "historyClosureSha256",
+}
+ARTIFACT_DIR = "/app/server/runtime/native/linux-arm64"
+MAINTENANCE_STATE_PATH = "/data/app/relation-services.json"
+
+
+class LauncherError(RuntimeError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+class LauncherSignal(BaseException):
+    def __init__(self, signum: int):
+        self.signum = signum
+
+
+class SimulatedCrash(BaseException):
+    """Test-only power-loss marker: durable state survives without cleanup."""
+
+    def __init__(self, boundary: str):
+        self.boundary = boundary
+
+
+def _run(argv: list[str], *, timeout: float = 120.0) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        argv, check=False, capture_output=True, text=True, timeout=timeout,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+
+
+@contextlib.contextmanager
+def serial_launcher_lock(ledger_root: Path):
+    path = ledger_root / "launcher.lock"
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            except OSError as error:
+                raise LauncherError("launcher_busy", "another runtime launch is active") from error
+        else:
+            import fcntl
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise LauncherError("launcher_busy", "another runtime launch is active") from error
+        yield
+    finally:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            with contextlib.suppress(OSError):
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            with contextlib.suppress(OSError):
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+@contextlib.contextmanager
+def physical_state_launch_lock(state_path: Path):
+    state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = Path(f"{state_path}.host-launch.lock")
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            except OSError as error:
+                raise LauncherError("runtime_launch_busy", "another ledger root targets this state") from error
+        else:
+            import fcntl
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise LauncherError("runtime_launch_busy", "another ledger root targets this state") from error
+        yield
+    finally:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            with contextlib.suppress(OSError):
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            with contextlib.suppress(OSError):
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _command_result(runner, argv: list[str], *, timeout: float = 120.0, allow_failure: bool = False):
+    result = runner(argv, timeout=timeout)
+    if result.returncode != 0 and not allow_failure:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise LauncherError("docker_command_failed", f"{argv[1]} failed: {detail[:500]}")
+    return result
+
+
+def _inspect_container(runner, docker: str, container_id: str) -> dict:
+    result = _command_result(runner, [docker, "inspect", "--type", "container", container_id])
+    try:
+        record = json.loads(result.stdout)[0]
+    except (json.JSONDecodeError, IndexError, TypeError) as error:
+        raise LauncherError("docker_inspect_invalid", "docker inspect did not return one container") from error
+    if record.get("Id") != container_id:
+        raise LauncherError("container_identity_mismatch", "docker inspect returned another container ID")
+    return record
+
+
+def _inspect_optional(runner, docker: str, container_id: str) -> dict | None:
+    result = _command_result(
+        runner, [docker, "inspect", "--type", "container", container_id], allow_failure=True,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        record = json.loads(result.stdout)[0]
+    except (json.JSONDecodeError, IndexError, TypeError) as error:
+        raise LauncherError("docker_inspect_invalid", "docker inspect did not return one container") from error
+    if record.get("Id") != container_id:
+        raise LauncherError("container_identity_mismatch", "docker inspect returned another container ID")
+    return record
+
+
+def _image_digest(runner, docker: str, image: str) -> str:
+    result = _command_result(runner, [docker, "image", "inspect", "--format", "{{.Id}}", image])
+    digest = result.stdout.strip()
+    if not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
+        raise LauncherError("image_digest_invalid", "docker image inspect did not return an exact digest")
+    return digest
+
+
+def _read_cgroup(pid: int) -> str:
+    text = Path(f"/proc/{pid}/cgroup").read_text(encoding="utf-8")
+    lines = [line for line in text.splitlines() if line]
+    if len(lines) != 1 or not lines[0].startswith("0::/"):
+        raise LauncherError("container_cgroup_invalid", "container process is not in one cgroup v2 path")
+    return lines[0][3:]
+
+
+def _read_pid_namespace(pid: int) -> str:
+    value = os.readlink(f"/proc/{pid}/ns/pid")
+    if not PID_NAMESPACE.fullmatch(value):
+        raise LauncherError("container_namespace_invalid", "container PID namespace is invalid")
+    return value
+
+
+def _cgroup_closed(path: str, cgroup_root: Path = Path("/sys/fs/cgroup")) -> bool:
+    target = cgroup_root / path.lstrip("/")
+    if not target.exists():
+        return True
+    for current, directories, files in os.walk(target):
+        if "cgroup.procs" not in files:
+            return False
+        try:
+            if (Path(current) / "cgroup.procs").read_text(encoding="ascii").strip():
+                return False
+        except OSError:
+            return False
+    return True
+def _docker_cleanup(runner, docker: str, container_id: str) -> dict:
+    stopped = _command_result(runner, [docker, "stop", "--time", "10", container_id], allow_failure=True)
+    removed = _command_result(runner, [docker, "rm", container_id], allow_failure=True)
+    forced = None
+    if removed.returncode != 0:
+        forced = _command_result(runner, [docker, "rm", "--force", container_id], allow_failure=True)
+    return {
+        "stopExitCode": stopped.returncode,
+        "removeExitCode": removed.returncode,
+        "forcedRemoveExitCode": None if forced is None else forced.returncode,
+    }
+
+
+def _docker_ids_by_label(runner, docker: str, selector: str) -> list[str]:
+    result = _command_result(runner, [
+        docker, "ps", "-aq", "--no-trunc", "--filter", f"label={selector}",
+    ])
+    identifiers = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    for identifier in identifiers:
+        if not CONTAINER_ID.fullmatch(identifier):
+            raise LauncherError("docker_scan_invalid", "docker label scan returned a non-exact container ID")
+    return sorted(set(identifiers))
+
+
+def _operation_labels(operation: dict) -> dict[str, str]:
+    return {
+        "io.syncraft.deployment-id": operation["deploymentId"],
+        "io.syncraft.operation-id": operation["operationId"],
+        "io.syncraft.runtime-epoch": operation["targetEpoch"],
+    }
+
+
+def _verify_operation_container(record: dict, operation: dict) -> None:
+    if record.get("Id") != operation["containerId"]:
+        raise LauncherError("container_identity_mismatch", "docker inspect returned another container ID")
+    if record.get("Image") != operation["imageDigest"]:
+        raise LauncherError("container_image_mismatch", "container image differs from the operation intent")
+    labels = record.get("Config", {}).get("Labels") or {}
+    if any(labels.get(key) != value for key, value in _operation_labels(operation).items()):
+        raise LauncherError("container_operation_mismatch", "container labels do not identify this operation")
+    cgroup_path = record.get("State", {}).get("CgroupPath")
+    if cgroup_path is not None and cgroup_path != operation["hostCgroupPath"]:
+        raise LauncherError("container_cgroup_mismatch", "container cgroup differs from the operation intent")
+
+
+def _read_cidfile(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    raw = _require_regular(path, 4096, "docker cidfile")
+    identifier = raw.decode("ascii", errors="strict").strip()
+    if not CONTAINER_ID.fullmatch(identifier):
+        raise LauncherError("container_identity_invalid", "docker cidfile does not contain a complete ID")
+    return identifier
+
+
+def _find_exact_operation_container(runner, docker: str, operation: dict) -> str | None:
+    identifiers = _docker_ids_by_label(
+        runner, docker, f"io.syncraft.operation-id={operation['operationId']}",
+    )
+    if len(identifiers) > 1:
+        raise LauncherError("container_claim_ambiguous", "more than one container claims this operation")
+    if not identifiers:
+        return None
+    candidate = {
+        **operation,
+        "containerId": identifiers[0],
+        "hostCgroupPath": f"/system.slice/docker-{identifiers[0]}.scope",
+    }
+    record = _inspect_container(runner, docker, identifiers[0])
+    _verify_operation_container(record, candidate)
+    return identifiers[0]
+
+
+PHASES = ["intent", "created", "maintenance", "sealed", "started", "ready", "current", "complete"]
+
+
+def _phase(operation: dict) -> int:
+    return 99 if operation["phase"] == "failed" else PHASES.index(operation["phase"])
+
+
+def _crash(crash_hook, boundary: str, operation: dict) -> None:
+    crash_hook(boundary, operation)
+
+
+def _read_epoch_manifest(ledger_root: Path, target_epoch: str) -> tuple[dict, str]:
+    path = ledger_root / "epochs" / target_epoch / "epoch.json"
+    raw = _require_regular(path, 256 * 1024, "epoch manifest")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise LauncherError("epoch_manifest_invalid", "epoch manifest is not valid JSON") from error
+    return value, sha256_bytes(raw)
+
+
+def _previous_history_closure(ledger_root: Path, current: dict | None) -> str:
+    if current is None:
+        return "0" * 64
+    manifest, manifest_sha = _read_epoch_manifest(ledger_root, current["targetEpoch"])
+    if manifest_sha != current["epochManifestSha256"]:
+        raise LauncherError("current_epoch_invalid", "current epoch manifest hash does not match")
+    recovery = manifest.get("recovery")
+    if not isinstance(recovery, dict):
+        raise LauncherError("current_epoch_invalid", "current epoch recovery record is missing")
+    value = recovery.get("historyClosureSha256")
+    if value is None:
+        return "0" * 64
+    if not isinstance(value, str) or not DIGEST.fullmatch(value):
+        raise LauncherError("current_epoch_invalid", "previous history closure hash is invalid")
+    return value
+
+
+def _close_old_runtime(runner, docker: str, current: dict | None, cgroup_closed) -> None:
+    if current is None:
+        return
+    record = _inspect_optional(runner, docker, current["containerId"])
+    if record is not None:
+        labels = record.get("Config", {}).get("Labels") or {}
+        expected = {
+            "io.syncraft.deployment-id": current["deploymentId"],
+            "io.syncraft.operation-id": current["operationId"],
+            "io.syncraft.runtime-epoch": current["targetEpoch"],
+        }
+        if record.get("Image") != current["imageDigest"] or any(labels.get(k) != v for k, v in expected.items()):
+            raise LauncherError("previous_runtime_identity_invalid", "current container identity is inconsistent")
+        _docker_cleanup(runner, docker, current["containerId"])
+        if _inspect_optional(runner, docker, current["containerId"]) is not None:
+            raise LauncherError("previous_runtime_cleanup_unconfirmed", "exact previous container remains")
+    if not cgroup_closed(current["hostCgroupPath"]):
+        raise LauncherError("previous_runtime_not_closed", "the previous exact cgroup is not closed")
+
+
+def _closure_for_new_operation(ledger_root: Path, state_path: Path, current: dict | None, *,
+                               deployment_id: str, allow_non_root: bool,
+                               runner, docker: str) -> str:
+    if current is None:
+        if state_path.exists():
+            raise LauncherError(
+                "current_ledger_missing_existing_state",
+                "existing state has no exact current runtime identity",
+            )
+        epochs_dir = ledger_root / "epochs"
+        if epochs_dir.exists() and any(epochs_dir.iterdir()):
+            raise LauncherError(
+                "current_ledger_missing_with_epochs",
+                "epoch evidence exists without a current runtime record",
+            )
+        selector = f"io.syncraft.deployment-id={deployment_id}"
+        observed = _docker_ids_by_label(runner, docker, selector)
+        if observed:
+            raise LauncherError(
+                "deployment_runtime_claim_required",
+                "known deployment containers exist without current intent",
+            )
+        return initial_closure_proof(
+            ledger_root, deployment_id, docker_scan_ids=[], label_selector=selector,
+        )
+    proof = {
+        "schemaVersion": "1",
+        "kind": "exact-container-closed",
+        "deploymentId": current["deploymentId"],
+        "targetEpoch": current["targetEpoch"],
+        "containerId": current["containerId"],
+        "imageDigest": current["imageDigest"],
+        "hostCgroupPath": current["hostCgroupPath"],
+        "observedAt": utc_now(),
+    }
+    raw = pretty_json_bytes(proof)
+    digest = sha256_bytes(raw)
+    ensure_private_directory(ledger_root / "proofs", allow_non_root=allow_non_root)
+    path = ledger_root / "proofs" / f"{digest}.json"
+    if not path.exists():
+        atomic_write(path, raw, 0o600, overwrite=False)
+    return digest
+
+
+def _create_operation(config: dict, ledger_root: Path, state_path: Path, current: dict | None, *,
+                      image_digest: str, closure_proof: str, allow_non_root: bool) -> dict:
+    target_epoch = allocate_epoch(ledger_root, current)
+    operation_id = secrets.token_hex(32)
+    nonce = secrets.token_urlsafe(32)
+    created_at = utc_now()
+    operation = operation_record(
+        operation_id=operation_id,
+        deployment_id=config["deployment_id"],
+        state_path=str(state_path),
+        image=config["image"],
+        image_digest=image_digest,
+        target_epoch=target_epoch,
+        bootstrap_nonce=nonce,
+        bootstrap_nonce_sha256=hashlib.sha256(nonce.encode("utf-8")).hexdigest(),
+        closure_proof_sha256=closure_proof,
+        previous_container_id=None if current is None else current["containerId"],
+        previous_cgroup_path=None if current is None else current["hostCgroupPath"],
+        previous_history_closure_sha256=_previous_history_closure(ledger_root, current),
+        created_from_epoch="initial" if current is None else current["targetEpoch"],
+        cid_file=str(ledger_root / "operations" / f"{operation_id}.cid"),
+        created_at=created_at,
+    )
+    write_bootstrap_nonce(ledger_root, target_epoch, nonce)
+    ensure_private_directory(ledger_root / "operations", allow_non_root=allow_non_root)
+    write_operation(ledger_root / "operation.json", operation)
+    return operation
+def _ensure_container(operation_path: Path, operation: dict, *, ledger_root: Path, runner,
+                      docker: str, image: str, volumes: list[str], env_files: list[str],
+                      environment: list[str], crash_hook) -> dict:
+    if operation["containerId"] is not None:
+        record = _inspect_container(runner, docker, operation["containerId"])
+        _verify_operation_container(record, operation)
+        return operation
+    cid_file = Path(operation["cidFile"])
+    container_id = _read_cidfile(cid_file)
+    if container_id is None:
+        container_id = _find_exact_operation_container(runner, docker, operation)
+    if container_id is None:
+        epoch_dir = ledger_root / "epochs" / operation["targetEpoch"]
+        ensure_private_directory(epoch_dir)
+        argv = [
+            docker, "create",
+            "--cidfile", str(cid_file),
+            "--label", f"io.syncraft.deployment-id={operation['deploymentId']}",
+            "--label", f"io.syncraft.operation-id={operation['operationId']}",
+            "--label", f"io.syncraft.runtime-epoch={operation['targetEpoch']}",
+            "--cap-add", "LINUX_IMMUTABLE",
+            "--network", "host",
+            "--env", "SFSC_RUNTIME_ADMISSION_REQUIRED=1",
+            "--env", f"SFSC_BOOTSTRAP_NONCE={operation['bootstrapNonce']}",
+            "--env", "SFSC_RELATION_STATE_PATH=/data/app/relation-services.json",
+            "--mount", f"type=bind,src={epoch_dir},dst=/run/sfsc-runtime,readonly",
+        ]
+        for value in environment:
+            argv.extend(["--env", value])
+        for value in env_files:
+            argv.extend(["--env-file", value])
+        for value in volumes:
+            argv.extend(["--mount", value])
+        argv.append(image)
+        created = _command_result(runner, argv)
+        container_id = created.stdout.strip() if created.stdout.strip() else _read_cidfile(cid_file)
+        if container_id is None:
+            container_id = _find_exact_operation_container(runner, docker, operation)
+        if container_id is None or not CONTAINER_ID.fullmatch(container_id):
+            raise LauncherError("container_identity_invalid", "docker create did not produce an exact recoverable ID")
+        _crash(crash_hook, "container-create-returned-before-id-record", operation)
+        expected_cgroup = f"/system.slice/docker-{container_id}.scope"
+        record = _inspect_container(runner, docker, container_id)
+        try:
+            _verify_operation_container(record, {
+                **operation, "containerId": container_id, "hostCgroupPath": expected_cgroup,
+            })
+        except BaseException:
+            with contextlib.suppress(Exception):
+                _docker_cleanup(runner, docker, container_id)
+            raise
+    else:
+        expected_cgroup = f"/system.slice/docker-{container_id}.scope"
+        record = _inspect_container(runner, docker, container_id)
+        _verify_operation_container(record, {
+            **operation, "containerId": container_id, "hostCgroupPath": expected_cgroup,
+        })
+    if _phase(operation) < PHASES.index("created"):
+        operation = advance_operation(
+            operation_path, operation, "created",
+            containerId=container_id, hostCgroupPath=expected_cgroup,
+        )
+        _crash(crash_hook, "container-id-recorded", operation)
+    return operation
+
+
+def _maintenance_paths(ledger_root: Path, operation: dict) -> tuple[Path, Path, Path]:
+    maintenance_dir = ledger_root / "maintenance" / operation["operationId"]
+    ensure_private_directory(maintenance_dir)
+    ensure_private_directory(ledger_root / "recovery")
+    return maintenance_dir, maintenance_dir / "config.json", maintenance_dir / "maintenance-result.json"
+
+
+def _maintenance_config(operation: dict) -> dict:
+    succession = operation.get("succession")
+    return {
+        "schemaVersion": "1",
+        "statePath": MAINTENANCE_STATE_PATH,
+        "recoveryDir": "/run/sfsc-maintenance/recovery",
+        "resultPath": "/run/sfsc-maintenance/maintenance-result.json",
+        "artifactPath": f"{ARTIFACT_DIR}/sfsc_owner_lock.node",
+        "manifestPath": f"{ARTIFACT_DIR}/manifest.json",
+        "mode": (
+            "require-existing"
+            if succession is not None or operation["previousContainerId"] is not None
+            else "initialize-if-missing"
+        ),
+        "deploymentId": operation["deploymentId"],
+        "policyVersion": "startup-admission-integration-v3",
+        "targetEpoch": operation["targetEpoch"],
+        "createdFromEpoch": operation["createdFromEpoch"],
+        "oldContainerId": operation["previousContainerId"] or f"no-previous-{operation['operationId']}",
+        "closureProofSha256": operation["closureProofSha256"],
+        "previousHistoryClosureSha256": operation["previousHistoryClosureSha256"],
+        "previousHistoryClosurePath": (
+            None if operation["previousHistoryClosureSha256"] == "0" * 64
+            else "/run/sfsc-maintenance/history-closure.json"
+        ),
+        "succession": succession,
+    }
+
+
+def _validate_reused_maintenance_result(ledger_root: Path, operation: dict, value: dict) -> dict | None:
+    succession = operation.get("succession")
+    if succession is None or succession["mode"] != "reuse-after":
+        if value["previousHistoryClosureSha256"] != operation["previousHistoryClosureSha256"]:
+            raise LauncherError(
+                "maintenance_result_invalid",
+                "required maintenance result lacks exact transaction data",
+            )
+        return None
+    transaction_id = succession["sourceTransactionId"]
+    if transaction_id is None:
+        raise LauncherError(
+            "maintenance_result_invalid",
+            "required reuse-after result lacks a source transaction",
+        )
+    journal = read_committed_recovery_journal(
+        ledger_root / "recovery",
+        transaction_id,
+        expected_epoch_manifest_sha256=succession["transactionEpochManifestSha256"],
+    )
+    expected = {
+        "transactionId": journal["transactionId"],
+        "scopeProjectionSha256": journal["scopeProjectionSha256"],
+        "historyClosureSha256": journal["historyClosureSha256"],
+        "previousHistoryClosureSha256": journal["previousHistoryClosureSha256"],
+        "revision": journal["afterRevision"],
+        "rawSha256": journal["afterRawSha256"],
+    }
+    if any(value[key] != expected_value for key, expected_value in expected.items()):
+        raise LauncherError(
+            "maintenance_result_invalid",
+            "reuse-after result differs from its committed source journal",
+        )
+    for result_key, succession_key in (
+        ("transactionId", "sourceTransactionId"),
+        ("scopeProjectionSha256", "sourceScopeProjectionSha256"),
+        ("historyClosureSha256", "sourceHistoryClosureSha256"),
+        ("revision", "sourceStateRevision"),
+        ("rawSha256", "sourceStateRawSha256"),
+    ):
+        if value[result_key] != succession[succession_key]:
+            raise LauncherError(
+                "maintenance_result_invalid",
+                "reuse-after result differs from its persisted succession",
+            )
+    if journal["deploymentId"] != operation["deploymentId"]:
+        raise LauncherError(
+            "maintenance_result_invalid",
+            "committed source journal deployment changed",
+        )
+    after_bytes = _require_regular(
+        ledger_root / "recovery" / f"{transaction_id}.after.json",
+        16 * 1024 * 1024,
+        "succession source after bytes",
+    )
+    _verify_history_closure(
+        ledger_root / "recovery" / f"{transaction_id}.history-closure.json",
+        journal,
+        after_bytes,
+    )
+    return journal
+
+
+def _validate_maintenance_result(path: Path, state_path: Path, operation: dict, *,
+                                 ledger_root: Path, allow_non_root: bool) -> dict:
+    raw = _require_regular(path, 256 * 1024, "maintenance result")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise LauncherError("maintenance_result_invalid", "maintenance result is not valid JSON") from error
+    if not isinstance(value, dict) or set(value) != MAINTENANCE_RESULT_KEYS:
+        raise LauncherError("maintenance_result_invalid", "maintenance result has an invalid schema")
+    if (value["schemaVersion"] != "1" or value["status"] != "ok"
+            or value["deploymentId"] != operation["deploymentId"]
+            or value["targetEpoch"] != operation["targetEpoch"]
+            or value["closureProofSha256"] != operation["closureProofSha256"]
+            or not isinstance(value["initialized"], bool)
+            or not isinstance(value["required"], bool)
+            or not isinstance(value["revision"], int) or isinstance(value["revision"], bool)
+            or value["revision"] < 0
+            or not isinstance(value["rawSha256"], str) or not DIGEST.fullmatch(value["rawSha256"])):
+        raise LauncherError("maintenance_result_invalid", "maintenance result identity or baseline is invalid")
+    for key in ("scopeProjectionSha256", "historyClosureSha256", "previousHistoryClosureSha256"):
+        if value[key] is not None and (not isinstance(value[key], str) or not DIGEST.fullmatch(value[key])):
+            raise LauncherError("maintenance_result_invalid", f"maintenance result {key} is invalid")
+    if value["required"]:
+        if (not isinstance(value["transactionId"], str) or not DIGEST.fullmatch(value["transactionId"])
+                or value["scopeProjectionSha256"] is None or value["historyClosureSha256"] is None
+                or value["previousHistoryClosureSha256"] is None):
+            raise LauncherError("maintenance_result_invalid", "required maintenance result lacks exact transaction data")
+        source_journal = _validate_reused_maintenance_result(
+            ledger_root, operation, value,
+        )
+        if source_journal is not None:
+            value["_sourceJournal"] = source_journal
+    elif any(value[key] is not None for key in (
+            "transactionId", "scopeProjectionSha256", "historyClosureSha256", "previousHistoryClosureSha256")):
+        raise LauncherError("maintenance_result_invalid", "no-recovery result claims recovery data")
+    baseline = _state_baseline(state_path, allow_non_root=allow_non_root)
+    if baseline["revision"] != value["revision"] or baseline["rawSha256"] != value["rawSha256"]:
+        raise LauncherError("maintenance_result_state_mismatch", "maintenance result does not match exact state bytes")
+    value["_rawSha256"] = sha256_bytes(raw)
+    return value
+
+
+def _run_maintenance(ledger_root: Path, state_path: Path, operation_path: Path, operation: dict, *,
+                     runner, docker: str, image: str, crash_hook,
+                     allow_non_root: bool) -> tuple[dict, dict]:
+    maintenance_dir, config_path, result_path = _maintenance_paths(ledger_root, operation)
+    config_raw = pretty_json_bytes(_maintenance_config(operation))
+    if config_path.exists() and _require_regular(config_path, 64 * 1024, "maintenance config") != config_raw:
+        raise LauncherError("maintenance_config_conflict", "persisted maintenance config changed")
+    if not config_path.exists():
+        atomic_write(config_path, config_raw, 0o600, overwrite=False)
+    maintenance_recorded = _phase(operation) >= PHASES.index("maintenance")
+    if not result_path.exists():
+        if maintenance_recorded:
+            raise LauncherError(
+                "maintenance_result_missing",
+                "the durable operation reached maintenance but its result is missing",
+            )
+        argv = [
+            docker, "run", "--rm",
+            "--label", f"io.syncraft.operation-id={operation['operationId']}",
+            "--network", "none",
+            "--read-only",
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "--entrypoint", "node",
+            "--mount", f"type=bind,src={state_path.parent},dst=/data/app",
+            "--mount", f"type=bind,src={ledger_root / 'recovery'},dst=/run/sfsc-maintenance/recovery",
+            "--mount", f"type=bind,src={maintenance_dir},dst=/run/sfsc-maintenance",
+            image,
+            "/app/src/service/startupMaintenanceCli.js",
+            "--config", "/run/sfsc-maintenance/config.json",
+        ]
+        if operation["previousHistoryClosureSha256"] != "0" * 64:
+            history_epoch = (
+                operation["succession"]["previousTargetEpoch"]
+                if operation.get("succession") is not None
+                else operation["createdFromEpoch"]
+            )
+            history_path = ledger_root / "epochs" / history_epoch / "history-closure.json"
+            insert_at = argv.index("--mount") + 2
+            argv[insert_at:insert_at] = [
+                "--mount",
+                f"type=bind,src={history_path},dst=/run/sfsc-maintenance/history-closure.json,readonly",
+            ]
+        if any("docker.sock" in value or "/run/sfsc-runtime" in value for value in argv):
+            raise LauncherError("unsafe_maintenance_mount", "maintenance must not mount Docker or epoch paths")
+        _command_result(runner, argv, timeout=180.0)
+        _crash(crash_hook, "maintenance-completed", operation)
+    result = _validate_maintenance_result(
+        result_path, state_path, operation,
+        ledger_root=ledger_root, allow_non_root=allow_non_root,
+    )
+    if (maintenance_recorded
+            and operation["maintenanceResultSha256"] != result["_rawSha256"]):
+        raise LauncherError(
+            "maintenance_result_conflict",
+            "durable maintenance result digest differs from the persisted operation",
+        )
+    if not maintenance_recorded:
+        operation = advance_operation(
+            operation_path, operation, "maintenance",
+            maintenanceResultSha256=result["_rawSha256"],
+        )
+        _crash(crash_hook, "maintenance-result-recorded", operation)
+    return operation, result
+
+
+def _ensure_epoch(ledger_root: Path, operation_path: Path, operation: dict,
+                  maintenance: dict, crash_hook) -> dict:
+    epoch_dir = ledger_root / "epochs" / operation["targetEpoch"]
+    ensure_private_directory(epoch_dir)
+    recovery = None
+    if maintenance["required"]:
+        history_path = ledger_root / "recovery" / f"{maintenance['transactionId']}.history-closure.json"
+        publish_history_closure(
+            ledger_root, operation["targetEpoch"], history_path, maintenance["historyClosureSha256"],
+        )
+        if "_sourceJournal" in maintenance:
+            source_journal = maintenance["_sourceJournal"]
+            recovery = {
+                "transactionId": source_journal["transactionId"],
+                "closureProofSha256": source_journal["closureProofSha256"],
+                "previousHistoryClosureSha256": source_journal["previousHistoryClosureSha256"],
+                "afterRevision": source_journal["afterRevision"],
+                "afterRawSha256": source_journal["afterRawSha256"],
+                "scopeProjectionSha256": source_journal["scopeProjectionSha256"],
+                "historyClosureSha256": source_journal["historyClosureSha256"],
+            }
+        else:
+            recovery = {
+                "transactionId": maintenance["transactionId"],
+                "closureProofSha256": operation["closureProofSha256"],
+                "previousHistoryClosureSha256": maintenance["previousHistoryClosureSha256"],
+                "afterRevision": maintenance["revision"],
+                "afterRawSha256": maintenance["rawSha256"],
+                "scopeProjectionSha256": maintenance["scopeProjectionSha256"],
+                "historyClosureSha256": maintenance["historyClosureSha256"],
+            }
+    manifest = build_epoch_manifest(
+        deployment_id=operation["deploymentId"],
+        target_epoch=operation["targetEpoch"],
+        container_id=operation["containerId"],
+        image_digest=operation["imageDigest"],
+        host_cgroup_path=operation["hostCgroupPath"],
+        bootstrap_nonce_sha256=operation["bootstrapNonceSha256"],
+        baseline={"revision": maintenance["revision"], "rawSha256": maintenance["rawSha256"]},
+        closure_proof_sha256=operation["closureProofSha256"],
+        recovery=recovery,
+        sealed_at=operation["epochSealedAt"],
+        succession=operation.get("succession"),
+    )
+    epoch_path, epoch_sha = seal_epoch(ledger_root, operation["targetEpoch"], manifest)
+    if maintenance["required"]:
+        succession = operation.get("succession")
+        if succession is not None and succession["mode"] == "reuse-after":
+            if succession["sourceTransactionId"] != maintenance["transactionId"]:
+                raise LauncherError(
+                    "runtime_succession_transaction_conflict",
+                    "successor maintenance did not reuse the exact source transaction",
+                )
+            read_committed_recovery_journal(
+                ledger_root / "recovery",
+                maintenance["transactionId"],
+                expected_epoch_manifest_sha256=succession["transactionEpochManifestSha256"],
+            )
+        else:
+            commit_recovery_journal(
+                ledger_root / "recovery", maintenance["transactionId"], epoch_sha,
+            )
+    if _phase(operation) < _phase({"phase": "sealed"}):
+        operation = advance_operation(operation_path, operation, "sealed", epochManifestSha256=epoch_sha)
+        _crash(crash_hook, "epoch-sealed", operation)
+    elif operation["epochManifestSha256"] != epoch_sha:
+        raise LauncherError("epoch_manifest_conflict", "operation epoch hash differs from sealed bytes")
+    return operation
+
+
+def _ensure_started(operation_path: Path, operation: dict, *, runner, docker: str, crash_hook) -> dict:
+    phase = _phase(operation)
+    record = _inspect_container(runner, docker, operation["containerId"])
+    _verify_operation_container(record, operation)
+    if (record.get("State", {}).get("Running") is not True
+            and phase < PHASES.index("ready")):
+        _command_result(runner, [docker, "start", operation["containerId"]])
+        _crash(crash_hook, "runtime-start-returned", operation)
+    if phase < PHASES.index("started"):
+        operation = advance_operation(operation_path, operation, "started")
+    return operation
+
+
+def _ensure_ready(operation_path: Path, operation: dict, *, ledger_root: Path, runner, docker: str,
+                  read_cgroup, read_pid_namespace, ready_timeout_seconds: float,
+                  crash_hook, sleep) -> tuple[dict, dict]:
+    ready_path = ledger_root / "epochs" / operation["targetEpoch"] / "runtime-ready.json"
+    if _phase(operation) >= PHASES.index("ready"):
+        ready = read_runtime_ready(ready_path)
+        expected_identity = {
+            "targetEpoch": operation["targetEpoch"],
+            "containerId": operation["containerId"],
+            "imageDigest": operation["imageDigest"],
+            "hostCgroupPath": operation["hostCgroupPath"],
+            "bootstrapNonceSha256": operation["bootstrapNonceSha256"],
+            "epochManifestSha256": operation["epochManifestSha256"],
+        }
+        if any(ready.get(key) != value for key, value in expected_identity.items()):
+            raise LauncherError(
+                "runtime_ready_conflict",
+                "durable runtime-ready proof identifies another exact runtime",
+            )
+        return operation, ready
+    deadline = time.monotonic() + ready_timeout_seconds
+    inspected = None
+    pid = None
+    while time.monotonic() < deadline:
+        inspected = _inspect_container(runner, docker, operation["containerId"])
+        state = inspected.get("State", {})
+        candidate_pid = state.get("Pid")
+        if state.get("Running") is True and isinstance(candidate_pid, int) and candidate_pid > 0:
+            pid = candidate_pid
+            break
+        sleep(0.1)
+    if inspected is None or pid is None:
+        raise LauncherError("runtime_ready_timeout", "container did not become running")
+    _verify_operation_container(inspected, operation)
+    actual_cgroup = read_cgroup(pid)
+    if actual_cgroup != operation["hostCgroupPath"]:
+        raise LauncherError("container_cgroup_mismatch", "running container cgroup differs from the manifest")
+    ready_path, ready = seal_runtime_ready(
+        ledger_root / "epochs" / operation["targetEpoch"],
+        bootstrap_nonce_sha256=operation["bootstrapNonceSha256"],
+        container_id=operation["containerId"],
+        image_digest=operation["imageDigest"],
+        host_cgroup_path=actual_cgroup,
+        pid_namespace_id=read_pid_namespace(pid),
+        epoch_manifest_sha256=operation["epochManifestSha256"],
+        target_epoch=operation["targetEpoch"],
+    )
+    operation = advance_operation(operation_path, operation, "ready")
+    _crash(crash_hook, "runtime-ready-sealed", operation)
+    return operation, ready
+
+
+def _current_recovery_id(ledger_root: Path, target_epoch: str) -> str | None:
+    manifest, _ = _read_epoch_manifest(ledger_root, target_epoch)
+    return manifest.get("recovery", {}).get("transactionId")
+
+
+def _ensure_current(operation_path: Path, operation: dict, *, ledger_root: Path, ready: dict,
+                    crash_hook) -> dict:
+    existing = read_current(ledger_root / "current.json")
+    ready_identity = {
+        "targetEpoch": operation["targetEpoch"],
+        "containerId": operation["containerId"],
+        "imageDigest": operation["imageDigest"],
+        "hostCgroupPath": operation["hostCgroupPath"],
+        "bootstrapNonceSha256": operation["bootstrapNonceSha256"],
+        "epochManifestSha256": operation["epochManifestSha256"],
+    }
+    if any(ready.get(key) != value for key, value in ready_identity.items()):
+        raise LauncherError(
+            "runtime_ready_conflict",
+            "runtime-ready proof identifies another exact runtime",
+        )
+    recovery_transaction_id = _current_recovery_id(ledger_root, operation["targetEpoch"])
+    expected_current = {
+        "schemaVersion": "1",
+        "deploymentId": operation["deploymentId"],
+        "operationId": operation["operationId"],
+        "targetEpoch": operation["targetEpoch"],
+        "containerId": operation["containerId"],
+        "imageDigest": operation["imageDigest"],
+        "hostCgroupPath": ready["hostCgroupPath"],
+        "pidNamespaceId": ready["pidNamespaceId"],
+        "epochManifestSha256": operation["epochManifestSha256"],
+        "recoveryTransactionId": recovery_transaction_id,
+        "status": "ready",
+        "startedAt": operation["createdAt"],
+        "exitCode": None,
+        "exitedAt": None,
+    }
+    replaces_previous = False
+    if existing is not None:
+        if (existing["operationId"] == operation["operationId"]
+                and existing["containerId"] == operation["containerId"]
+                and existing["targetEpoch"] == operation["targetEpoch"]):
+            if any(existing.get(key) != value for key, value in expected_current.items()):
+                raise LauncherError(
+                    "current_epoch_conflict",
+                    "current record differs from the exact operation identity",
+                )
+        else:
+            replaces_previous = (
+                operation["previousContainerId"] == existing["containerId"]
+                and operation["createdFromEpoch"] == existing["targetEpoch"]
+            )
+            if not replaces_previous:
+                raise LauncherError("current_epoch_conflict", "current record identifies another runtime")
+    if existing is None or replaces_previous:
+        _crash(crash_hook, "current-before-record", operation)
+        record_current(ledger_root, expected_current)
+        _crash(crash_hook, "current-recorded", operation)
+    if _phase(operation) < PHASES.index("current"):
+        operation = advance_operation(operation_path, operation, "current")
+    if _phase(operation) < PHASES.index("complete"):
+        operation = advance_operation(operation_path, operation, "complete")
+        _crash(crash_hook, "operation-completed", operation)
+    return operation
+def _cleanup_known_container(runner, docker: str, operation: dict) -> None:
+    identifier = operation.get("containerId")
+    if identifier is None:
+        identifier = _read_cidfile(Path(operation["cidFile"])) or _find_exact_operation_container(
+            runner, docker, operation,
+        )
+    if identifier is None:
+        return
+    candidate = {**operation, "containerId": identifier}
+    record = _inspect_optional(runner, docker, identifier)
+    if record is not None:
+        candidate["hostCgroupPath"] = f"/system.slice/docker-{identifier}.scope"
+        _verify_operation_container(record, candidate)
+        _docker_cleanup(runner, docker, identifier)
+
+
+def _reconcile_failed_operation(runner, docker: str, operation: dict, cgroup_closed) -> bool:
+    identifiers = set()
+    if operation.get("containerId") is not None:
+        identifiers.add(operation["containerId"])
+    cidfile_id = _read_cidfile(Path(operation["cidFile"]))
+    if cidfile_id is not None:
+        identifiers.add(cidfile_id)
+    labeled = _docker_ids_by_label(
+        runner, docker, f"io.syncraft.operation-id={operation['operationId']}",
+    )
+    identifiers.update(labeled)
+    if len(identifiers) > 1:
+        raise LauncherError(
+            "container_claim_ambiguous",
+            "a failed operation has conflicting exact container identities",
+        )
+    if identifiers:
+        identifier = next(iter(identifiers))
+        expected_cgroup = f"/system.slice/docker-{identifier}.scope"
+        record = _inspect_optional(runner, docker, identifier)
+        if record is not None:
+            _verify_operation_container(record, {
+                **operation,
+                "containerId": identifier,
+                "hostCgroupPath": expected_cgroup,
+            })
+            _docker_cleanup(runner, docker, identifier)
+            if _inspect_optional(runner, docker, identifier) is not None:
+                return False
+        if not cgroup_closed(expected_cgroup):
+            return False
+    if operation.get("previousCgroupPath") is not None and not cgroup_closed(
+        operation["previousCgroupPath"]
+    ):
+        return False
+    return True
+
+
+def _sealed_failure_succession(ledger_root: Path, state_path: Path, operation: dict, *,
+                               allow_non_root: bool) -> dict:
+    manifest, manifest_sha = _read_epoch_manifest(ledger_root, operation["targetEpoch"])
+    if operation["epochManifestSha256"] != manifest_sha:
+        raise LauncherError("runtime_succession_epoch_conflict", "failed operation epoch hash changed")
+    for key, expected in (
+        ("deploymentId", operation["deploymentId"]),
+        ("targetEpoch", operation["targetEpoch"]),
+        ("containerId", operation["containerId"]),
+        ("imageDigest", operation["imageDigest"]),
+        ("hostCgroupPath", operation["hostCgroupPath"]),
+    ):
+        if manifest.get(key) != expected:
+            raise LauncherError(
+                "runtime_succession_identity_conflict",
+                f"failed operation and sealed epoch differ at {key}",
+            )
+    recovery = manifest.get("recovery")
+    if not isinstance(recovery, dict) or set(recovery) != RECOVERY_MANIFEST_KEYS:
+        raise LauncherError("runtime_succession_recovery_invalid", "sealed epoch recovery record is invalid")
+    baseline = manifest.get("stateBaseline")
+    if (not isinstance(baseline, dict) or set(baseline) != {"revision", "rawSha256"}
+            or not isinstance(baseline["revision"], int) or isinstance(baseline["revision"], bool)
+            or baseline["revision"] < 0 or not DIGEST.fullmatch(str(baseline["rawSha256"]))):
+        raise LauncherError("runtime_succession_state_invalid", "sealed epoch state baseline is invalid")
+
+    transaction_id = recovery["transactionId"]
+    source_scope = recovery["scopeProjectionSha256"]
+    source_history = recovery["historyClosureSha256"]
+    journal_epoch_manifest_sha256 = None
+    journal = None
+    if transaction_id is None:
+        if recovery["status"] is not None or source_scope is not None or source_history is not None:
+            raise LauncherError("runtime_succession_recovery_invalid", "no-recovery epoch claims recovery data")
+    else:
+        prior_succession = (
+            validate_succession(manifest["succession"])
+            if "succession" in manifest
+            else None
+        )
+        journal_epoch_manifest_sha256 = manifest_sha
+        if (prior_succession is not None
+                and prior_succession["mode"] == "reuse-after"):
+            journal_epoch_manifest_sha256 = prior_succession[
+                "transactionEpochManifestSha256"
+            ]
+        if not isinstance(journal_epoch_manifest_sha256, str) or not DIGEST.fullmatch(
+            journal_epoch_manifest_sha256
+        ):
+            raise LauncherError("runtime_succession_recovery_invalid", "transaction epoch binding is invalid")
+        journal = read_committed_recovery_journal(
+            ledger_root / "recovery", transaction_id,
+            expected_epoch_manifest_sha256=journal_epoch_manifest_sha256,
+        )
+        for key in (
+            "closureProofSha256", "previousHistoryClosureSha256", "afterRevision",
+            "afterRawSha256", "scopeProjectionSha256", "historyClosureSha256",
+        ):
+            if journal.get(key) != recovery.get(key):
+                raise LauncherError(
+                    "runtime_succession_recovery_invalid",
+                    f"sealed recovery differs from committed journal at {key}",
+                )
+        if journal.get("deploymentId") != operation["deploymentId"]:
+            raise LauncherError("runtime_succession_recovery_invalid", "committed journal deployment changed")
+        after_bytes = _require_regular(
+            ledger_root / "recovery" / f"{transaction_id}.after.json",
+            16 * 1024 * 1024,
+            "succession source after bytes",
+        )
+        _verify_history_closure(
+            ledger_root / "recovery" / f"{transaction_id}.history-closure.json",
+            journal,
+            after_bytes,
+        )
+
+    current_state = _state_baseline(state_path, allow_non_root=allow_non_root)
+    state_reused = (
+        current_state["revision"] == baseline["revision"]
+        and current_state["rawSha256"] == baseline["rawSha256"]
+    )
+    if journal is not None and state_reused:
+        state_reused = current_state["rawSha256"] == journal["afterRawSha256"]
+    mode = "reuse-after" if state_reused else "recover-current"
+    closed_proof = {
+        "schemaVersion": "1",
+        "kind": "sealed-failed-operation-closed",
+        "deploymentId": operation["deploymentId"],
+        "operationId": operation["operationId"],
+        "targetEpoch": operation["targetEpoch"],
+        "containerId": operation["containerId"],
+        "imageDigest": operation["imageDigest"],
+        "hostCgroupPath": operation["hostCgroupPath"],
+        "epochManifestSha256": manifest_sha,
+        "previousCgroupPath": operation["previousCgroupPath"],
+        "observedAt": utc_now(),
+    }
+    closed_raw = pretty_json_bytes(closed_proof)
+    closed_sha = sha256_bytes(closed_raw)
+    ensure_private_directory(ledger_root / "proofs", allow_non_root=allow_non_root)
+    closed_path = ledger_root / "proofs" / f"{closed_sha}.json"
+    if not closed_path.exists():
+        atomic_write(closed_path, closed_raw, 0o600, overwrite=False)
+    return {
+        "schemaVersion": "1",
+        "mode": mode,
+        "previousOperationId": operation["operationId"],
+        "previousTargetEpoch": operation["targetEpoch"],
+        "previousEpochManifestSha256": manifest_sha,
+        "previousFailureCode": operation["failureCode"] or "unknown",
+        "closedProofSha256": closed_sha,
+        "sourceStateRevision": baseline["revision"],
+        "sourceStateRawSha256": baseline["rawSha256"],
+        "sourceTransactionId": transaction_id,
+        "sourceScopeProjectionSha256": source_scope,
+        "sourceHistoryClosureSha256": source_history,
+        "transactionEpochManifestSha256": (
+            journal_epoch_manifest_sha256 if mode == "reuse-after" else None
+        ),
+    }
+
+
+def _create_successor_operation(config: dict, ledger_root: Path, state_path: Path,
+                                current: dict | None, failed: dict, *, runner, docker: str,
+                                cgroup_closed, allow_non_root: bool) -> dict:
+    succession = _sealed_failure_succession(
+        ledger_root, state_path, failed, allow_non_root=allow_non_root,
+    )
+    archive_failed_operation(ledger_root, failed)
+    if current is None:
+        closure_proof = failed["closureProofSha256"]
+        read_closure_proof(ledger_root, closure_proof, deployment_id=failed["deploymentId"])
+    else:
+        _close_old_runtime(runner, docker, current, cgroup_closed)
+        closure_proof = _closure_for_new_operation(
+            ledger_root, state_path, current,
+            deployment_id=config["deployment_id"],
+            allow_non_root=allow_non_root,
+            runner=runner,
+            docker=docker,
+        )
+    target_epoch = allocate_epoch(ledger_root, current)
+    operation_id = secrets.token_hex(32)
+    nonce = secrets.token_urlsafe(32)
+    created_at = utc_now()
+    operation = operation_record(
+        operation_id=operation_id,
+        deployment_id=config["deployment_id"],
+        state_path=str(state_path),
+        image=config["image"],
+        image_digest=failed["imageDigest"],
+        target_epoch=target_epoch,
+        bootstrap_nonce=nonce,
+        bootstrap_nonce_sha256=hashlib.sha256(nonce.encode("utf-8")).hexdigest(),
+        closure_proof_sha256=closure_proof,
+        previous_container_id=None if current is None else current["containerId"],
+        previous_cgroup_path=None if current is None else current["hostCgroupPath"],
+        previous_history_closure_sha256=succession["sourceHistoryClosureSha256"] or "0" * 64,
+        created_from_epoch="initial" if current is None else current["targetEpoch"],
+        cid_file=str(ledger_root / "operations" / f"{operation_id}.cid"),
+        created_at=created_at,
+        succession=validate_succession(succession),
+    )
+    write_bootstrap_nonce(ledger_root, target_epoch, nonce)
+    ensure_private_directory(ledger_root / "operations", allow_non_root=allow_non_root)
+    write_operation(ledger_root / "operation.json", operation)
+    return operation
+
+
+def _verify_current_runtime(ledger_root: Path, current: dict, *, runner, docker: str,
+                            cgroup_closed) -> tuple[dict, dict] | None:
+    manifest, manifest_sha = _read_epoch_manifest(ledger_root, current["targetEpoch"])
+    if manifest_sha != current["epochManifestSha256"]:
+        raise LauncherError("current_epoch_invalid", "current epoch manifest hash does not match")
+    expected_manifest = {
+        "deploymentId": current["deploymentId"],
+        "targetEpoch": current["targetEpoch"],
+        "containerId": current["containerId"],
+        "imageDigest": current["imageDigest"],
+        "hostCgroupPath": current["hostCgroupPath"],
+    }
+    if any(manifest.get(key) != value for key, value in expected_manifest.items()):
+        raise LauncherError("current_epoch_invalid", "current identity differs from its epoch manifest")
+    ready_path = ledger_root / "epochs" / current["targetEpoch"] / "runtime-ready.json"
+    ready = read_runtime_ready(ready_path)
+    expected_ready = {
+        "targetEpoch": current["targetEpoch"],
+        "containerId": current["containerId"],
+        "imageDigest": current["imageDigest"],
+        "hostCgroupPath": current["hostCgroupPath"],
+        "bootstrapNonceSha256": manifest.get("bootstrapNonceSha256"),
+        "pidNamespaceId": current["pidNamespaceId"],
+        "epochManifestSha256": current["epochManifestSha256"],
+    }
+    if any(ready.get(key) != value for key, value in expected_ready.items()):
+        raise LauncherError("current_epoch_invalid", "current identity differs from its ready proof")
+    record = _inspect_optional(runner, docker, current["containerId"])
+    if record is None:
+        if cgroup_closed(current["hostCgroupPath"]):
+            return None
+        raise LauncherError("current_runtime_missing", "current exact cgroup is live without its container")
+    _verify_operation_container(record, current)
+    return record, ready
+
+
+def _finish_current_runtime(ledger_root: Path, current: dict, operation: dict | None, *,
+                            runner, docker: str, cgroup_closed,
+                            allow_non_root: bool) -> dict | None:
+    verified = _verify_current_runtime(
+        ledger_root, current, runner=runner, docker=docker, cgroup_closed=cgroup_closed,
+    )
+    if verified is None:
+        return None
+    record, ready = verified
+    state = record.get("State", {})
+    if state.get("Running") is True:
+        waited = _command_result(runner, [docker, "wait", current["containerId"]], timeout=None)
+        try:
+            exit_code = int(waited.stdout.strip())
+        except ValueError as error:
+            raise LauncherError("container_exit_invalid", "docker wait returned no integer exit code") from error
+    else:
+        exit_code = state.get("ExitCode")
+        if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+            raise LauncherError("container_exit_invalid", "docker inspect returned no exact exit code")
+    if not cgroup_closed(current["hostCgroupPath"]):
+        raise LauncherError("container_cleanup_unconfirmed", "container cgroup remained after exit")
+    cleanup = _docker_cleanup(runner, docker, current["containerId"])
+    if _inspect_optional(runner, docker, current["containerId"]) is not None:
+        raise LauncherError("container_cleanup_unconfirmed", "exact container remained after removal")
+    exited_at = utc_now()
+    exited = {
+        **current,
+        "status": "exited",
+        "exitCode": exit_code,
+        "exitedAt": exited_at,
+    }
+    exited.pop("_rawSha256", None)
+    record_current(ledger_root, exited)
+    if operation is not None:
+        archive_completed_operation(ledger_root, operation)
+    return {
+        "targetEpoch": current["targetEpoch"],
+        "containerId": current["containerId"],
+        "imageDigest": current["imageDigest"],
+        "hostCgroupPath": current["hostCgroupPath"],
+        "pidNamespaceId": ready["pidNamespaceId"],
+        "epochManifestSha256": current["epochManifestSha256"],
+        "runtimeReadyPath": str(
+            ledger_root / "epochs" / current["targetEpoch"] / "runtime-ready.json"
+        ),
+        "exitCode": exit_code,
+        "cleanup": cleanup,
+    }
+
+
+def run_appliance_once(config: dict, *, runner=_run, read_cgroup=_read_cgroup,
+                       read_pid_namespace=_read_pid_namespace, cgroup_closed=_cgroup_closed,
+                       sleep=time.sleep, crash_hook=lambda boundary, operation: None) -> dict:
+    if not callable(crash_hook):
+        raise LauncherError("launcher_input_invalid", "crash_hook must be callable")
+    allow_non_root = config.get("allow_non_root", False)
+    ledger_root = ensure_ledger_root(Path(config["ledger_root"]), allow_non_root=allow_non_root)
+    state_path = Path(config["state_path"]).resolve()
+    if state_path.name != "relation-services.json":
+        raise LauncherError(
+            "launcher_input_invalid",
+            "state path must identify relation-services.json in the maintenance mount",
+        )
+    docker = config.get("docker", "/usr/bin/docker")
+    image = config["image"]
+    volumes = list(config.get("volumes", []))
+    env_files = list(config.get("env_files", []))
+    environment = list(config.get("environment", []))
+    for volume in volumes:
+        if "docker.sock" in volume or "/run/sfsc-runtime" in volume:
+            raise LauncherError("unsafe_runtime_mount", "docker socket and epoch destination mounts are forbidden")
+
+    with physical_state_launch_lock(state_path), serial_launcher_lock(ledger_root):
+        operation_path = ledger_root / "operation.json"
+        current = read_current(ledger_root / "current.json")
+        operation = read_operation(operation_path)
+        if operation is not None and operation["phase"] == "complete":
+            if (current is None or current["operationId"] != operation["operationId"]
+                    or current["containerId"] != operation["containerId"]):
+                raise LauncherError("runtime_operation_current_mismatch", "completed operation lost its exact current record")
+            archive_completed_operation(ledger_root, operation)
+            if current["status"] == "ready":
+                finished = _finish_current_runtime(
+                    ledger_root, current, operation,
+                    runner=runner, docker=docker, cgroup_closed=cgroup_closed,
+                    allow_non_root=allow_non_root,
+                )
+                if finished is not None:
+                    return finished
+            operation = None
+        if operation is not None and operation["phase"] == "failed":
+            if not _reconcile_failed_operation(runner, docker, operation, cgroup_closed):
+                raise LauncherError(
+                    "runtime_operation_cleanup_unconfirmed",
+                    f"prior operation {operation['operationId']} failed at "
+                    f"{operation['failureCode'] or 'unknown'} and its exact runtime is not closed",
+                )
+            if operation["epochManifestSha256"] is not None:
+                operation = _create_successor_operation(
+                    config, ledger_root, state_path, current, operation,
+                    runner=runner,
+                    docker=docker,
+                    cgroup_closed=cgroup_closed,
+                    allow_non_root=allow_non_root,
+                )
+                _crash(crash_hook, "succession-intent-persisted", operation)
+            else:
+                archive_failed_operation(ledger_root, operation)
+                operation = None
+        if operation is None and current is not None and current["status"] == "ready":
+            finished = _finish_current_runtime(
+                ledger_root, current, None,
+                runner=runner, docker=docker, cgroup_closed=cgroup_closed,
+                allow_non_root=allow_non_root,
+            )
+            if finished is not None:
+                return finished
+        if operation is None:
+            _close_old_runtime(runner, docker, current, cgroup_closed)
+            image_digest = _image_digest(runner, docker, image)
+            closure_proof = _closure_for_new_operation(
+                ledger_root, state_path, current,
+                deployment_id=config["deployment_id"],
+                allow_non_root=allow_non_root,
+                runner=runner,
+                docker=docker,
+            )
+            operation = _create_operation(
+                config, ledger_root, state_path, current,
+                image_digest=image_digest,
+                closure_proof=closure_proof,
+                allow_non_root=allow_non_root,
+            )
+            _crash(crash_hook, "operation-intent-persisted", operation)
+        else:
+            if (operation["deploymentId"] != config["deployment_id"]
+                    or operation["statePath"] != str(state_path)
+                    or operation["image"] != image):
+                raise LauncherError("runtime_operation_conflict", "resumed operation does not match launcher input")
+            if _image_digest(runner, docker, image) != operation["imageDigest"]:
+                raise LauncherError(
+                    "runtime_image_conflict",
+                    "the configured image tag no longer identifies the operation image digest",
+                )
+            read_closure_proof(
+                ledger_root, operation["closureProofSha256"],
+                deployment_id=operation["deploymentId"],
+            )
+            if operation["previousCgroupPath"] is not None and not cgroup_closed(operation["previousCgroupPath"]):
+                raise LauncherError("previous_runtime_not_closed", "resumed operation found a live previous cgroup")
+        write_bootstrap_nonce(ledger_root, operation["targetEpoch"], operation["bootstrapNonce"])
+
+        try:
+            operation = _ensure_container(
+                operation_path, operation,
+                ledger_root=ledger_root,
+                runner=runner,
+                docker=docker,
+                image=image,
+                volumes=volumes,
+                env_files=env_files,
+                environment=environment,
+                crash_hook=crash_hook,
+            )
+            operation, maintenance = _run_maintenance(
+                ledger_root, state_path, operation_path, operation,
+                runner=runner, docker=docker, image=image, crash_hook=crash_hook,
+                allow_non_root=allow_non_root,
+            )
+            operation = _ensure_epoch(ledger_root, operation_path, operation, maintenance, crash_hook)
+            operation = _ensure_started(
+                operation_path, operation, runner=runner, docker=docker, crash_hook=crash_hook,
+            )
+            operation, ready = _ensure_ready(
+                operation_path, operation,
+                ledger_root=ledger_root,
+                runner=runner,
+                docker=docker,
+                read_cgroup=read_cgroup,
+                read_pid_namespace=read_pid_namespace,
+                ready_timeout_seconds=float(config.get("ready_timeout_seconds", 30)),
+                crash_hook=crash_hook,
+                sleep=sleep,
+            )
+            operation = _ensure_current(
+                operation_path, operation,
+                ledger_root=ledger_root,
+                ready=ready,
+                crash_hook=crash_hook,
+            )
+        except SimulatedCrash:
+            raise
+        except BaseException as error:
+            try:
+                durable_operation = read_operation(operation_path)
+            except BaseException as identity_error:
+                raise LauncherError(
+                    "runtime_operation_identity_conflict",
+                    "the durable operation could not be read after launch failure",
+                ) from identity_error
+            identity_keys = (
+                "schemaVersion", "operationId", "deploymentId", "statePath",
+                "image", "imageDigest", "targetEpoch", "bootstrapNonce",
+                "bootstrapNonceSha256", "closureProofSha256",
+                "previousContainerId", "previousCgroupPath",
+                "previousHistoryClosureSha256", "createdFromEpoch", "cidFile",
+                "epochSealedAt", "createdAt",
+            )
+            if (durable_operation is None
+                    or any(durable_operation[key] != operation[key] for key in identity_keys)
+                    or durable_operation.get("succession") != operation.get("succession")):
+                raise LauncherError(
+                    "runtime_operation_identity_conflict",
+                    "the durable operation identity changed during launch",
+                ) from error
+            if durable_operation.get("containerId") is not None:
+                with contextlib.suppress(Exception):
+                    _cleanup_known_container(runner, docker, durable_operation)
+            if durable_operation["phase"] != "failed":
+                with contextlib.suppress(Exception):
+                    advance_operation(
+                        operation_path, durable_operation, "failed",
+                        failureCode="launcher_exception",
+                    )
+            raise
+
+        current = read_current(ledger_root / "current.json")
+        finished = _finish_current_runtime(
+            ledger_root, current, operation,
+            runner=runner, docker=docker, cgroup_closed=cgroup_closed,
+            allow_non_root=allow_non_root,
+        )
+        if finished is None:
+            raise LauncherError("current_runtime_missing", "completed launcher lost its exact current runtime")
+        return finished
+
+
+def parse_args(argv: list[str]) -> dict:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ledger-root", default="/var/lib/sfsc-runtime")
+    parser.add_argument("--state-path", required=True)
+    parser.add_argument("--image", required=True)
+    parser.add_argument("--deployment-id", required=True)
+    parser.add_argument("--docker", default="/usr/bin/docker")
+    parser.add_argument("--volume", action="append", default=[])
+    parser.add_argument("--env", action="append", default=[])
+    parser.add_argument("--env-file", action="append", default=[])
+    parser.add_argument("--ready-timeout-seconds", type=float, default=30)
+    parser.add_argument("--allow-non-root-test-root", action="store_true")
+    args = parser.parse_args(argv)
+    return {
+        "ledger_root": args.ledger_root,
+        "state_path": args.state_path,
+        "image": args.image,
+        "deployment_id": args.deployment_id,
+        "docker": args.docker,
+        "volumes": args.volume,
+        "environment": args.env,
+        "env_files": args.env_file,
+        "ready_timeout_seconds": args.ready_timeout_seconds,
+        "allow_non_root": args.allow_non_root_test_root,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        result = run_appliance_once(parse_args(sys.argv[1:] if argv is None else argv))
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result["exitCode"] == 0 else result["exitCode"]
+    except LauncherSignal as error:
+        print(json.dumps({"ok": False, "code": "launcher_signaled", "signal": error.signum}, sort_keys=True), file=sys.stderr)
+        return 128 + error.signum
+    except (LauncherError, LedgerError, OSError, subprocess.SubprocessError) as error:
+        print(json.dumps({
+            "ok": False,
+            "code": getattr(error, "code", "launcher_error"),
+            "message": str(error),
+        }, sort_keys=True), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

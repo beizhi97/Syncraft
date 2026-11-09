@@ -1,7 +1,23 @@
+import { isAbsolute, posix, win32 } from "node:path";
+
+const SFTP_TRANSPORT_FIELDS = Object.freeze([
+  "host",
+  "port",
+  "user",
+  "socksProxy",
+  "knownHostsFile",
+  "keyFile",
+  "hostKeyFingerprint",
+  "credentialRevision"
+]);
+
 export function describeStorageTarget(job = {}) {
   const storageBackend = job.storageBackend || "s3";
+  if (storageBackend === "sftp") {
+    return describeSftpStorageTarget(job);
+  }
   if (storageBackend !== "s3") {
-    throw new Error("Only S3-compatible MinIO storage is supported");
+    throw new Error("Unsupported storage backend");
   }
 
   const remoteName = sanitizeRemoteName(job.remoteName || "home-minio");
@@ -24,6 +40,23 @@ export function describeStorageTarget(job = {}) {
   };
 }
 
+function describeSftpStorageTarget(job) {
+  assertNoSftpSecretMaterial(job);
+  if (Object.hasOwn(job, "remotePath") || Object.hasOwn(job, "remotePrefix")) {
+    throw new Error("SFTP jobs must use rootPath as the canonical remote root");
+  }
+  const remoteName = sanitizeRemoteName(job.remoteName);
+  const rootPath = normalizeSftpRootPath(job.rootPath);
+  const clientName = sanitizePathSegment(job.clientName || "default-client");
+  return {
+    storageBackend: "sftp",
+    remoteName,
+    clientName,
+    rootPath,
+    remotePath: `${remoteName}:${rootPath}`
+  };
+}
+
 export function buildStorageRemotePath(job = {}) {
   return describeStorageTarget(job).remotePath;
 }
@@ -42,6 +75,147 @@ export function sanitizeRemoteFolder(input) {
   }
 
   return text.split("/").filter(Boolean).map(sanitizePathSegment).join("/");
+}
+
+export function normalizeSftpRootPath(input) {
+  if (typeof input !== "string") {
+    throw new Error("SFTP rootPath must be a canonical relative virtual path");
+  }
+  const text = input;
+  if (text !== text.trim()
+    || text.includes("\\")
+    || text.startsWith("/")
+    || /^[A-Za-z]:/.test(text)
+    || /[:\u0000-\u001F\u007F]/.test(text)) {
+    throw new Error("SFTP rootPath must be a canonical relative virtual path");
+  }
+  if (text === "") {
+    return "";
+  }
+  const parts = text.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) {
+    throw new Error("SFTP rootPath must be a canonical relative virtual path");
+  }
+  return parts.join("/");
+}
+
+export function normalizeSftpTransport(input) {
+  if (!isPlainObject(input)) {
+    throw new Error("SFTP transport options are required");
+  }
+  const expectedKeys = [...SFTP_TRANSPORT_FIELDS].sort();
+  const keys = Object.keys(input).sort();
+  if (keys.length !== expectedKeys.length
+    || keys.some((key, index) => key !== expectedKeys[index])) {
+    throw new Error("SFTP transport options contain unsupported fields");
+  }
+  const host = normalizeSftpText(input.host, "SFTP host");
+  const user = normalizeSftpText(input.user, "SFTP user");
+  const port = normalizeSftpPort(input.port);
+  const socksProxy = normalizeSftpSocksProxy(input.socksProxy);
+  const knownHostsFile = normalizeAbsoluteSftpPath(input.knownHostsFile, "knownHostsFile");
+  const keyFile = normalizeAbsoluteSftpPath(input.keyFile, "keyFile");
+  const hostKeyFingerprint = String(input.hostKeyFingerprint || "").trim();
+  if (!/^SHA256:[A-Za-z0-9+/]{43}$/.test(hostKeyFingerprint)) {
+    throw new Error("SFTP hostKeyFingerprint must use SHA256 OpenSSH format");
+  }
+  const credentialRevision = normalizeSftpText(input.credentialRevision, "SFTP credentialRevision");
+  return Object.freeze({
+    host,
+    port,
+    user,
+    socksProxy,
+    knownHostsFile,
+    keyFile,
+    hostKeyFingerprint,
+    credentialRevision
+  });
+}
+
+export function assertNoSftpSecretMaterial(value, seen = new WeakSet()) {
+  if (typeof value === "string") {
+    if (/-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----/.test(value)) {
+      throw new Error("SFTP secret material must stay outside jobs and transport options");
+    }
+    return;
+  }
+  if (value === null || typeof value !== "object") {
+    return;
+  }
+  if (seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+  for (const [key, nested] of Object.entries(value)) {
+    const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (normalized === "pass"
+      || normalized.includes("password")
+      || normalized.includes("passphrase")
+      || normalized === "keypem"
+      || normalized.includes("privatekey")
+      || normalized === "secret"
+      || normalized.includes("secretaccesskey")
+      || normalized.includes("sessiontoken")) {
+      throw new Error("SFTP secret material must stay outside jobs and transport options");
+    }
+    assertNoSftpSecretMaterial(nested, seen);
+  }
+}
+
+function normalizeSftpText(value, field) {
+  const text = String(value || "");
+  if (!text || text !== text.trim() || /[\u0000-\u001F\u007F]/.test(text) || /\s/.test(text)) {
+    throw new Error(`${field} is invalid`);
+  }
+  return text;
+}
+
+function normalizeSftpPort(value) {
+  const port = typeof value === "number" ? value : Number(String(value || ""));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("SFTP port is invalid");
+  }
+  return port;
+}
+
+function normalizeSftpSocksProxy(value) {
+  const text = String(value || "");
+  const bracketedMatch = /^\[([^\]]+)\]:(\d+)$/.exec(text);
+  const match = bracketedMatch || /^([^:]+):(\d+)$/.exec(text);
+  if (!match
+    || /[\/@?#\s\u0000-\u001F\u007F]/.test(text)
+    || !isLoopbackHost(match[1])
+    || (bracketedMatch && match[1].toLowerCase() !== "::1")) {
+    throw new Error("SFTP socksProxy must be an explicit loopback host:port");
+  }
+  const host = bracketedMatch ? `[${match[1]}]` : match[1];
+  return `${host}:${normalizeSftpPort(match[2])}`;
+}
+
+function isLoopbackHost(host) {
+  const normalized = String(host || "").toLowerCase();
+  if (normalized === "localhost" || normalized === "::1") {
+    return true;
+  }
+  const octets = normalized.split(".");
+  return octets.length === 4
+    && octets[0] === "127"
+    && octets.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
+
+function normalizeAbsoluteSftpPath(value, field) {
+  const text = String(value || "");
+  if (!text
+    || text !== text.trim()
+    || /[\u0000-\u001F\u007F]/.test(text)
+    || (!isAbsolute(text) && !win32.isAbsolute(text) && !posix.isAbsolute(text))) {
+    throw new Error(`SFTP ${field} must be an absolute path`);
+  }
+  return text;
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 // A remote name becomes the leading part of the positional `name:bucket/prefix`

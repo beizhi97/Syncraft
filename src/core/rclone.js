@@ -1,6 +1,20 @@
-import { buildStorageRemotePath, describeStorageTarget } from "./storage.js";
+import {
+  assertNoSftpSecretMaterial,
+  buildStorageRemotePath,
+  describeStorageTarget,
+  normalizeSftpTransport
+} from "./storage.js";
 import { normalizeBandwidthLimit } from "./bandwidth.js";
 import { normalizePositiveInteger, normalizeTcpPort } from "./numbers.js";
+import { selectBisyncEngine } from "./syncEngine.js";
+import { resolve as resolvePath } from "node:path";
+
+export function toRcloneBisyncResyncMode(initialMode) {
+  if (initialMode === "local") return "path1";
+  if (initialMode === "remote") return "path2";
+  if (initialMode === "newer") return "newer";
+  throw new TypeError("Unsupported bidirectional initial mode");
+}
 
 export function buildRclonePreview(job, options = {}) {
   const localProxyHost = options.localProxyHost || "127.0.0.1";
@@ -15,8 +29,16 @@ export function buildRclonePreview(job, options = {}) {
   const backupDir = options.backupDir || "";
   const destructiveSync = job.direction !== "bidirectional" && Boolean(job.destructiveSync);
   const action = job.direction === "bidirectional" ? "bisync" : destructiveSync ? "sync" : "copy";
-  const remotePath = resolveRemotePath(job);
   const storage = describeStorageTarget(job);
+  const backend = storage.storageBackend;
+  const engine = selectBisyncEngine(backend);
+  const sftpTransport = backend === "sftp"
+    ? prepareSftpTransport(job, options)
+    : null;
+  const remotePath = resolveRemotePath(job, storage, backend);
+  const recoveryPlan = action === "bisync"
+    ? buildBisyncRecoveryPlan(job, remotePath, options.recoveryPreflight)
+    : null;
   const source = resolveSource(job, remotePath);
   const target = resolveTarget(job, remotePath);
   const bandwidthLimit = normalizeBandwidthLimit(job.bandwidthLimit || "off");
@@ -25,10 +47,12 @@ export function buildRclonePreview(job, options = {}) {
   const streams = normalizePositiveInteger(job.streams, { field: "job.streams", defaultValue: 8 });
   const retries = normalizePositiveInteger(job.retries, { field: "job.retries", defaultValue: 3 });
   const lowLevelRetries = normalizePositiveInteger(job.lowLevelRetries, { field: "job.lowLevelRetries", defaultValue: 10 });
-  const s3UploadConcurrency = normalizePositiveInteger(job.s3UploadConcurrency, {
-    field: "job.s3UploadConcurrency",
-    defaultValue: streams
-  });
+  const s3UploadConcurrency = backend === "s3"
+    ? normalizePositiveInteger(job.s3UploadConcurrency, {
+        field: "job.s3UploadConcurrency",
+        defaultValue: streams
+      })
+    : null;
 
   const args = [
     action,
@@ -55,12 +79,19 @@ export function buildRclonePreview(job, options = {}) {
     args.push("--config", rcloneConfigPath);
   }
 
-  args.push(
-    "--s3-upload-concurrency",
-    String(s3UploadConcurrency),
-    "--s3-chunk-size",
-    job.s3ChunkSize || "16M"
-  );
+  if (backend === "s3") {
+    args.push(
+      "--s3-upload-concurrency",
+      String(s3UploadConcurrency),
+      "--s3-chunk-size",
+      job.s3ChunkSize || "16M"
+    );
+  }
+  if (backend === "sftp") {
+    // The backend flag wins over an inherited RCLONE_SFTP_SOCKS_PROXY value.
+    // Keep the remote-scoped env too, so config creation and backend use agree.
+    args.push("--sftp-socks-proxy", sftpTransport.socksProxy);
+  }
 
   if (job.dryRun) {
     args.push("--dry-run");
@@ -72,21 +103,55 @@ export function buildRclonePreview(job, options = {}) {
     }
   }
   if (action === "bisync") {
-    args.push("--check-access", "--resilient");
+    // Keep the existing engine contract in the argv so the baseline identity
+    // and actual conflict behavior cannot drift apart.
+    args.push(
+      "--check-access",
+      "--resilient",
+      "--conflict-resolve",
+      engine.comparison.conflictResolve,
+      "--conflict-loser",
+      engine.comparison.conflictLoser,
+      "--conflict-suffix",
+      engine.comparison.conflictSuffix
+    );
+    if (backend === "sftp") {
+      const rootId = job.syncRelation?.rootId;
+      if (typeof rootId !== "string" || !/^root_[A-Za-z0-9_-]{16,128}$/.test(rootId)) {
+        throw new Error("SFTP bidirectional sync requires a trusted root ID for its access marker");
+      }
+      args.push("--check-filename", `.syncraft-access-${rootId}`);
+      args.push("--compare", engine.comparison.compare.join(","), "--checksum");
+    }
     if (bisyncWorkdir) {
       args.push("--workdir", bisyncWorkdir);
+    }
+    if (recoveryPlan) {
+      args.push(
+        "--backup-dir1", recoveryPlan.backupDir1,
+        "--backup-dir2", recoveryPlan.backupDir2
+      );
+      for (const pattern of recoveryPlan.excludePatterns) {
+        args.push("--exclude", pattern);
+      }
     }
   }
   if (bandwidthLimit !== "off") {
     args.push("--bwlimit", bandwidthLimit);
   }
-  for (const pattern of job.exclude || []) {
+  const excludePatterns = [
+    ...(Array.isArray(job.exclude) ? job.exclude : []),
+    ...(backend === "sftp" ? engine.reservedExcludes : [])
+  ];
+  for (const pattern of new Set(excludePatterns.filter(Boolean))) {
     if (pattern) {
       args.push("--exclude", pattern);
     }
   }
 
-  const remoteConfig = buildRcloneRemoteConfig(storage, job, rcloneBin, rcloneConfigPath);
+  const remoteConfig = backend === "sftp"
+    ? buildSftpRcloneRemoteConfig(storage, sftpTransport, rcloneBin, rcloneConfigPath)
+    : buildRcloneRemoteConfig(storage, job, rcloneBin, rcloneConfigPath);
   // Positional arguments are the one place a leading `-` turns data into flags.
   // sanitizeRemoteName and validateSyncLocalPath both prevent it upstream; this
   // assertion makes a future regression in either fail loudly instead of
@@ -113,7 +178,7 @@ export function buildRclonePreview(job, options = {}) {
     storage,
     remotePath,
     safety: {
-      usesProcessScopedProxy: true,
+      usesProcessScopedProxy: backend === "sftp" ? false : true,
       mutatesSystemProxy: false,
       mutatesRoutes: false,
       tunRequired: false,
@@ -123,11 +188,73 @@ export function buildRclonePreview(job, options = {}) {
   };
 }
 
-function resolveRemotePath(job) {
-  if (job.remotePath) {
+/**
+ * Turn a caller's completed, relation-scoped recovery preflight receipt into
+ * explicit rclone backup flags. This function validates receipt shape and
+ * identity binding; it does not itself inspect either filesystem or listing.
+ */
+export function buildBisyncRecoveryPlan(job, remotePath, receipt) {
+  if (!receipt) return null;
+  const relation = job.syncRelation;
+  const relationId = relation?.relationId;
+  const baselineId = relation?.baselineId;
+  const rootId = relation?.rootId;
+  const runId = receipt?.runId;
+  if (receipt.type !== "bisync-recovery-preflight"
+    || receipt.version !== 1
+    || receipt.issuer !== "sync-recovery-preflight"
+    || receipt.status !== "ready"
+    || !["new-relation", "existing-relation-migration"].includes(receipt.preflightKind)
+    || receipt.runNamespaceWasEmpty !== true
+    || receipt.priorListingNamespaceWasEmpty !== true
+    || (receipt.preflightKind === "new-relation" && receipt.migrationStatus !== "not-applicable")
+    || (receipt.preflightKind === "existing-relation-migration"
+      && (receipt.migrationStatus !== "recorded" || !receipt.migrationRecordId))
+    || typeof relationId !== "string"
+    || !/^[A-Za-z0-9_-]{1,128}$/.test(relationId)
+    || typeof baselineId !== "string"
+    || !baselineId
+    || typeof rootId !== "string"
+    || !/^root_[A-Za-z0-9_-]{16,128}$/.test(rootId)
+    || typeof runId !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)
+    || receipt.relationId !== relationId
+    || receipt.baselineId !== baselineId
+    || receipt.rootId !== rootId) {
+    throw new Error("Bidirectional recovery requires a ready, relation-bound preflight receipt");
+  }
+  const namespace = `.syncraft-recovery/${relationId}`;
+  const runNamespace = `${namespace}/runs/${runId}`;
+  const expectedBackupDir1 = resolvePath(job.localPath, ...runNamespace.split("/"), "path1");
+  const expectedBackupDir2 = joinRemotePath(remotePath, `${runNamespace}/path2`);
+  const expectedExclude = `/${namespace}/**`;
+  if (receipt.namespace !== namespace
+    || receipt.backupDir1 !== expectedBackupDir1
+    || receipt.backupDir2 !== expectedBackupDir2
+    || receipt.excludePattern !== expectedExclude) {
+    throw new Error("Bidirectional recovery preflight paths do not match the relation namespace");
+  }
+  return {
+    backupDir1: expectedBackupDir1,
+    backupDir2: expectedBackupDir2,
+    excludePatterns: [expectedExclude],
+    namespace,
+    migrationRecordId: receipt.migrationRecordId
+  };
+}
+
+function joinRemotePath(root, child) {
+  const normalizedRoot = String(root).replace(/\/+$/, "");
+  return normalizedRoot.endsWith(":")
+    ? `${normalizedRoot}${String(child).replace(/^\/+/, "")}`
+    : `${normalizedRoot}/${String(child).replace(/^\/+/, "")}`;
+}
+
+function resolveRemotePath(job, storage, backend) {
+  if (backend !== "sftp" && job.remotePath) {
     return job.remotePath;
   }
-  return buildStorageRemotePath(job);
+  return backend === "sftp" ? storage.remotePath : buildStorageRemotePath(job);
 }
 
 function resolveSource(job, remotePath) {
@@ -194,6 +321,62 @@ function buildRcloneRemoteConfig(storage, job, rcloneBin, rcloneConfigPath) {
     args,
     env,
     displayCommand: renderCommand(rcloneBin, args, env)
+  };
+}
+
+function buildSftpRcloneRemoteConfig(storage, transport, rcloneBin, rcloneConfigPath) {
+  const args = [
+    "config",
+    "create",
+    storage.remoteName,
+    "sftp",
+    "host",
+    transport.host,
+    "port",
+    String(transport.port),
+    "user",
+    transport.user,
+    "key_file",
+    transport.keyFile,
+    "known_hosts_file",
+    transport.knownHostsFile,
+    "socks_proxy",
+    transport.socksProxy,
+    "key_use_agent",
+    "false",
+    "ask_password",
+    "false"
+  ];
+  if (rcloneConfigPath) {
+    args.push("--config", rcloneConfigPath);
+  }
+  const env = sftpRemoteConfigEnvironment(storage.remoteName, transport);
+  return {
+    executable: rcloneBin,
+    args,
+    env,
+    displayCommand: renderCommand(rcloneBin, args, env)
+  };
+}
+
+function prepareSftpTransport(job, options) {
+  assertNoSftpSecretMaterial(job);
+  assertNoSftpSecretMaterial(options);
+  return normalizeSftpTransport(options.sftpTransport);
+}
+
+function sftpRemoteConfigEnvironment(remoteName, transport) {
+  const field = (name) => rcloneConfigEnvKey(remoteName, name);
+  return {
+    [field("TYPE")]: "sftp",
+    [field("HOST")]: transport.host,
+    [field("PORT")]: String(transport.port),
+    [field("USER")]: transport.user,
+    [field("KEY_FILE")]: transport.keyFile,
+    [field("KNOWN_HOSTS_FILE")]: transport.knownHostsFile,
+    [field("SOCKS_PROXY")]: transport.socksProxy,
+    [field("KEY_USE_AGENT")]: "false",
+    [field("ASK_PASSWORD")]: "false"
   };
 }
 

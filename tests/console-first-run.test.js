@@ -24,7 +24,7 @@ test("导航按真实依赖顺序排列：基础设置在 SyncKey 之前", async
   assert.deepEqual(order, ["tab-overview", "tab-setup", "tab-vless", "tab-devices", "tab-tkey"]);
 });
 
-test("控制台有首次运行面板，且四步顺序与服务端一致", async () => {
+test("控制台有首次运行面板，且目录、修复、配对步骤由服务端提供", async () => {
   const { html, app } = await consoleSources();
 
   assert.match(html, /id="tab-setup"/);
@@ -35,6 +35,32 @@ test("控制台有首次运行面板，且四步顺序与服务端一致", async
   // 两端各写一份顺序，就会重新产生 A/B 修掉的那类漂移。
   assert.match(app, /api\("\/api\/admin\/setup"/);
   assert.doesNotMatch(app, /SETUP_STEP_IDS\s*=/);
+  assert.match(html, /目录、配对与修复/);
+  assert.match(html, /id="openEnrollmentDirectoryBtn"/);
+  assert.match(html, /id="enrollmentRequestList"/);
+  assert.match(html, /id="reconfigureEnrollmentChannelBtn"/);
+});
+
+test("设备申请可一次授权多个目录，并保留单目录旧请求格式", async () => {
+  const { app } = await consoleSources();
+  const loadRequests = app.slice(app.indexOf("async function loadEnrollmentRequests"), app.indexOf("async function createEnrollmentChannelCode"));
+
+  assert.match(loadRequests, /select\.multiple = true/);
+  assert.match(loadRequests, /select\.selectedIndex = -1/);
+  assert.match(loadRequests, /selected\.map\(option => option\.value\)/);
+  assert.match(loadRequests, /roots\.length === 1 \? \{ rootId: roots\[0\] \} : \{ rootIds: roots \}/);
+  assert.match(loadRequests, /roots\.length > 1 && \(!Array\.isArray\(result\.bindings\) \|\| result\.bindings\.length !== roots\.length\)/);
+  assert.match(loadRequests, /已授权目录：\$\{names\}/);
+});
+
+test("首次配置动态生成的前往按钮能切换到目标面板", async () => {
+  const { app } = await consoleSources();
+  const bindingStart = app.indexOf('byId("setupStepList").addEventListener("click"');
+
+  assert.notEqual(bindingStart, -1, "setupStepList 缺少动态按钮的点击事件委托");
+  const binding = app.slice(bindingStart, bindingStart + 500);
+  assert.match(binding, /closest\("\[data-tab-target\]"\)/);
+  assert.match(binding, /switchTab\([^)]*\.dataset\.tabTarget\)/);
 });
 
 // 断言「某段代码不含某写法」时必须剥掉注释：本轮的注释里点名了那些被废弃的
@@ -62,7 +88,7 @@ test("首次运行面板渲染服务端给的证据，不自己推导就绪", as
   assert.doesNotMatch(body, /restartRequired/);
 });
 
-test("概览的隧道与存储灯改为读就绪度证据，不再读默认值", async () => {
+test("概览的目录、应用回执与设备授权状态读服务端就绪度", async () => {
   const { app } = await consoleSources();
   const overview = app.slice(app.indexOf("function renderOverview"));
   const body = stripComments(overview.slice(0, overview.indexOf("\n}\n") + 3));
@@ -75,6 +101,9 @@ test("概览的隧道与存储灯改为读就绪度证据，不再读默认值",
   assert.doesNotMatch(body, /setOverviewStatus\("overviewServiceState", true/);
   // 新实现从就绪度取。
   assert.match(body, /setupReadiness|readinessStep/);
+  assert.match(body, /readinessStep\("directory"\)/);
+  assert.match(body, /readinessStep\("repair"\)/);
+  assert.match(body, /readinessStep\("pairing"\)/);
 });
 
 test("配置未完成时概览把首次运行列为待处理项，并能跳到该面板", async () => {

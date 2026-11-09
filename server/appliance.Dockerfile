@@ -20,6 +20,7 @@ WORKDIR /app
 COPY package.json ./
 COPY src ./src
 COPY public ./public
+COPY server/runtime ./server/runtime
 COPY server/sing-box-supervisor.sh /usr/local/bin/sfsc-sing-box-supervisor
 COPY server/rootfs /
 COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
@@ -29,7 +30,13 @@ COPY --from=minio-mc /usr/bin/mc /usr/local/bin/mc
 RUN chmod 0755 \
       /usr/local/bin/sfsc-sing-box-supervisor \
       /etc/s6-overlay/s6-rc.d/sfsc-node/run \
+      /etc/s6-overlay/s6-rc.d/sfsc-node/finish \
       /etc/s6-overlay/s6-rc.d/sfsc-singbox/run \
+      /app/server/runtime/native/linux-arm64/relation/sfsc-relation-supervisor \
+      /app/server/runtime/native/linux-arm64/relation/sfsc-root-guard \
+      /app/server/runtime/native/linux-arm64/relation-v2/sfsc-relation-supervisor \
+      /app/server/runtime/native/linux-arm64/relation-v2/sfsc-root-guard \
+      /app/server/runtime/native/linux-arm64/relation-v2/sfsc-sftp-service \
     && sing-box version \
     && rclone version \
     && node --version
@@ -40,6 +47,9 @@ ENV HOST=0.0.0.0 \
     SINGBOX_CONFIG_PATH=/data/sing-box/config.json \
     SINGBOX_CONTROL_DIR=/data/control \
     SINGBOX_LISTEN_PORT=45678 \
+    SFSC_RUNTIME_ADMISSION_REQUIRED=1 \
+    SFSC_RUNTIME_EPOCH_ROOT=/run/sfsc-runtime \
+    SFSC_RELATION_STATE_PATH=/data/app/relation-services.json \
     RCLONE_BIN=/usr/local/bin/rclone \
     S3_ENDPOINT=http://127.0.0.1:9000
 
@@ -48,4 +58,3 @@ VOLUME ["/data"]
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=4 \
   CMD curl --fail --silent --show-error http://127.0.0.1:5177/healthz >/dev/null || exit 1
-

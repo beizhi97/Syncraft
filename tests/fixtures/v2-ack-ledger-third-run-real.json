@@ -1,0 +1,266 @@
+[
+  {
+    "event": "ready",
+    "runId": "c1a0b4e57a3f5047",
+    "ready": {
+      "artifacts": {
+        "rootGuard": {
+          "file": "sfsc-root-guard",
+          "sha256": "fb9506a5449db95da53b1c225241517efde2ae695517e6a177139ee0ebd5bab5",
+          "sizeBytes": 3543319
+        },
+        "sftpService": {
+          "file": "sfsc-sftp-service",
+          "sha256": "57bb9bb1ada629fc59328ab25a8391d502036989d6dc349a8590c5ea17589023",
+          "sizeBytes": 6632706
+        },
+        "supervisor": {
+          "file": "sfsc-relation-supervisor",
+          "sha256": "70441080a62b4281516c02a6d23d9925b7427a5b3b2d34e3a963bdfcee6a03a4",
+          "sizeBytes": 3733811
+        }
+      },
+      "imageIdentity": {
+        "imageId": "sha256:d80a56f5c472e21b50f350ebcb4b24d753ec033a111201e31e4f66df45990086",
+        "source": "host-asserted-docker-inspect"
+      },
+      "mode": "sftp-v2",
+      "packageManifestSha256": "dd699246bf02cb44b291b543dfa72174a75966473b59a51872e5b2bca30299bf",
+      "relations": {
+        "A": {
+          "devicePublicKeyFingerprint": "Vf6MviNmuT2DCJ9dYMpXPrbQRFTA0F3eC8Kh4zufvfI",
+          "host": "127.0.0.1",
+          "hostPublicLine": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJhyuAsMTwbDnxwpPSKzklCYYrrzn/WGCJ9iq+yAW1wY",
+          "port": 35097,
+          "relationId": "rel_Pk9vWmNLuE7VDYVal7v9NyUG",
+          "root": "/data/r75-v2/roots/A"
+        },
+        "B": {
+          "devicePublicKeyFingerprint": "YtgQVSymrnz0Hx0wywgi7smvWNeOZOzYoH0AAVyMWoY",
+          "host": "127.0.0.1",
+          "hostPublicLine": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJhyuAsMTwbDnxwpPSKzklCYYrrzn/WGCJ9iq+yAW1wY",
+          "port": 40327,
+          "relationId": "rel_DcsgYG1ROUxPhmWCVKtLR49g",
+          "root": "/data/r75-v2/roots/B"
+        }
+      },
+      "runId": "c1a0b4e57a3f5047",
+      "schemaVersion": "2",
+      "sourceManifest": {
+        "sha256": "98a28d23bd244cfa8decd0506e6d1f83af46ae2fcaa0b67d7d30029b92482e27",
+        "source": "host-asserted-source-manifest"
+      }
+    },
+    "residentOperations": [
+      {
+        "action": "start",
+        "generation": "1",
+        "handleDigest": "75ba594cbdb02dd70301a80d2bf3b1a93ccf2a16bc325b6c0e7755ae73a378f1",
+        "identityDigest": "50cf736240ff34dcd8c58e11fcd013df8548ddd8fca4736d6278074552c4e5c7",
+        "operationId": "v2-c1a0b4e57a3f5047-start-A-0",
+        "relation": "A"
+      },
+      {
+        "action": "start",
+        "generation": "1",
+        "handleDigest": "49f82dd017ee961ff7d8992e29c66fab353e9aac750ff9c30e7f41d6b5e11e98",
+        "identityDigest": "c7b28cbe50b10153911952cbe8877262f671cf35af2b6ede30f0ff9da44443d9",
+        "operationId": "v2-c1a0b4e57a3f5047-start-B-1",
+        "relation": "B"
+      }
+    ]
+  },
+  {
+    "ack": {
+      "commandId": "vless-host-0-fb1dfced",
+      "operations": [
+        {
+          "action": "start",
+          "generation": "1",
+          "handleDigest": "75ba594cbdb02dd70301a80d2bf3b1a93ccf2a16bc325b6c0e7755ae73a378f1",
+          "identityDigest": "50cf736240ff34dcd8c58e11fcd013df8548ddd8fca4736d6278074552c4e5c7",
+          "operationId": "v2-c1a0b4e57a3f5047-start-A-0",
+          "relation": "A"
+        },
+        {
+          "action": "start",
+          "generation": "1",
+          "handleDigest": "49f82dd017ee961ff7d8992e29c66fab353e9aac750ff9c30e7f41d6b5e11e98",
+          "identityDigest": "c7b28cbe50b10153911952cbe8877262f671cf35af2b6ede30f0ff9da44443d9",
+          "operationId": "v2-c1a0b4e57a3f5047-start-B-1",
+          "relation": "B"
+        },
+        {
+          "action": "disable",
+          "closure": {
+            "closed": true,
+            "listenerAbsent": true,
+            "processGone": true,
+            "sessionsGone": true
+          },
+          "handleReference": {
+            "digest": "75ba594cbdb02dd70301a80d2bf3b1a93ccf2a16bc325b6c0e7755ae73a378f1",
+            "generation": "1",
+            "relationId": "rel_Pk9vWmNLuE7VDYVal7v9NyUG"
+          },
+          "listener": {
+            "host": "127.0.0.1",
+            "port": 35097,
+            "role": "expected"
+          },
+          "operationId": "v2-c1a0b4e57a3f5047-disable-A-2",
+          "relation": "A",
+          "runtimeProcess": {
+            "parentPid": "202",
+            "parentStarttime": "527616362",
+            "pid": "209",
+            "starttime": "527616366"
+          }
+        }
+      ],
+      "runId": "c1a0b4e57a3f5047",
+      "schemaVersion": "2"
+    },
+    "action": "disable-A",
+    "event": "command-ack",
+    "identityBindings": [
+      {
+        "desired": "disabled",
+        "generation": "1",
+        "handleDigest": "75ba594cbdb02dd70301a80d2bf3b1a93ccf2a16bc325b6c0e7755ae73a378f1",
+        "identityDigest": "50cf736240ff34dcd8c58e11fcd013df8548ddd8fca4736d6278074552c4e5c7",
+        "phase": "stopped",
+        "relation": "A",
+        "relationId": "rel_Pk9vWmNLuE7VDYVal7v9NyUG",
+        "runtimeIdentityAbsent": true,
+        "source": "manager-state-after-disable"
+      }
+    ],
+    "runId": "c1a0b4e57a3f5047"
+  },
+  {
+    "ack": {
+      "commandId": "vless-host-1-5d13893c",
+      "operations": [
+        {
+          "action": "start",
+          "generation": "1",
+          "handleDigest": "75ba594cbdb02dd70301a80d2bf3b1a93ccf2a16bc325b6c0e7755ae73a378f1",
+          "identityDigest": "50cf736240ff34dcd8c58e11fcd013df8548ddd8fca4736d6278074552c4e5c7",
+          "operationId": "v2-c1a0b4e57a3f5047-start-A-0",
+          "relation": "A"
+        },
+        {
+          "action": "start",
+          "generation": "1",
+          "handleDigest": "49f82dd017ee961ff7d8992e29c66fab353e9aac750ff9c30e7f41d6b5e11e98",
+          "identityDigest": "c7b28cbe50b10153911952cbe8877262f671cf35af2b6ede30f0ff9da44443d9",
+          "operationId": "v2-c1a0b4e57a3f5047-start-B-1",
+          "relation": "B"
+        },
+        {
+          "action": "disable",
+          "closure": {
+            "closed": true,
+            "listenerAbsent": true,
+            "processGone": true,
+            "sessionsGone": true
+          },
+          "handleReference": {
+            "digest": "75ba594cbdb02dd70301a80d2bf3b1a93ccf2a16bc325b6c0e7755ae73a378f1",
+            "generation": "1",
+            "relationId": "rel_Pk9vWmNLuE7VDYVal7v9NyUG"
+          },
+          "listener": {
+            "host": "127.0.0.1",
+            "port": 35097,
+            "role": "expected"
+          },
+          "operationId": "v2-c1a0b4e57a3f5047-disable-A-2",
+          "relation": "A",
+          "runtimeProcess": {
+            "parentPid": "202",
+            "parentStarttime": "527616362",
+            "pid": "209",
+            "starttime": "527616366"
+          }
+        },
+        {
+          "action": "start-rejected",
+          "after": {
+            "A": {
+              "desired": "disabled",
+              "handleDigest": "75ba594cbdb02dd70301a80d2bf3b1a93ccf2a16bc325b6c0e7755ae73a378f1",
+              "handlePresent": true,
+              "runtimeIdentityPresent": false,
+              "state": "stopped"
+            },
+            "B": {
+              "desired": "enabled",
+              "handleDigest": "49f82dd017ee961ff7d8992e29c66fab353e9aac750ff9c30e7f41d6b5e11e98",
+              "handlePresent": true,
+              "runtimeIdentityPresent": true,
+              "state": "running"
+            },
+            "ledger": {
+              "identityDigest": "50cf736240ff34dcd8c58e11fcd013df8548ddd8fca4736d6278074552c4e5c7",
+              "revision": 8,
+              "sha256": "6e000a6e6a5f6880c2e204fc7696765478a99a9439691c6fbe2ce8da1f3bcfe0",
+              "sizeBytes": 9958
+            }
+          },
+          "before": {
+            "A": {
+              "desired": "disabled",
+              "handleDigest": "75ba594cbdb02dd70301a80d2bf3b1a93ccf2a16bc325b6c0e7755ae73a378f1",
+              "handlePresent": true,
+              "runtimeIdentityPresent": false,
+              "state": "stopped"
+            },
+            "B": {
+              "desired": "enabled",
+              "handleDigest": "49f82dd017ee961ff7d8992e29c66fab353e9aac750ff9c30e7f41d6b5e11e98",
+              "handlePresent": true,
+              "runtimeIdentityPresent": true,
+              "state": "running"
+            },
+            "ledger": {
+              "identityDigest": "50cf736240ff34dcd8c58e11fcd013df8548ddd8fca4736d6278074552c4e5c7",
+              "revision": 8,
+              "sha256": "6e000a6e6a5f6880c2e204fc7696765478a99a9439691c6fbe2ce8da1f3bcfe0",
+              "sizeBytes": 9958
+            }
+          },
+          "errorCode": "relation_file_service_start_blocked",
+          "expectedErrorCode": "relation_file_service_start_blocked",
+          "handleReference": {
+            "digest": "75ba594cbdb02dd70301a80d2bf3b1a93ccf2a16bc325b6c0e7755ae73a378f1",
+            "generation": "1",
+            "relationId": "rel_Pk9vWmNLuE7VDYVal7v9NyUG"
+          },
+          "ledgerBytesEqual": true,
+          "operationId": "v2-c1a0b4e57a3f5047-verify-disabled-start-A-3",
+          "relation": "A"
+        }
+      ],
+      "runId": "c1a0b4e57a3f5047",
+      "schemaVersion": "2"
+    },
+    "action": "verify-disabled-A-start-rejected",
+    "event": "command-ack",
+    "identityBindings": [
+      {
+        "desired": "disabled",
+        "generation": "1",
+        "handleDigest": "75ba594cbdb02dd70301a80d2bf3b1a93ccf2a16bc325b6c0e7755ae73a378f1",
+        "identityDigest": "50cf736240ff34dcd8c58e11fcd013df8548ddd8fca4736d6278074552c4e5c7",
+        "phase": "stopped",
+        "relation": "A",
+        "relationId": "rel_Pk9vWmNLuE7VDYVal7v9NyUG",
+        "runtimeIdentityAbsent": true,
+        "source": "manager-state-after-disable"
+      }
+    ],
+    "runId": "c1a0b4e57a3f5047"
+  }
+]

@@ -57,6 +57,8 @@ node scripts/release-signature.mjs verify dist/release-bundles/<bundle>.zip
 
 ## 2. 服务端部署
 
+本节沿用的 Docker Compose、MinIO 密码和 bucket 配置说明是 S3/MinIO 兼容模式。N1 普通目录模式使用独立的 systemd unit 和安装器，不需要 MinIO；按 [服务端普通目录部署说明](../server/DEPLOYMENT.md) 操作。旧模式的默认配置与运行数据保持不变。
+
 进入服务端目录：
 
 ```bash
@@ -264,6 +266,8 @@ node scripts/smoke-client.mjs --base-url http://127.0.0.1:5188 --json-report rep
 也可用 `SFSC_CLIENT_SMOKE_BASE_URL`、`SFSC_CLIENT_SMOKE_TIMEOUT_MS` 和 `SFSC_CLIENT_SMOKE_JSON_REPORT` 环境变量。该脚本检查轻量 `/api/health` 不泄露完整本地状态，确认 `/api/health.diagnostics.protocols` 与 `/api/client/status.diagnostics.protocols` 完全一致并输出 `protocols=aligned`，同时检查 `/api/client/status` 暴露客户端 diagnostics、发布 manifest、组件摘要和 local state 摘要，校验 `/api/profile` 返回 `{ profile: null }` 或展示安全 profile 摘要且不得包含执行密钥、SyncKey 或 VLESS URI，并对 `/api/logs` 与 `/api/diagnostics/export` 执行脱敏日志和诊断包合同校验；JSON 报告类型为 `client-smoke-report`，包含 `schemaVersion`、`ok`、`context`、`summary`、`checks` 和失败时的 `failure`。
 
 ## 3. 服务端状态恢复
+
+**Enrollment catalog v2 upgrade boundary:** a server release that writes catalog schema v2 migrates a v1 catalog forward under the catalog lock and persists the v2 state. Older server binaries that only understand v1 cannot be assumed to read or safely modify that v2 catalog. Do not roll back only the binary after this migration, delete the revocation journal, or restore an older authority projection to undo a revoke. Any rollback must restore a mutually compatible server and catalog state through an explicitly validated recovery procedure; this guide does not provide an automatic downgrade or journal-removal procedure.
 
 通用自托管 Beta 使用 Caddy 作为 HTTPS 入口。DNS 必须先把 `SFSC_PUBLIC_HOST` 指向服务器，并放通 `80/tcp`、`443/tcp` 与 VLESS 端口；`sync-server:5177` 不应直接暴露。首次部署或升级后执行：
 

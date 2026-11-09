@@ -2,12 +2,36 @@ param(
   [switch]$SkipTests,
   [switch]$AllowSkips,
   [string]$ReportPath = "",
-  [string]$JsonReportPath = ""
+  [string]$JsonReportPath = "",
+  [string]$ClientPackageRoot = "",
+  [string]$ReleaseBundleRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$repoRootFull = [System.IO.Path]::GetFullPath("$repoRoot")
+$repoRootPrefix = $repoRootFull.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+$requestedClientPackageRoot = if ($ClientPackageRoot) {
+  if ([System.IO.Path]::IsPathRooted($ClientPackageRoot)) { $ClientPackageRoot } else { Join-Path $repoRootFull $ClientPackageRoot }
+} else {
+  Join-Path $repoRootFull "dist"
+}
+$resolvedClientPackageRoot = [System.IO.Path]::GetFullPath($requestedClientPackageRoot)
+if (!$resolvedClientPackageRoot.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "Refusing to read client packages outside project root: $resolvedClientPackageRoot"
+}
+$requestedReleaseBundleRoot = if ($ReleaseBundleRoot) {
+  if ([System.IO.Path]::IsPathRooted($ReleaseBundleRoot)) { $ReleaseBundleRoot } else { Join-Path $repoRootFull $ReleaseBundleRoot }
+} else {
+  Join-Path $resolvedClientPackageRoot "release-bundles"
+}
+$resolvedReleaseBundleRoot = [System.IO.Path]::GetFullPath($requestedReleaseBundleRoot)
+if (!$resolvedReleaseBundleRoot.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "Refusing to read release bundles outside project root: $resolvedReleaseBundleRoot"
+}
+$preflightRunId = [Guid]::NewGuid().ToString("N")
+$preflightN1ArchiveRoot = Join-Path $repoRootFull ".tmp\preflight-release-$preflightRunId\n1-deploy"
 . (Join-Path $PSScriptRoot "lib\report-secrets.ps1")
 . (Join-Path $PSScriptRoot "lib\build-fingerprint.ps1")
 $sourceFingerprint = Get-SourceTreeFingerprint $repoRoot
@@ -36,13 +60,13 @@ $stepResults = @()
 $clientPackageCandidates = @(
   [pscustomobject]@{
     Name = "desktop"
-    Path = Join-Path $repoRoot "dist\SyncraftDesktop"
-    BuildCommand = "pnpm run client:desktop-package"
+    Path = Join-Path $resolvedClientPackageRoot "SyncraftDesktop"
+    BuildCommand = "powershell -ExecutionPolicy Bypass -File client/scripts/build-desktop.ps1 -OutputRoot `"$resolvedClientPackageRoot`""
   },
   [pscustomobject]@{
     Name = "portable"
-    Path = Join-Path $repoRoot "dist\SyncraftClient"
-    BuildCommand = "pnpm run client:package"
+    Path = Join-Path $resolvedClientPackageRoot "SyncraftClient"
+    BuildCommand = "powershell -ExecutionPolicy Bypass -File client/scripts/build-client.ps1 -OutputRoot `"$resolvedClientPackageRoot`""
   }
 )
 
@@ -106,6 +130,8 @@ function Write-PreflightReport {
   $lines += "Preflight report:"
   $lines += "  GeneratedAt: $($context.GeneratedAt)"
   $lines += "  RepoRoot: $($context.RepoRoot)"
+  $lines += "  ClientPackageRoot: $($context.ClientPackageRoot)"
+  $lines += "  ReleaseBundleRoot: $($context.ReleaseBundleRoot)"
   $lines += "  Node: $($context.Node)"
   $lines += "  SkipTests: $($context.SkipTests)"
   $lines += "  AllowSkips: $($context.AllowSkips)"
@@ -155,6 +181,8 @@ function Get-PreflightContext {
     SourceFingerprint = $sourceFingerprint
     SkipTests = [bool]$SkipTests
     AllowSkips = [bool]$AllowSkips
+    ClientPackageRoot = $resolvedClientPackageRoot
+    ReleaseBundleRoot = $resolvedReleaseBundleRoot
   }
   if ($ReportPath) {
     $context.ReportPath = "$(Resolve-ReportPath $ReportPath)"
@@ -276,7 +304,20 @@ function Resolve-ClientPackageJsonReportPath($packageName) {
 Push-Location $repoRoot
 try {
   Run-Step "Release audit" {
-    & $node scripts/audit-release.mjs
+    $hadClientPackageRoot = Test-Path Env:SFSC_CLIENT_PACKAGE_ROOT
+    $previousClientPackageRoot = $env:SFSC_CLIENT_PACKAGE_ROOT
+    $hadReleaseBundleRoot = Test-Path Env:SFSC_RELEASE_BUNDLE_ROOT
+    $previousReleaseBundleRoot = $env:SFSC_RELEASE_BUNDLE_ROOT
+    try {
+      $env:SFSC_CLIENT_PACKAGE_ROOT = $resolvedClientPackageRoot
+      $env:SFSC_RELEASE_BUNDLE_ROOT = $resolvedReleaseBundleRoot
+      & $node scripts/audit-release.mjs
+    } finally {
+      if ($hadClientPackageRoot) { $env:SFSC_CLIENT_PACKAGE_ROOT = $previousClientPackageRoot }
+      else { Remove-Item Env:SFSC_CLIENT_PACKAGE_ROOT -ErrorAction SilentlyContinue }
+      if ($hadReleaseBundleRoot) { $env:SFSC_RELEASE_BUNDLE_ROOT = $previousReleaseBundleRoot }
+      else { Remove-Item Env:SFSC_RELEASE_BUNDLE_ROOT -ErrorAction SilentlyContinue }
+    }
   }
 
   Run-Step "N1 deploy dry-run" {
@@ -284,7 +325,7 @@ try {
   }
 
   Run-Step "N1 deploy archive validation" {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-n1.ps1 -BuildArchive
+    & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-n1.ps1 -BuildArchive -ArchiveRoot $preflightN1ArchiveRoot
   }
 
   foreach ($clientPackage in $clientPackageCandidates) {

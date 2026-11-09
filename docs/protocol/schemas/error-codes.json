@@ -3,72 +3,693 @@
   "kind": "sfsc-error-codes",
   "implementationSource": "src/core/errors.js",
   "httpErrorEnvelope": {
-    "requiredKeys": ["error", "errorCode", "message", "ok"],
+    "requiredKeys": [
+      "error",
+      "errorCode",
+      "message",
+      "ok"
+    ],
     "ok": false,
     "legacyAlias": "error",
     "preferredCodeField": "errorCode"
   },
   "stableHttpCodes": [
-    { "code": "admin_auth_required", "status": 401 },
-    { "code": "binary_version_check_failed", "status": 503 },
-    { "code": "bucket_disabled", "status": 409 },
-    { "code": "bucket_not_empty", "status": 409 },
-    { "code": "bucket_not_found", "status": 404 },
-    { "code": "claim_already_used", "status": 409 },
-    { "code": "claim_expired", "status": 410 },
-    { "code": "claim_not_found", "status": 404 },
-    { "code": "claim_redeem_rate_limited", "status": 429 },
-    { "code": "claim_redeem_failed", "status": 502 },
-    { "code": "client_error", "status": 400 },
-    { "code": "client_port_in_use", "status": 409 },
-    { "code": "danger_confirmation_required", "status": 400 },
-    { "code": "device_disabled", "status": 409 },
-    { "code": "device_not_found", "status": 404 },
-    { "code": "heartbeat_auth_invalid", "status": 401 },
-    { "code": "heartbeat_auth_required", "status": 401 },
-    { "code": "heartbeat_rate_limited", "status": 429 },
-    { "code": "import_code_required", "status": 400 },
-    { "code": "import_code_invalid", "status": 400 },
-    { "code": "invalid_json", "status": 400 },
-    { "code": "invalid_path", "status": 400 },
-    { "code": "invalid_vless_uri", "status": 400 },
-    { "code": "local_host_forbidden", "status": 403 },
-    { "code": "local_state_corrupt", "status": 409 },
-    { "code": "local_read_forbidden", "status": 403 },
-    { "code": "local_write_forbidden", "status": 403 },
-    { "code": "last_active_bucket_disable_blocked", "status": 409 },
-    { "code": "last_bucket_delete_blocked", "status": 409 },
-    { "code": "missing_rclone_binary", "status": 503 },
-    { "code": "missing_singbox_binary", "status": 503 },
-    { "code": "not_found", "status": 404 },
-    { "code": "profile_heartbeat_required", "status": 400 },
-    { "code": "profile_not_imported", "status": 409 },
-    { "code": "profile_storage_required", "status": 400 },
-    { "code": "profile_tunnel_required", "status": 400 },
-    { "code": "request_body_too_large", "status": 413 },
-    { "code": "rclone_config_failed", "status": 500 },
-    { "code": "rclone_sync_failed", "status": 500 },
-    { "code": "secret_vault_missing", "status": 409 },
-    { "code": "secret_vault_unprotected", "status": 503 },
-    { "code": "server_error", "status": 500 },
-    { "code": "server_state_locked", "status": 409 },
-    { "code": "server_singbox_config_write_failed", "status": 500 },
-    { "code": "server_state_corrupt", "status": 500 },
-    { "code": "server_state_write_failed", "status": 500 },
-    { "code": "singbox_start_failed", "status": 500 },
-    { "code": "singbox_restart_failed", "status": 502 },
-    { "code": "singbox_restart_timeout", "status": 504 },
-    { "code": "singbox_restart_unavailable", "status": 503 },
-    { "code": "storage_request_failed", "status": 502 },
-    { "code": "sync_already_running", "status": 409 },
-    { "code": "sync_id_unavailable", "status": 409 },
-    { "code": "sync_space_access_denied", "status": 403 },
-    { "code": "sync_space_membership_exists", "status": 409 },
-    { "code": "sync_space_role_not_allowed", "status": 409 },
-    { "code": "unsupported_profile_version", "status": 400 },
-    { "code": "unsupported_media_type", "status": 415 },
-    { "code": "user_not_found", "status": 404 },
-    { "code": "validation_failed", "status": 400 }
+    {
+      "code": "admin_auth_required",
+      "status": 401
+    },
+    {
+      "code": "binary_version_check_failed",
+      "status": 503
+    },
+    {
+      "code": "bucket_disabled",
+      "status": 409
+    },
+    {
+      "code": "bucket_not_empty",
+      "status": 409
+    },
+    {
+      "code": "bucket_not_found",
+      "status": 404
+    },
+    {
+      "code": "claim_already_used",
+      "status": 409
+    },
+    {
+      "code": "claim_expired",
+      "status": 410
+    },
+    {
+      "code": "claim_not_found",
+      "status": 404
+    },
+    {
+      "code": "claim_redeem_rate_limited",
+      "status": 429
+    },
+    {
+      "code": "claim_redeem_failed",
+      "status": 502
+    },
+    {
+      "code": "client_error",
+      "status": 400
+    },
+    {
+      "code": "client_port_in_use",
+      "status": 409
+    },
+    {
+      "code": "connection_repair_busy",
+      "status": 409
+    },
+    {
+      "code": "connection_repair_cleanup_failed",
+      "status": 500
+    },
+    {
+      "code": "connection_repair_invalid",
+      "status": 400
+    },
+    {
+      "code": "connection_repair_list_failed",
+      "status": 502
+    },
+    {
+      "code": "connection_repair_probe_conflict",
+      "status": 409
+    },
+    {
+      "code": "connection_repair_read_failed",
+      "status": 502
+    },
+    {
+      "code": "connection_repair_write_failed",
+      "status": 502
+    },
+    {
+      "code": "danger_confirmation_required",
+      "status": 400
+    },
+    {
+      "code": "data_authorization_invalid",
+      "status": 400
+    },
+    {
+      "code": "data_authorization_mismatch",
+      "status": 403
+    },
+    {
+      "code": "data_authorization_trust_failed",
+      "status": 401
+    },
+    {
+      "code": "directory_root_input_invalid",
+      "status": 400
+    },
+    {
+      "code": "directory_root_io_failed",
+      "status": 500
+    },
+    {
+      "code": "directory_root_link_denied",
+      "status": 403
+    },
+    {
+      "code": "directory_root_marker_collision",
+      "status": 409
+    },
+    {
+      "code": "directory_root_marker_mismatch",
+      "status": 409
+    },
+    {
+      "code": "directory_root_marker_missing",
+      "status": 409
+    },
+    {
+      "code": "directory_root_missing",
+      "status": 404
+    },
+    {
+      "code": "directory_root_mount_changed",
+      "status": 409
+    },
+    {
+      "code": "directory_root_mount_unavailable",
+      "status": 503
+    },
+    {
+      "code": "directory_root_not_ready",
+      "status": 503
+    },
+    {
+      "code": "directory_root_overlap",
+      "status": 409
+    },
+    {
+      "code": "directory_root_permission_denied",
+      "status": 403
+    },
+    {
+      "code": "directory_root_record_invalid",
+      "status": 500
+    },
+    {
+      "code": "directory_root_registration_incomplete",
+      "status": 503
+    },
+    {
+      "code": "directory_root_registration_review_required",
+      "status": 409
+    },
+    {
+      "code": "directory_root_replaced",
+      "status": 409
+    },
+    {
+      "code": "directory_root_space_insufficient",
+      "status": 409
+    },
+    {
+      "code": "directory_root_space_unavailable",
+      "status": 503
+    },
+    {
+      "code": "device_disabled",
+      "status": 409
+    },
+    {
+      "code": "device_not_found",
+      "status": 404
+    },
+    {
+      "code": "enrollment_auth_invalid",
+      "status": 401
+    },
+    {
+      "code": "enrollment_auth_capacity",
+      "status": 429
+    },
+    {
+      "code": "enrollment_auth_expired",
+      "status": 401
+    },
+    {
+      "code": "enrollment_auth_replayed",
+      "status": 409
+    },
+    {
+      "code": "enrollment_binding_mismatch",
+      "status": 403
+    },
+    {
+      "code": "enrollment_catalog_not_ready",
+      "status": 503
+    },
+    {
+      "code": "enrollment_channel_mismatch",
+      "status": 409
+    },
+    {
+      "code": "enrollment_channel_invalid",
+      "status": 409
+    },
+    {
+      "code": "enrollment_channel_not_ready",
+      "status": 503
+    },
+    {
+      "code": "enrollment_channel_stale",
+      "status": 409
+    },
+    {
+      "code": "enrollment_channel_expired",
+      "status": 410
+    },
+    {
+      "code": "enrollment_code_expired",
+      "status": 410
+    },
+    {
+      "code": "enrollment_code_invalid",
+      "status": 400
+    },
+    {
+      "code": "enrollment_code_used",
+      "status": 409
+    },
+    {
+      "code": "enrollment_device_revoked",
+      "status": 403
+    },
+    {
+      "code": "enrollment_data_authorization_denied",
+      "status": 403
+    },
+    {
+      "code": "enrollment_data_channel_not_ready",
+      "status": 503
+    },
+    {
+      "code": "enrollment_data_relation_not_ready",
+      "status": 503
+    },
+    {
+      "code": "enrollment_data_relation_start_failed",
+      "status": 503
+    },
+    {
+      "code": "enrollment_identity_conflict",
+      "status": 409
+    },
+    {
+      "code": "enrollment_identity_missing",
+      "status": 409
+    },
+    {
+      "code": "enrollment_public_key_mismatch",
+      "status": 403
+    },
+    {
+      "code": "enrollment_relation_conflict",
+      "status": 409
+    },
+    {
+      "code": "enrollment_relation_denied",
+      "status": 403
+    },
+    {
+      "code": "enrollment_relation_revoked",
+      "status": 409
+    },
+    {
+      "code": "enrollment_request_exists",
+      "status": 409
+    },
+    {
+      "code": "enrollment_request_invalid",
+      "status": 400
+    },
+    {
+      "code": "enrollment_request_mismatch",
+      "status": 403
+    },
+    {
+      "code": "enrollment_request_not_found",
+      "status": 404
+    },
+    {
+      "code": "enrollment_reconfigure_busy",
+      "status": 409
+    },
+    {
+      "code": "enrollment_reconfigure_conflict",
+      "status": 409
+    },
+    {
+      "code": "enrollment_reconfigure_invalid",
+      "status": 400
+    },
+    {
+      "code": "enrollment_reconfigure_needs_repair",
+      "status": 503
+    },
+    {
+      "code": "enrollment_reconfigure_not_found",
+      "status": 404
+    },
+    {
+      "code": "enrollment_reconfigure_state_invalid",
+      "status": 500
+    },
+    {
+      "code": "enrollment_reconfigure_write_failed",
+      "status": 500
+    },
+    {
+      "code": "enrollment_revocation_identity_conflict",
+      "status": 409
+    },
+    {
+      "code": "enrollment_revocation_incomplete",
+      "status": 503
+    },
+    {
+      "code": "enrollment_revocation_invalid",
+      "status": 400
+    },
+    {
+      "code": "enrollment_revocation_operation_conflict",
+      "status": 409
+    },
+    {
+      "code": "enrollment_revocation_operation_not_found",
+      "status": 404
+    },
+    {
+      "code": "enrollment_revocation_not_ready",
+      "status": 503
+    },
+    {
+      "code": "enrollment_revocation_overlay_not_applied",
+      "status": 503
+    },
+    {
+      "code": "enrollment_revocation_recovery_pending",
+      "status": 503
+    },
+    {
+      "code": "enrollment_signer_invalid",
+      "status": 500
+    },
+    {
+      "code": "enrollment_state_invalid",
+      "status": 500
+    },
+    {
+      "code": "enrollment_state_conflict",
+      "status": 409
+    },
+    {
+      "code": "enrollment_trust_failed",
+      "status": 401
+    },
+    {
+      "code": "enrollment_trust_verifier_required",
+      "status": 500
+    },
+    {
+      "code": "enrollment_endpoint_invalid",
+      "status": 400
+    },
+    {
+      "code": "enrollment_proxy_unavailable",
+      "status": 503
+    },
+    {
+      "code": "enrollment_transport_failed",
+      "status": 502
+    },
+    {
+      "code": "enrollment_response_invalid",
+      "status": 502
+    },
+    {
+      "code": "first_sync_conflict_command_failed",
+      "status": 502
+    },
+    {
+      "code": "first_sync_conflict_preview_expired",
+      "status": 410
+    },
+    {
+      "code": "first_sync_conflict_preview_required",
+      "status": 409
+    },
+    {
+      "code": "first_sync_conflict_review_required",
+      "status": 409
+    },
+    {
+      "code": "first_sync_conflict_save_required",
+      "status": 409
+    },
+    {
+      "code": "first_sync_conflict_scan_failed",
+      "status": 502
+    },
+    {
+      "code": "first_sync_conflict_set_changed",
+      "status": 409
+    },
+    {
+      "code": "first_sync_conflict_source_changed",
+      "status": 409
+    },
+    {
+      "code": "first_sync_conflict_stage_invalid",
+      "status": 409
+    },
+    {
+      "code": "first_sync_conflict_staging_invalid",
+      "status": 500
+    },
+    {
+      "code": "first_sync_conflict_target_exists",
+      "status": 409
+    },
+    {
+      "code": "first_sync_conflict_target_invalid",
+      "status": 409
+    },
+    {
+      "code": "first_sync_conflict_trusted_relation_required",
+      "status": 409
+    },
+    {
+      "code": "heartbeat_auth_invalid",
+      "status": 401
+    },
+    {
+      "code": "heartbeat_auth_required",
+      "status": 401
+    },
+    {
+      "code": "heartbeat_rate_limited",
+      "status": 429
+    },
+    {
+      "code": "import_code_required",
+      "status": 400
+    },
+    {
+      "code": "import_code_invalid",
+      "status": 400
+    },
+    {
+      "code": "invalid_json",
+      "status": 400
+    },
+    {
+      "code": "invalid_path",
+      "status": 400
+    },
+    {
+      "code": "invalid_vless_uri",
+      "status": 400
+    },
+    {
+      "code": "local_host_forbidden",
+      "status": 403
+    },
+    {
+      "code": "local_state_corrupt",
+      "status": 409
+    },
+    {
+      "code": "local_read_forbidden",
+      "status": 403
+    },
+    {
+      "code": "local_write_forbidden",
+      "status": 403
+    },
+    {
+      "code": "last_active_bucket_disable_blocked",
+      "status": 409
+    },
+    {
+      "code": "last_bucket_delete_blocked",
+      "status": 409
+    },
+    {
+      "code": "missing_rclone_binary",
+      "status": 503
+    },
+    {
+      "code": "missing_singbox_binary",
+      "status": 503
+    },
+    {
+      "code": "not_found",
+      "status": 404
+    },
+    {
+      "code": "profile_heartbeat_required",
+      "status": 400
+    },
+    {
+      "code": "profile_not_imported",
+      "status": 409
+    },
+    {
+      "code": "profile_storage_required",
+      "status": 400
+    },
+    {
+      "code": "profile_tunnel_required",
+      "status": 400
+    },
+    {
+      "code": "request_body_too_large",
+      "status": 413
+    },
+    {
+      "code": "rclone_config_failed",
+      "status": 500
+    },
+    {
+      "code": "rclone_sync_failed",
+      "status": 500
+    },
+    {
+      "code": "secret_vault_missing",
+      "status": 409
+    },
+    {
+      "code": "secret_vault_unprotected",
+      "status": 503
+    },
+    {
+      "code": "sftp_access_marker_conflict",
+      "status": 409
+    },
+    {
+      "code": "sftp_access_marker_invalid",
+      "status": 400
+    },
+    {
+      "code": "sftp_access_marker_missing",
+      "status": 400
+    },
+    {
+      "code": "sftp_access_marker_write_failed",
+      "status": 500
+    },
+    {
+      "code": "server_error",
+      "status": 500
+    },
+    {
+      "code": "server_state_locked",
+      "status": 409
+    },
+    {
+      "code": "server_singbox_config_write_failed",
+      "status": 500
+    },
+    {
+      "code": "server_state_corrupt",
+      "status": 500
+    },
+    {
+      "code": "server_state_write_failed",
+      "status": 500
+    },
+    {
+      "code": "singbox_start_failed",
+      "status": 500
+    },
+    {
+      "code": "singbox_restart_failed",
+      "status": 502
+    },
+    {
+      "code": "singbox_restart_timeout",
+      "status": 504
+    },
+    {
+      "code": "singbox_restart_unavailable",
+      "status": 503
+    },
+    {
+      "code": "storage_request_failed",
+      "status": 502
+    },
+    {
+      "code": "sync_already_running",
+      "status": 409
+    },
+    {
+      "code": "sync_relation_migration_required",
+      "status": 409
+    },
+    {
+      "code": "sync_recovery_preflight_failed",
+      "status": 500
+    },
+    {
+      "code": "sync_recovery_restore_hash_mismatch",
+      "status": 409
+    },
+    {
+      "code": "sync_recovery_restore_preview_expired",
+      "status": 410
+    },
+    {
+      "code": "sync_recovery_restore_preview_required",
+      "status": 409
+    },
+    {
+      "code": "sync_recovery_restore_staging_invalid",
+      "status": 500
+    },
+    {
+      "code": "sync_recovery_restore_target_exists",
+      "status": 409
+    },
+    {
+      "code": "sync_recovery_restore_target_invalid",
+      "status": 400
+    },
+    {
+      "code": "sync_recovery_review_required",
+      "status": 409
+    },
+    {
+      "code": "sync_recovery_trusted_relation_required",
+      "status": 409
+    },
+    {
+      "code": "sync_recovery_version_not_found",
+      "status": 404
+    },
+    {
+      "code": "sync_id_unavailable",
+      "status": 409
+    },
+    {
+      "code": "sync_space_access_denied",
+      "status": 403
+    },
+    {
+      "code": "sync_space_membership_exists",
+      "status": 409
+    },
+    {
+      "code": "sync_space_role_not_allowed",
+      "status": 409
+    },
+    {
+      "code": "unsupported_profile_version",
+      "status": 400
+    },
+    {
+      "code": "unsupported_media_type",
+      "status": 415
+    },
+    {
+      "code": "user_not_found",
+      "status": 404
+    },
+    {
+      "code": "validation_failed",
+      "status": 400
+    }
   ],
   "claimRedeemPassthroughCodes": [
     "claim_not_found",

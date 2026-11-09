@@ -1,0 +1,19 @@
+[Unit]
+Description=Syncraft directory appliance
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=45
+KillMode=mixed
+KillSignal=SIGTERM
+EnvironmentFile=/etc/syncraft/sfsc-directory.env
+ExecStart=/usr/bin/python3 ${SFSC_ROOT}/server/runtime/sfsc-runtime-launcher --ledger-root /var/lib/sfsc-runtime --state-path ${SFSC_ROOT}/server/data/app/relation-services.json --image sfsc-appliance:directory-local --deployment-id sfsc-appliance --env-file ${SFSC_ROOT}/server/.env.directory --env HOST=0.0.0.0 --env PORT=5177 --env SERVER_DATA_ROOT=/data/app --env SINGBOX_CONFIG_PATH=/data/sing-box/config.json --env SINGBOX_CONTROL_DIR=/data/control --env SINGBOX_LISTEN_PORT=45679 --env VLESS_PORT=45679 --env RCLONE_BIN=/usr/local/bin/rclone --env SFSC_STORAGE_MODE=directory --env SFSC_DIRECTORY_ROOT=/srv/syncraft/shared --volume "type=bind,src=${SFSC_ROOT}/server/data/app,dst=/data/app" --volume "type=bind,src=${SFSC_ROOT}/server/data/control,dst=/data/control" --volume "type=bind,src=${SFSC_ROOT}/server/sing-box,dst=/data/sing-box" --volume "type=bind,src=${SFSC_DIRECTORY_HOST_ROOT},dst=/srv/syncraft/shared"
+
+[Install]
+WantedBy=multi-user.target

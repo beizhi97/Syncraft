@@ -53,6 +53,12 @@ import {
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const serverEntry = join(projectRoot, "src", "server.js");
+const ENROLLMENT_BOOTSTRAP_USER_NAME = "sfsc-enrollment-bootstrap";
+
+// Every spawned server in this test file needs its own ephemeral enrollment
+// listener. The product default is a fixed deployment port and collides when
+// independent Node test files run concurrently.
+process.env.SFSC_ENROLLMENT_BOOTSTRAP_PORT = "0";
 const serverSmokeEntry = join(projectRoot, "scripts", "smoke-server.mjs");
 // The server now fails closed on a missing admin token. These contract tests spawn
 // it with `...process.env` and exercise management APIs without credentials, so they
@@ -813,6 +819,7 @@ test("HTTP contract: failed sing-box write persistence deletes uncommitted confi
   assert.ok(written.state.tunnel.lastConfigWrittenAt);
   const committedConfig = await readFile(configPath, "utf8");
   assert.deepEqual(readSingboxUserNames(committedConfig), []);
+  assert.deepEqual(readEnrollmentBootstrapUserNames(committedConfig), [ENROLLMENT_BOOTSTRAP_USER_NAME]);
 });
 
 test("HTTP contract: failed tunnel autofill persistence rolls back tunnel state", async (t) => {
@@ -5430,7 +5437,16 @@ test("HTTP contract: failed bucket clear persistence keeps cleared marker uncomm
 
 function readSingboxUserNames(configText) {
   const config = JSON.parse(configText);
-  return (config.inbounds?.[0]?.users || []).map((user) => user.name);
+  return (config.inbounds?.[0]?.users || [])
+    .map((user) => user.name)
+    .filter((name) => name !== ENROLLMENT_BOOTSTRAP_USER_NAME);
+}
+
+function readEnrollmentBootstrapUserNames(configText) {
+  const config = JSON.parse(configText);
+  return (config.inbounds?.[0]?.users || [])
+    .map((user) => user.name)
+    .filter((name) => name === ENROLLMENT_BOOTSTRAP_USER_NAME);
 }
 
 async function getFreePort() {

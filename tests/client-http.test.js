@@ -1,6 +1,7 @@
-import test from "node:test";
+import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { createHash } from "node:crypto";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -28,6 +29,7 @@ import {
   assertSyncPreviewContract
 } from "./helpers/contracts.js";
 import { buildRuntimeDiagnostics, compareRuntimeDiagnostics } from "../src/core/diagnostics.js";
+import { legacySyncJobFingerprint } from "../client/src/syncRelation.js";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const clientEntry = join(projectRoot, "client", "src", "clientServer.js");
@@ -37,6 +39,18 @@ process.env.SFSC_TEST_ALLOW_UNSAFE_PATHS = "1";
 const tunnelUri = "vless://8f3f4f94-7d7a-4d7e-a88f-30d5c76a9b21@pass.971223.xyz:45678?encryption=none&security=none&type=tcp#home-sync";
 const overrideTunnelUri = "vless://8f3f4f94-7d7a-4d7e-a88f-30d5c76a9b21@override.example.invalid:45679?encryption=none&security=none&type=tcp#override";
 const jsonHeaders = { "content-type": "application/json", connection: "close" };
+let TEST_LOCAL_PROXY_PORT = 0;
+const allocatedClientProxyPorts = new Set();
+beforeEach(async () => {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const candidate = await getFreePort();
+    if (allocatedClientProxyPorts.has(candidate)) continue;
+    allocatedClientProxyPorts.add(candidate);
+    TEST_LOCAL_PROXY_PORT = candidate;
+    return;
+  }
+  throw new Error("Could not allocate a unique client HTTP test proxy port after three attempts");
+});
 
 function maliciousProfileDerivedJobFields() {
   return {
@@ -479,7 +493,7 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.equal(typeof statusForHealthContractPayload.safeguards.localState.ok, "boolean");
   assert.deepEqual(
     statusForHealthContractPayload.safeguards.localState.files.map((file) => file.name).sort(),
-    ["claimRecovery", "jobs", "lastSuccessfulHeartbeat", "profile", "secrets", "syncHistory"]
+    ["claimRecovery", "jobs", "lastSuccessfulHeartbeat", "profile", "secrets", "syncHistory", "syncRecovery"]
   );
   assert.equal(typeof statusForHealthContractPayload.safeguards.secretVault.ok, "boolean");
   assert.equal(typeof statusForHealthContractPayload.safeguards.secretVault.protected, "boolean");
@@ -488,6 +502,7 @@ test("client local HTTP API returns structured errors", async (t) => {
     statusForHealthContractPayload.safeguards.secretVault.protected
   );
   assert.equal(statusForHealthContractPayload.processes.singbox.name, "sing-box");
+  assert.equal(statusForHealthContractPayload.processes.dataSingbox.name, "sftp-data-sing-box");
   assert.equal(statusForHealthContractPayload.processes.singbox.running, false);
   assert.equal(statusForHealthContractPayload.processes.singbox.pid, null);
   assert.equal(statusForHealthContractPayload.processes.sync.name, "rclone-sync");
@@ -612,7 +627,7 @@ test("client local HTTP API returns structured errors", async (t) => {
         },
         storage: {
           type: "s3",
-          remoteName: "home-minio",
+          remoteName: "legacy-minio",
           endpoint: "http://minio:9000",
           bucket: "home-sync",
           accessKeyId: "server-issued-missing-heartbeat",
@@ -831,7 +846,7 @@ test("client local HTTP API returns structured errors", async (t) => {
           prefix: "devices/company-pc1"
         },
         defaults: {
-          localProxyPort: 18082,
+          localProxyPort: TEST_LOCAL_PROXY_PORT,
           transfers: 6,
           streams: 9,
           checkers: 11,
@@ -860,7 +875,7 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.equal(profileImportPayload.profile.defaults.streams, 9);
   assert.equal(profileImportPayload.profile.defaults.checkers, 11);
   assert.equal(profileImportPayload.profile.defaults.chunkSize, "32M");
-  assert.equal(profileImportPayload.profile.defaults.localProxyPort, 18082);
+  assert.equal(profileImportPayload.profile.defaults.localProxyPort, TEST_LOCAL_PROXY_PORT);
 
   const savedJob = await fetch(`${baseUrl}/api/jobs/save`, {
     method: "POST",
@@ -898,7 +913,7 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.equal(savedJobPayload.job.lowLevelRetries, 12);
   assert.equal(savedJobPayload.job.bandwidthLimit, "20M");
   assert.deepEqual(savedJobPayload.job.schedule, { mode: "daily", time: "03:30" });
-  assert.equal(savedJobPayload.job.localProxyPort, 18082);
+  assert.equal(savedJobPayload.job.localProxyPort, TEST_LOCAL_PROXY_PORT);
   assert.equal(Object.hasOwn(savedJobPayload.job, "accessKeyId"), false);
   assert.equal(Object.hasOwn(savedJobPayload.job, "secretAccessKey"), false);
   assert.equal(Object.hasOwn(savedJobPayload.job, "s3SecretAccessKey"), false);
@@ -934,7 +949,7 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.equal(previewArgs[previewArgs.indexOf("--s3-upload-concurrency") + 1], "9");
   assert.equal(previewArgs[previewArgs.indexOf("--s3-chunk-size") + 1], "32M");
   assert.equal(previewArgs[previewArgs.indexOf("--bwlimit") + 1], "20M");
-  assert.equal(previewFromMinimalJobPayload.rclone.env.ALL_PROXY, "socks5://127.0.0.1:18082");
+  assert.equal(previewFromMinimalJobPayload.rclone.env.ALL_PROXY, `socks5://127.0.0.1:${TEST_LOCAL_PROXY_PORT}`);
   assert.equal(previewFromMinimalJobPayload.rclone.storage.remoteName, "home-minio");
   assert.equal(previewFromMinimalJobPayload.rclone.storage.bucketName, "home-sync");
   assert.equal(previewFromMinimalJobPayload.rclone.storage.endpoint, "http://minio:9000");
@@ -1017,7 +1032,7 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.equal(statusAfterSavePayload.processes.sync.metrics.syncState, "idle");
   assert.ok(["idle", "syncing", "error", "stopping", "offline"].includes(statusAfterSavePayload.processes.sync.metrics.syncState));
   assert.equal(statusAfterSavePayload.jobs[0].checkers, 11);
-  assert.equal(statusAfterSavePayload.jobs[0].localProxyPort, 18082);
+  assert.equal(statusAfterSavePayload.jobs[0].localProxyPort, TEST_LOCAL_PROXY_PORT);
   assert.equal(Object.hasOwn(statusAfterSavePayload.jobs[0], "secretAccessKey"), false);
   assert.equal(Object.hasOwn(statusAfterSavePayload.jobs[0], "s3SecretAccessKey"), false);
   assert.equal(Object.hasOwn(statusAfterSavePayload.jobs[0], "heartbeatSecret"), false);
@@ -1109,7 +1124,7 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.equal(statusAfterManifestPayload.releaseManifest.package, "SyncraftDesktop");
   assert.equal(statusAfterManifestPayload.releaseManifest.version, "0.3.0-rc.1");
   assert.equal(statusAfterManifestPayload.releaseManifest.builtAt, "2026-07-04T00:00:00.000Z");
-  assert.equal(statusAfterManifestPayload.releaseManifest.fileCount, 27);
+  assert.equal(statusAfterManifestPayload.releaseManifest.fileCount, releaseManifestFiles("SyncraftDesktop").length);
   assert.equal(statusAfterManifestPayload.releaseManifest.supportDocuments.ok, true);
   assert.equal(statusAfterManifestPayload.releaseManifest.requiredFiles.ok, true);
   assert.deepEqual(
@@ -1285,7 +1300,7 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.equal(diagnosticPayload.bundle.environment.portableRoot, true);
   assert.equal(diagnosticPayload.bundle.environment.releaseManifest.ok, true);
   assert.equal(diagnosticPayload.bundle.environment.releaseManifest.version, "0.3.0-rc.1");
-  assert.equal(diagnosticPayload.bundle.environment.releaseManifest.fileCount, 27);
+  assert.equal(diagnosticPayload.bundle.environment.releaseManifest.fileCount, releaseManifestFiles("SyncraftDesktop").length);
   assert.equal(diagnosticPayload.bundle.environment.releaseManifest.supportDocuments.ok, true);
   assert.equal(diagnosticPayload.bundle.environment.releaseManifest.requiredFiles.ok, true);
   assert.equal(diagnosticPayload.bundle.environment.releaseManifest.path, "release-manifest.json");
@@ -1443,11 +1458,11 @@ test("client local HTTP API returns structured errors", async (t) => {
         storage: {
           type: "s3",
           remoteName: "home-minio-v2",
-          endpoint: "http://minio-v2:9000",
-          bucket: "home-sync-v2",
+          endpoint: "http://minio:9000",
+          bucket: "home-sync",
           accessKeyId: "company-pc1-v2",
           secretAccessKey: "top-secret-value-v2",
-          prefix: "devices-v2/company-pc1"
+          prefix: "devices/company-pc1"
         },
         defaults: {
           localProxyPort: 18083,
@@ -1463,7 +1478,8 @@ test("client local HTTP API returns structured errors", async (t) => {
       })}`
     })
   });
-  assert.equal(refreshedProfileImport.status, 200);
+  const refreshedProfileImportPayload = await refreshedProfileImport.json();
+  assert.equal(refreshedProfileImport.status, 200, JSON.stringify(refreshedProfileImportPayload));
   const statusAfterReimport = await fetch(`${baseUrl}/api/client/status`);
   assert.equal(statusAfterReimport.status, 200);
   const statusAfterReimportPayload = await statusAfterReimport.json();
@@ -1477,17 +1493,17 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.equal(refreshedSavedJob.remoteFolder, "projects");
   assert.equal(refreshedSavedJob.serverSpace, "device");
   assert.equal(refreshedSavedJob.remoteName, "home-minio-v2");
-  assert.equal(refreshedSavedJob.bucketName, "home-sync-v2");
-  assert.equal(refreshedSavedJob.remotePrefix, "devices-v2/company-pc1/projects");
+  assert.equal(refreshedSavedJob.bucketName, "home-sync");
+  assert.equal(refreshedSavedJob.remotePrefix, "devices/company-pc1/projects");
   assert.equal(Object.hasOwn(refreshedSavedJob, "secretAccessKey"), false);
   assert.equal(refreshedSavedJob.checkers, 11);
   assert.equal(refreshedSavedJob.s3ChunkSize, "32M");
-  assert.equal(refreshedSavedJob.localProxyPort, 18082);
+  assert.equal(refreshedSavedJob.localProxyPort, TEST_LOCAL_PROXY_PORT);
   assert.equal(refreshedStartupJob.remoteName, "home-minio-v2");
   assert.deepEqual(refreshedStartupJob.schedule, { mode: "startup" });
   const listedJobsAfterReimport = await (await fetch(`${baseUrl}/api/jobs`)).json();
   const listedRefreshedSavedJob = listedJobsAfterReimport.jobs.find((job) => job.id === savedJobPayload.job.id);
-  assert.equal(listedRefreshedSavedJob.remotePrefix, "devices-v2/company-pc1/projects");
+  assert.equal(listedRefreshedSavedJob.remotePrefix, "devices/company-pc1/projects");
   assert.equal(Object.hasOwn(listedRefreshedSavedJob, "secretAccessKey"), false);
 
   const updatedJob = await fetch(`${baseUrl}/api/jobs/save`, {
@@ -1513,7 +1529,7 @@ test("client local HTTP API returns structured errors", async (t) => {
   assert.equal(updatedJobPayload.job.localPath, "D:\\Work Updated");
   assert.equal(updatedJobPayload.job.remoteFolder, "projects");
   assert.equal(updatedJobPayload.job.serverSpace, "device");
-  assert.equal(updatedJobPayload.job.remotePrefix, "devices-v2/company-pc1/projects");
+  assert.equal(updatedJobPayload.job.remotePrefix, "devices/company-pc1/projects");
   assert.equal(updatedJobPayload.job.checkers, 12);
   assert.equal(updatedJobPayload.job.dryRun, true);
   assert.equal(updatedJobPayload.job.localProxyPort, 18083);
@@ -1559,8 +1575,8 @@ test("client local HTTP API returns structured errors", async (t) => {
   });
   assert.equal(bidirectionalPreviewPayload.rclone.args[0], "bisync");
   assert.equal(bidirectionalPreviewPayload.rclone.safety.deleteProtection, true);
-  // The refreshed profile renamed the remote to home-minio-v2, so the env key follows it.
-  assert.equal(bidirectionalPreviewPayload.rclone.remoteConfig.env.RCLONE_CONFIG_HOME_MINIO_V2_SECRET_ACCESS_KEY, "top-secret-value-v2");
+  const stableRemoteEnv = `RCLONE_CONFIG_${bidirectionalJobPayload.job.remoteName.toUpperCase()}_SECRET_ACCESS_KEY`;
+  assert.equal(bidirectionalPreviewPayload.rclone.remoteConfig.env[stableRemoteEnv], "top-secret-value-v2");
   assert.equal(bidirectionalPreviewPayload.rclone.remoteConfig.args.includes("top-secret-value-v2"), false);
   assert.equal(bidirectionalPreviewPayload.rclone.remoteConfig.args.includes("top-secret-value"), false);
   assert.equal(bidirectionalPreviewPayload.rclone.remoteConfig.displayCommand.includes("top-secret-value-v2"), false);
@@ -1849,7 +1865,7 @@ test("client local HTTP API checks fake binaries and starts sing-box", async (t)
           prefix: "devices/singbox-success-pc"
         },
         defaults: {
-          localProxyPort: 18082
+          localProxyPort: TEST_LOCAL_PROXY_PORT
         }
       })}`
     })
@@ -1883,7 +1899,7 @@ test("client local HTTP API checks fake binaries and starts sing-box", async (t)
 
   const singboxConfig = JSON.parse(await readFile(singboxConfigFile, "utf8"));
   assert.equal(singboxConfig.inbounds[0].listen, "127.0.0.1");
-  assert.equal(singboxConfig.inbounds[0].listen_port, 18082);
+  assert.equal(singboxConfig.inbounds[0].listen_port, TEST_LOCAL_PROXY_PORT);
   assert.equal(singboxConfig.outbounds[0].server, "pass.971223.xyz");
   assert.equal(singboxConfig.outbounds[0].server_port, 45678);
   assert.equal(JSON.stringify(singboxConfig).includes("override.example.invalid"), false);
@@ -2435,7 +2451,7 @@ test("client sync run fails rclone config before starting sing-box or history", 
           prefix: "devices/config-fail-pc"
         },
         defaults: {
-          localProxyPort: 18082
+          localProxyPort: TEST_LOCAL_PROXY_PORT
         }
       })}`
     })
@@ -2533,7 +2549,7 @@ test("client sync run uses real rclone config secret while redacting execution l
           prefix: "devices/fake-rclone-pc"
         },
         defaults: {
-          localProxyPort: 18082
+          localProxyPort: TEST_LOCAL_PROXY_PORT
         }
       })}`
     })
@@ -2552,7 +2568,7 @@ test("client sync run uses real rclone config secret while redacting execution l
       }
     })
   });
-  assert.equal(run.status, 200);
+  assert.equal(run.status, 200, await run.clone().text());
   const runPayload = await run.json();
   assertClientSyncRunResponseContract(runPayload, "run");
   assert.equal(runPayload.sync.name, "rclone-sync");
@@ -2578,7 +2594,7 @@ test("client sync run uses real rclone config secret while redacting execution l
   assert.equal(configEvent.argv.includes("evil-s3-secret-value"), false);
   assert.equal(configEvent.argv.includes("http://minio:9000"), true);
   assert.equal(configEvent.argv.includes("http://evil-minio.invalid:9000"), false);
-  assert.equal(syncEvent.allProxy, "socks5://127.0.0.1:18082");
+  assert.equal(syncEvent.allProxy, `socks5://127.0.0.1:${TEST_LOCAL_PROXY_PORT}`);
   assert.equal(syncEvent.argv.some((arg) => String(arg).includes("home-minio:home-sync/devices/fake-rclone-pc/projects")), true);
   assert.equal(syncEvent.argv.some((arg) => String(arg).includes("evil-minio")), false);
 
@@ -2600,6 +2616,7 @@ test("client sync run uses real rclone config secret while redacting execution l
 test("client records a bisync conflict split across real process output chunks", async (t) => {
   const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-client-chunked-conflict-"));
   const port = await getFreePort();
+  const proxyPort = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const fakeToolLog = join(tempRoot, "fake-tools.jsonl");
 
@@ -2640,31 +2657,71 @@ test("client records a bisync conflict split across real process output chunks",
         tunnel: { type: "vless", uri: tunnelUri },
         storage: {
           type: "s3",
-          remoteName: "home-minio",
+          remoteName: "legacy-minio",
           endpoint: "http://minio:9000",
           bucket: "home-sync",
           accessKeyId: "chunked-conflict-pc",
           secretAccessKey: "chunked-conflict-secret",
           prefix: "devices/chunked-conflict-pc"
         },
-        defaults: { localProxyPort: 18082 }
+        defaults: { localProxyPort: proxyPort }
       })}`
     })
   });
   assert.equal(profileImport.status, 200);
 
+  const savedLegacy = await postJson(`${baseUrl}/api/jobs/save`, {
+    job: {
+      name: "chunked-conflict-pc",
+      localPath: "D:\\ChunkedConflict",
+      direction: "bidirectional",
+      remoteFolder: "projects"
+    }
+  });
+  const jobsPath = join(tempRoot, "data", "jobs.json");
+  const storedJobs = JSON.parse(await readFile(jobsPath, "utf8"));
+  const legacyJob = storedJobs.find((item) => item.id === savedLegacy.job.id);
+  delete legacyJob.syncRelation;
+  legacyJob.remoteName = "legacy-minio";
+  const legacyFingerprint = legacySyncJobFingerprint(legacyJob);
+  const runtimeId = createHash("sha256").update(legacyFingerprint).digest("hex").slice(0, 24);
+  const legacyWorkdir = join(tempRoot, "data", "runtime", "bisync", runtimeId);
+  await mkdir(legacyWorkdir, { recursive: true });
+  await writeFile(join(legacyWorkdir, "previous-listing.lst"), "preserve\n", "utf8");
+  await writeFile(jobsPath, JSON.stringify(storedJobs, null, 2), "utf8");
+  await writeFile(join(tempRoot, "data", "bisync-state.json"), JSON.stringify({
+    [legacyFingerprint]: {
+      initializedAt: "2026-01-01T00:00:00.000Z",
+      remoteAlias: legacyJob.remoteName,
+      workdir: legacyWorkdir,
+      mode: "newer"
+    }
+  }, null, 2), "utf8");
+  await postJson(`${baseUrl}/api/profile/import`, {
+    code: `SFSC1-${base64UrlJson({
+      version: 1,
+      clientName: "chunked-conflict-pc",
+      tunnel: { type: "vless", uri: tunnelUri },
+      storage: {
+        type: "s3", remoteName: "legacy-minio", endpoint: "http://minio:9000",
+        bucket: "home-sync", accessKeyId: "chunked-conflict-pc",
+        secretAccessKey: "chunked-conflict-secret", prefix: "devices/chunked-conflict-pc"
+      },
+      defaults: { localProxyPort: proxyPort }
+    })}`
+  });
+  const legacySummary = (await (await fetch(`${baseUrl}/api/jobs`)).json()).jobs
+    .find((item) => item.id === savedLegacy.job.id);
+  assert.equal(legacySummary.syncRelation.migrationState, "legacy_compatible");
+
   const run = await fetch(`${baseUrl}/api/sync/run`, {
     method: "POST",
     headers: jsonHeaders,
     body: JSON.stringify({
-      job: {
-        localPath: "D:\\ChunkedConflict",
-        direction: "bidirectional",
-        remoteFolder: "projects"
-      }
+      job: legacySummary
     })
   });
-  assert.equal(run.status, 200);
+  assert.equal(run.status, 200, await run.clone().text());
   assertClientSyncRunResponseContract(await run.json(), "chunkedConflictRun");
 
   const history = await waitForSyncHistoryStatus(baseUrl, "success");
@@ -2729,7 +2786,7 @@ test("client sync run does not write history when rclone sync spawn fails after 
           prefix: "devices/spawn-fail-pc"
         },
         defaults: {
-          localProxyPort: 18082
+          localProxyPort: TEST_LOCAL_PROXY_PORT
         }
       })}`
     })
@@ -2825,7 +2882,7 @@ test("client scheduler runs a saved startup sync after restart with fake binarie
           prefix: "devices/scheduler-success-pc"
         },
         defaults: {
-          localProxyPort: 18082
+          localProxyPort: TEST_LOCAL_PROXY_PORT
         }
       })}`
     })
@@ -3078,7 +3135,7 @@ test("client sync run uses one profile snapshot for rclone and sing-box", async 
           prefix: "devices/snapshot-pc"
         },
         defaults: {
-          localProxyPort: 18082
+          localProxyPort: TEST_LOCAL_PROXY_PORT
         }
       })}`
     })
@@ -3136,10 +3193,10 @@ test("client sync run uses one profile snapshot for rclone and sing-box", async 
   const fakeToolEvents = await readFakeToolEvents(fakeToolLog);
   const syncEvent = fakeToolEvents.find((event) => event.tool === "rclone-sync");
   assert.ok(syncEvent);
-  assert.equal(syncEvent.allProxy, "socks5://127.0.0.1:18082");
+  assert.equal(syncEvent.allProxy, `socks5://127.0.0.1:${TEST_LOCAL_PROXY_PORT}`);
 
   const singboxConfig = JSON.parse(await readFile(singboxConfigFile, "utf8"));
-  assert.equal(singboxConfig.inbounds[0].listen_port, 18082);
+  assert.equal(singboxConfig.inbounds[0].listen_port, TEST_LOCAL_PROXY_PORT);
   assert.equal(singboxConfig.outbounds[0].server, "pass.971223.xyz");
   assert.equal(singboxConfig.outbounds[0].server_port, 45678);
   assert.equal(JSON.stringify(singboxConfig).includes("replacement.example.invalid"), false);
@@ -3170,13 +3227,16 @@ test("client sync run is single-flight while rclone config is starting", async (
       SFSC_FAKE_SYNC_EXIT_DELAY_MS: "300"
     }
   });
+  let startupOutput = "";
+  child.stdout.on("data", chunk => { startupOutput += chunk.toString("utf8"); });
+  child.stderr.on("data", chunk => { startupOutput += chunk.toString("utf8"); });
 
   t.after(async () => {
     await shutdownClient(baseUrl, child);
     await removeTempRoot(tempRoot);
   });
 
-  await waitForClient(baseUrl, child, tempRoot);
+  try { await waitForClient(baseUrl, child, tempRoot); } catch (error) { throw new Error(`${error.message}\n${startupOutput}`); }
 
   const importResponse = await fetch(`${baseUrl}/api/profile/import`, {
     method: "POST",
@@ -3199,7 +3259,7 @@ test("client sync run is single-flight while rclone config is starting", async (
           prefix: "devices/single-flight-pc"
         },
         defaults: {
-          localProxyPort: 18082
+          localProxyPort: TEST_LOCAL_PROXY_PORT
         }
       })}`
     })
@@ -3216,7 +3276,9 @@ test("client sync run is single-flight while rclone config is starting", async (
     headers: jsonHeaders,
     body: JSON.stringify({ job })
   });
-  await waitForFakeToolEvent(fakeToolLog, "rclone-config");
+  // Let the first request enter its asynchronous preparation, then race a
+  // duplicate and a different job before the delayed config command starts.
+  await new Promise((resolve) => setTimeout(resolve, 25));
   const secondRun = fetch(`${baseUrl}/api/sync/run`, {
     method: "POST",
     headers: jsonHeaders,
@@ -3233,6 +3295,8 @@ test("client sync run is single-flight while rclone config is starting", async (
       }
     })
   });
+
+  await waitForFakeToolEvent(fakeToolLog, "rclone-config");
 
   const [firstRunResponse, secondRunResponse, conflictingRunResponse] = await Promise.all([firstRun, secondRun, conflictingRun]);
   assert.equal(firstRunResponse.status, 200);
@@ -3312,7 +3376,7 @@ test("client sync stop waits through delayed rclone exit before accepting a new 
           prefix: "devices/stop-active-pc"
         },
         defaults: {
-          localProxyPort: 18082
+          localProxyPort: TEST_LOCAL_PROXY_PORT
         }
       })}`
     })
@@ -3466,7 +3530,7 @@ test("client scheduler and manual sync run share single-flight while rclone conf
           prefix: "devices/scheduler-manual-single-flight-pc"
         },
         defaults: {
-          localProxyPort: 18082
+          localProxyPort: TEST_LOCAL_PROXY_PORT
         }
       })}`
     })
@@ -3521,7 +3585,7 @@ test("client scheduler and manual sync run share single-flight while rclone conf
     headers: jsonHeaders,
     body: JSON.stringify({ job: startupJob })
   });
-  assert.equal(manualRun.status, 200);
+  assert.equal(manualRun.status, 200, await manualRun.clone().text());
   const manualRunPayload = await manualRun.json();
   assertClientSyncRunResponseContract(manualRunPayload, "schedulerManualSingleFlight.manualRun");
   assert.equal(manualRunPayload.sync.running, true);
@@ -3540,6 +3604,65 @@ test("client scheduler and manual sync run share single-flight while rclone conf
   assert.equal(fakeToolEvents.filter((event) => event.tool === "singbox-run").length, 1);
   assert.equal(fakeToolEvents.filter((event) => event.tool === "rclone-config").length, 1);
   assert.equal(fakeToolEvents.filter((event) => event.tool === "rclone-sync").length, 1);
+});
+
+test("client local API keeps scheduled legacy bidirectional jobs blocked without an initialized SFTP baseline", async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-client-schedule-admission-negative-"));
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, [clientEntry], {
+    cwd: projectRoot,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      HOST: "127.0.0.1",
+      PORT: String(port),
+      SFSC_PORTABLE_ROOT: tempRoot,
+      SFSC_APP_ROOT: join(projectRoot, "client"),
+      SFSC_OPEN_BROWSER: "0",
+      SFSC_HEARTBEAT_MS: "60000",
+      SFSC_TEST_ALLOW_UNSAFE_PATHS: ""
+    }
+  });
+  t.after(async () => {
+    await shutdownClient(baseUrl, child);
+    await removeTempRoot(tempRoot);
+  });
+  await waitForClient(baseUrl, child, tempRoot);
+
+  const imported = await fetch(`${baseUrl}/api/profile/import`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ code: `SFSC1-${base64UrlJson({
+      version: 1,
+      clientName: "manual-only-client",
+      tunnel: { type: "vless", uri: tunnelUri },
+      storage: {
+        type: "s3", remoteName: "remote", endpoint: "https://storage.example.invalid",
+        bucket: "backup", accessKeyId: "test-client", secretAccessKey: "test-secret"
+      }
+    })}` })
+  });
+  assert.equal(imported.status, 200);
+
+  const saved = await fetch(`${baseUrl}/api/jobs/save`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ job: {
+      name: "manual-only-bisync",
+      localPath: "C:\\Syncraft-test",
+      direction: "bidirectional",
+      schedule: { mode: "interval", intervalMinutes: 1 }
+    } })
+  });
+  assert.equal(saved.status, 400);
+  assertHttpErrorResponseContract(await saved.json(), "scheduledLegacyBisync", {
+    errorCode: "validation_failed",
+    message: "Scheduled bidirectional sync requires a verified initialized SFTP baseline; other risky sync jobs must use a manual schedule."
+  });
+  const jobs = await (await fetch(`${baseUrl}/api/jobs`)).json();
+  assert.equal(jobs.jobs.length, 0, "a denied schedule is not persisted");
 });
 
 test("client profile refresh preserves user job tuning while replacing profile-derived fields", async (t) => {
@@ -3619,7 +3742,7 @@ test("client profile refresh preserves user job tuning while replacing profile-d
       secretAccessKey: oldSecret,
       prefix: "devices/refresh-pc",
       defaults: {
-        localProxyPort: 18082,
+        localProxyPort: TEST_LOCAL_PROXY_PORT,
         transfers: 2,
         streams: 3,
         checkers: 4,
@@ -3754,6 +3877,251 @@ test("client profile refresh preserves user job tuning while replacing profile-d
   assert.equal(preview.rclone.remoteConfig.displayCommand.includes(newSecret), false);
   assert.equal(preview.rclone.remoteConfig.displayCommand.includes(oldSecret), false);
   assert.equal(preview.schedule.text, "Every 17 minutes");
+});
+
+test("client keeps exact legacy bisync jobs, admits a second relation, and blocks an unproven endpoint change", async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-client-sync-relation-http-"));
+  const port = await getFreePort();
+  const proxyPort = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const fakeToolLog = join(tempRoot, "fake-tools.jsonl");
+  await installFakeSyncTools(tempRoot);
+
+  const profileCode = (endpoint) => `SFSC1-${base64UrlJson({
+    version: 1,
+    profileId: "profile-sync-relation-http",
+    clientName: "relation-http-pc",
+    tunnel: {
+      type: "vless",
+      uri: tunnelUri
+    },
+    storage: {
+      type: "s3",
+      remoteName: "legacy-minio",
+      endpoint,
+      bucket: "home-sync",
+      accessKeyId: "relation-http-pc",
+      secretAccessKey: "relation-http-secret",
+      prefix: "devices/relation-http-pc"
+    },
+    defaults: {
+      localProxyPort: proxyPort,
+      transfers: 4,
+      streams: 8,
+      checkers: 8,
+      chunkSize: "16M",
+      retries: 3,
+      lowLevelRetries: 10,
+      bandwidthLimit: "off",
+      schedule: { mode: "manual" }
+    }
+  })}`;
+
+  const child = spawn(process.execPath, [clientEntry], {
+    cwd: projectRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+    env: {
+      ...process.env,
+      HOST: "127.0.0.1",
+      PORT: String(port),
+      SFSC_PORTABLE_ROOT: tempRoot,
+      SFSC_APP_ROOT: join(projectRoot, "client"),
+      SFSC_OPEN_BROWSER: "0",
+      SFSC_HEARTBEAT_MS: "60000",
+      SFSC_FAKE_TOOL_LOG: fakeToolLog,
+      SFSC_FAKE_SYNC_EXIT_CODE: "0",
+      SFSC_FAKE_SYNC_EXIT_DELAY_MS: "500"
+    }
+  });
+
+  t.after(async () => {
+    await shutdownClient(baseUrl, child);
+    await removeTempRoot(tempRoot);
+  });
+
+  await waitForClient(baseUrl, child, tempRoot);
+  await postJson(`${baseUrl}/api/profile/import`, {
+    code: profileCode("http://old-minio:9000")
+  });
+
+  const saved = await postJson(`${baseUrl}/api/jobs/save`, {
+    job: {
+      name: "Legacy relation",
+      localPath: "D:\\LegacyRelation",
+      direction: "bidirectional",
+      remoteFolder: "projects"
+    }
+  });
+  assertClientJobSaveResponseContract(saved, "syncRelation.legacySaved");
+
+  const jobsPath = join(tempRoot, "data", "jobs.json");
+  const storedJobs = JSON.parse(await readFile(jobsPath, "utf8"));
+  const legacyJob = storedJobs.find((job) => job.id === saved.job.id);
+  delete legacyJob.syncRelation;
+  legacyJob.remoteName = "legacy-minio";
+  await writeFile(jobsPath, JSON.stringify(storedJobs, null, 2), "utf8");
+
+  const legacyFingerprint = legacySyncJobFingerprint(legacyJob);
+  const runtimeId = createHash("sha256").update(legacyFingerprint).digest("hex").slice(0, 24);
+  const legacyWorkdir = join(tempRoot, "data", "runtime", "bisync", runtimeId);
+  await mkdir(legacyWorkdir, { recursive: true });
+  await writeFile(join(legacyWorkdir, "legacy-listing.lst"), "preserve\n", "utf8");
+  await writeFile(join(tempRoot, "data", "bisync-state.json"), JSON.stringify({
+    [legacyFingerprint]: {
+      initializedAt: "2026-01-01T00:00:00.000Z",
+      workdir: legacyWorkdir,
+      mode: "newer"
+    }
+  }, null, 2), "utf8");
+
+  await postJson(`${baseUrl}/api/profile/import`, {
+    code: profileCode("http://old-minio:9000")
+  });
+  let listed = await (await fetch(`${baseUrl}/api/jobs`)).json();
+  let legacySummary = listed.jobs.find((job) => job.id === saved.job.id);
+  assert.equal(legacySummary.remoteName, "legacy-minio");
+  assert.equal(legacySummary.syncRelation.migrationState, "legacy_compatible");
+
+  const legacyPreview = await postJson(`${baseUrl}/api/sync/preview`, {
+    job: legacySummary
+  });
+  assertSyncPreviewContract(legacyPreview, "syncRelation.legacyPreview");
+  assert.match(legacyPreview.rclone.remotePath, /^legacy-minio:home-sync\/devices\/relation-http-pc\/projects$/);
+  assert.equal(
+    legacyPreview.rclone.args[legacyPreview.rclone.args.indexOf("--workdir") + 1],
+    legacyWorkdir
+  );
+
+  const legacyRun = await fetch(`${baseUrl}/api/sync/run`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ job: legacySummary })
+  });
+  assert.equal(legacyRun.status, 200, await legacyRun.clone().text());
+  assertClientSyncRunResponseContract(await legacyRun.json(), "syncRelation.legacyRun");
+  await waitForFakeToolEvent(fakeToolLog, "rclone-sync");
+  await fetch(`${baseUrl}/api/sync/stop`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({})
+  }).catch(() => {});
+
+  const secondSaved = await postJson(`${baseUrl}/api/jobs/save`, {
+    job: {
+      name: "Second relation",
+      localPath: "D:\\SecondRelation",
+      direction: "bidirectional",
+      remoteFolder: "second-projects"
+    }
+  });
+  assertClientJobSaveResponseContract(secondSaved, "syncRelation.secondSaved");
+  assert.equal(secondSaved.job.syncRelation.migrationState, "ready");
+  assert.notEqual(secondSaved.job.remoteName, "legacy-minio");
+
+  const jobsBeforeEndpointChange = JSON.parse(await readFile(jobsPath, "utf8"));
+  const legacyJobBeforeEndpointChange = jobsBeforeEndpointChange.find((job) => job.id === saved.job.id);
+  const bisyncStatePath = join(tempRoot, "data", "bisync-state.json");
+  const bisyncStateBeforeEndpointChange = JSON.parse(await readFile(bisyncStatePath, "utf8"));
+  const legacyBaselineBeforeEndpointChange = structuredClone(bisyncStateBeforeEndpointChange[legacyFingerprint]);
+  const listingPath = join(legacyWorkdir, "legacy-listing.lst");
+  const listingBeforeEndpointChange = await readFile(listingPath, "utf8");
+  const legacySecretRef = legacyJobBeforeEndpointChange.secretAccessKey?.secretRef;
+  assert.ok(legacySecretRef, "expected the legacy job credential to be held by secret reference");
+  const secretsPath = join(tempRoot, "data", "secrets.json");
+  const legacySecretBeforeEndpointChange = JSON.parse(await readFile(secretsPath, "utf8"))[legacySecretRef];
+  assert.equal(typeof legacySecretBeforeEndpointChange, "string");
+  assert.ok(legacySecretBeforeEndpointChange.length > 0);
+
+  await postJson(`${baseUrl}/api/profile/import`, {
+    code: profileCode("http://new-minio:9000")
+  });
+  listed = await (await fetch(`${baseUrl}/api/jobs`)).json();
+  for (const jobId of [saved.job.id, secondSaved.job.id]) {
+    const job = listed.jobs.find((item) => item.id === jobId);
+    assert.equal(job.syncRelation.migrationState, "migration_required");
+    assert.ok(job.syncRelation.migrationReasons.includes("server_identity_unproven_for_connection_change"));
+  }
+
+  const blockedPreview = await fetch(`${baseUrl}/api/sync/preview`, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      job: listed.jobs.find((job) => job.id === saved.job.id)
+    })
+  });
+  const blockedPayload = await blockedPreview.json();
+  assert.equal(blockedPreview.status, 409, JSON.stringify(blockedPayload));
+  assertHttpErrorResponseContract(blockedPayload, "syncRelation.blockedPreview", {
+    errorCode: "sync_relation_migration_required"
+  });
+
+  const jobsAfterBlockedMigration = JSON.parse(await readFile(jobsPath, "utf8"));
+  const legacyJobAfterBlockedMigration = jobsAfterBlockedMigration.find((job) => job.id === saved.job.id);
+  assert.deepEqual(
+    {
+      id: legacyJobAfterBlockedMigration.id,
+      localPath: legacyJobAfterBlockedMigration.localPath,
+      direction: legacyJobAfterBlockedMigration.direction,
+      storageBackend: legacyJobAfterBlockedMigration.storageBackend,
+      remoteName: legacyJobAfterBlockedMigration.remoteName,
+      bucketName: legacyJobAfterBlockedMigration.bucketName,
+      remotePrefix: legacyJobAfterBlockedMigration.remotePrefix,
+      remoteFolder: legacyJobAfterBlockedMigration.remoteFolder,
+      s3Endpoint: legacyJobAfterBlockedMigration.s3Endpoint,
+      accessKeyId: legacyJobAfterBlockedMigration.accessKeyId,
+      syncRelation: {
+        relationId: legacyJobAfterBlockedMigration.syncRelation.relationId,
+        baselineId: legacyJobAfterBlockedMigration.syncRelation.baselineId,
+        baselineEpoch: legacyJobAfterBlockedMigration.syncRelation.baselineEpoch,
+        rootId: legacyJobAfterBlockedMigration.syncRelation.rootId,
+        remoteRoot: legacyJobAfterBlockedMigration.syncRelation.remoteRoot,
+        localRoot: legacyJobAfterBlockedMigration.syncRelation.localRoot,
+        rclone: {
+          remoteAlias: legacyJobAfterBlockedMigration.syncRelation.rclone.remoteAlias,
+          remotePath: legacyJobAfterBlockedMigration.syncRelation.rclone.remotePath,
+          workdir: legacyJobAfterBlockedMigration.syncRelation.rclone.workdir
+        }
+      }
+    },
+    {
+      id: legacyJobBeforeEndpointChange.id,
+      localPath: legacyJobBeforeEndpointChange.localPath,
+      direction: legacyJobBeforeEndpointChange.direction,
+      storageBackend: legacyJobBeforeEndpointChange.storageBackend,
+      remoteName: legacyJobBeforeEndpointChange.remoteName,
+      bucketName: legacyJobBeforeEndpointChange.bucketName,
+      remotePrefix: legacyJobBeforeEndpointChange.remotePrefix,
+      remoteFolder: legacyJobBeforeEndpointChange.remoteFolder,
+      s3Endpoint: legacyJobBeforeEndpointChange.s3Endpoint,
+      accessKeyId: legacyJobBeforeEndpointChange.accessKeyId,
+      syncRelation: {
+        relationId: legacyJobBeforeEndpointChange.syncRelation.relationId,
+        baselineId: legacyJobBeforeEndpointChange.syncRelation.baselineId,
+        baselineEpoch: legacyJobBeforeEndpointChange.syncRelation.baselineEpoch,
+        rootId: legacyJobBeforeEndpointChange.syncRelation.rootId,
+        remoteRoot: legacyJobBeforeEndpointChange.syncRelation.remoteRoot,
+        localRoot: legacyJobBeforeEndpointChange.syncRelation.localRoot,
+        rclone: {
+          remoteAlias: legacyJobBeforeEndpointChange.syncRelation.rclone.remoteAlias,
+          remotePath: legacyJobBeforeEndpointChange.syncRelation.rclone.remotePath,
+          workdir: legacyJobBeforeEndpointChange.syncRelation.rclone.workdir
+        }
+      }
+    },
+    "blocked endpoint migration should preserve the legacy mapping, relation/root identifiers, and rclone workdir"
+  );
+  assert.equal(legacyJobAfterBlockedMigration.syncRelation.migration.state, "migration_required");
+  const bisyncStateAfterBlockedMigration = JSON.parse(await readFile(bisyncStatePath, "utf8"));
+  assert.deepEqual(
+    bisyncStateAfterBlockedMigration[legacyFingerprint],
+    legacyBaselineBeforeEndpointChange,
+    "blocked endpoint migration should preserve the legacy bisync baseline"
+  );
+  assert.equal(await readFile(listingPath, "utf8"), listingBeforeEndpointChange);
+  const legacySecretAfterEndpointChange = JSON.parse(await readFile(secretsPath, "utf8"))[legacySecretRef];
+  assert.equal(legacySecretAfterEndpointChange, legacySecretBeforeEndpointChange,
+    "blocked endpoint migration should retain the legacy credential material for fallback");
 });
 
 test("client imports a real server-issued SyncKey into local jobs and sync preview", async (t) => {
@@ -4548,7 +4916,7 @@ test("client profile import rolls back profile jobs and secrets when job refresh
         prefix: "devices/old-rollback-pc"
       },
       defaults: {
-        localProxyPort: 18082,
+        localProxyPort: TEST_LOCAL_PROXY_PORT,
         transfers: 4,
         streams: 8,
         checkers: 8,
@@ -4755,7 +5123,7 @@ test("client sends signed heartbeat for server-issued offline full profile", asy
         prefix: "devices/offline-pc"
       },
       defaults: {
-        localProxyPort: 18082,
+        localProxyPort: TEST_LOCAL_PROXY_PORT,
         transfers: 4,
         streams: 8,
         checkers: 8,
@@ -6889,7 +7257,7 @@ function buildMockProfile({ server, clientName }) {
       prefix: `devices/${clientName}`
     },
     defaults: {
-      localProxyPort: 18082,
+      localProxyPort: TEST_LOCAL_PROXY_PORT,
       transfers: 4,
       streams: 8,
       checkers: 8,
@@ -7020,6 +7388,14 @@ function releaseManifestFiles(packageName, overrides = {}) {
     "app/client/src/clientServer.js",
     "app/client/src/paths.js",
     "app/client/src/store.js",
+    "app/client/src/enrollmentSession.js",
+    "app/client/src/enrollmentDiagnostics.js",
+    "app/client/src/sftpAccessMarker.js",
+    "app/client/src/connectionRepair.js",
+    "app/client/src/firstBisyncConflict.js",
+    "app/client/src/syncRecovery.js",
+    "app/src/core/dataAuthorization.js",
+    "app/client/src/bootstrapTransport.js",
     "app/client/src/diagnosticBundle.js",
     "app/client/src/processRunner.js",
     "app/client/src/rcloneStats.js",
@@ -7030,6 +7406,7 @@ function releaseManifestFiles(packageName, overrides = {}) {
     "app/client/public/app.js",
     "app/client/public/styles.css",
     "app/src/core/index.js",
+    "app/src/core/channelImportCode.js",
     "resources/app/docs/INTERFACE_CONTRACT.md",
     "resources/app/docs/API_MATRIX.md",
     "resources/app/docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md",
@@ -7048,6 +7425,14 @@ function releaseManifestFiles(packageName, overrides = {}) {
     "resources/app/client/src/clientServer.js",
     "resources/app/client/src/paths.js",
     "resources/app/client/src/store.js",
+    "resources/app/client/src/enrollmentSession.js",
+    "resources/app/client/src/enrollmentDiagnostics.js",
+    "resources/app/client/src/sftpAccessMarker.js",
+    "resources/app/client/src/connectionRepair.js",
+    "resources/app/client/src/firstBisyncConflict.js",
+    "resources/app/client/src/syncRecovery.js",
+    "resources/app/src/core/dataAuthorization.js",
+    "resources/app/client/src/bootstrapTransport.js",
     "resources/app/client/src/diagnosticBundle.js",
     "resources/app/client/src/processRunner.js",
     "resources/app/client/src/rcloneStats.js",
@@ -7058,6 +7443,7 @@ function releaseManifestFiles(packageName, overrides = {}) {
     "resources/app/client/public/app.js",
     "resources/app/client/public/styles.css",
     "resources/app/src/core/index.js",
+    "resources/app/src/core/channelImportCode.js",
     "resources/app/docs/INTERFACE_CONTRACT.md",
     "resources/app/docs/API_MATRIX.md",
     "resources/app/docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md",

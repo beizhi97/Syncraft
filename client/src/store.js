@@ -1,11 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { access, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join, toNamespacedPath } from "node:path";
 import { promisify } from "node:util";
 import { createHttpError, normalizeSyncRun } from "../../src/core/index.js";
+import { canonicalJson, publicKeyFingerprint, verifyChannelConfigCode } from "../../src/core/enrollmentProtocol.js";
+import { normalizeDataAuthorizationPayload } from "../../src/core/dataAuthorization.js";
 import { getClientPaths } from "./paths.js";
+import { isEnrollmentDiagnosticError } from "./enrollmentDiagnostics.js";
 
 const execFileAsync = promisify(execFile);
 const fileWriteQueues = new Map();
@@ -82,7 +85,7 @@ export function withClientStateLock(paths = getClientPaths(), task) {
 }
 
 function clientStateLockKey(paths = {}) {
-  const anchor = paths.profileFile || paths.jobsFile || paths.secretsFile || paths.syncHistoryFile || paths.claimRecoveryFile || paths.heartbeatSnapshotFile || ".";
+  const anchor = paths.profileFile || paths.jobsFile || paths.secretsFile || paths.enrollmentFile || paths.syncHistoryFile || paths.claimRecoveryFile || paths.heartbeatSnapshotFile || ".";
   return dirname(anchor);
 }
 
@@ -97,6 +100,104 @@ export async function readStoredProfile(paths = getClientPaths()) {
   return withClientStateLock(paths, async () => {
     const profile = await readJsonFile(paths.profileFile, null);
     return profile && typeof profile === "object" && !Array.isArray(profile) ? profile : null;
+  });
+}
+
+export async function readEnrollmentSession(paths = getClientPaths()) {
+  return withClientStateLock(paths, async () => {
+    const session = await readJsonFile(paths.enrollmentFile, null);
+    if (session != null) validateEnrollmentSessionState(session);
+    return session;
+  });
+}
+
+export async function saveEnrollmentSession(session, paths = getClientPaths()) {
+  validateEnrollmentSessionState(session);
+  return withClientStateLock(paths, () => withFileWriteLock(paths.enrollmentFile, async () => {
+    await mkdir(dirname(paths.enrollmentFile), { recursive: true });
+    await writeProtectedTextFileUnlocked(paths.enrollmentFile, JSON.stringify(session, null, 2), { failClosed: true });
+    return session;
+  }));
+}
+
+function validateEnrollmentSessionState(session) {
+  const invalid = () => { throw createHttpError("local_state_corrupt", 409, "Enrollment session state is invalid"); };
+  const exact = (value, fields) => value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).sort().join("\0") === [...fields].sort().join("\0");
+  if (!exact(session, ["activeServerId", "identity", "servers", "version"]) || session.version !== 1
+    || typeof session.activeServerId !== "string" || !/^srv_[A-Za-z0-9_-]{16,128}$/.test(session.activeServerId)
+    || !session.servers || typeof session.servers !== "object" || Array.isArray(session.servers)
+    || !Object.hasOwn(session.servers, session.activeServerId)) invalid();
+  if (session.identity != null) {
+    if (!exact(session.identity, ["deviceId", "privateKey", "publicKey"])
+      || typeof session.identity.deviceId !== "string" || !/^dev_[A-Za-z0-9_-]{16,128}$/.test(session.identity.deviceId)) invalid();
+    try {
+      if (publicKeyFingerprint(session.identity.privateKey) !== publicKeyFingerprint(session.identity.publicKey)) invalid();
+    } catch { invalid(); }
+  }
+  for (const [serverId, record] of Object.entries(session.servers)) {
+    if (!/^srv_[A-Za-z0-9_-]{16,128}$/.test(serverId)
+      || !exact(record, ["pin", "channel", "channelCode", "bootstrapEndpoint", "phase", "trustFingerprint", ...(Object.hasOwn(record || {}, "request") ? ["request"] : []), ...(Object.hasOwn(record || {}, "receipt") ? ["receipt"] : []), ...(Object.hasOwn(record || {}, "dataAuthorizations") ? ["dataAuthorizations"] : []), ...(Object.hasOwn(record || {}, "lastEnrollmentError") ? ["lastEnrollmentError"] : [])])
+      || !record.pin || record.pin.serverId !== serverId
+      || typeof record.pin.keyId !== "string" || !/^key_[A-Za-z0-9_-]{16,128}$/.test(record.pin.keyId)
+      || !record.pin.publicKey || !Array.isArray(record.pin.allowedBootstrapOrigins)
+      || typeof record.pin.bootstrapPathPrefix !== "string"
+      || typeof record.channelCode !== "string"
+      || !record.channel || record.channel.serverId !== serverId
+      || typeof record.bootstrapEndpoint !== "string"
+      || !/^[A-Za-z0-9_-]{43}$/.test(record.trustFingerprint)
+      || (Object.hasOwn(record || {}, "lastEnrollmentError") && !isEnrollmentDiagnosticError(record.lastEnrollmentError))
+      || !["channel-verified", "request-pending", "identity-verified-awaiting-directory-authorization"].includes(record.phase)) invalid();
+    try {
+      publicKeyFingerprint(record.pin.publicKey);
+      const validationTime = Date.parse(record.channel.issuedAt);
+      if (!Number.isFinite(validationTime)) invalid();
+      const verified = verifyChannelConfigCode(record.channelCode, {
+        nowMs: validationTime,
+        trustedServerKeys: { [record.pin.keyId]: record.pin }
+      });
+      if (verified.payload.serverId !== serverId
+        || verified.payload.authenticator.keyId !== record.pin.keyId
+        || canonicalJson(verified.payload) !== canonicalJson(record.channel)) invalid();
+    } catch { invalid(); }
+    if (record.request != null && (!record.request || typeof record.request !== "object"
+      || ![2, 4].includes(Object.keys(record.request).length)
+      || !Object.keys(record.request).every((key) => ["deviceId", "publicKeyFingerprint", "requestId", "status"].includes(key))
+      || typeof record.request.requestId !== "string" || !/^req_[A-Za-z0-9_-]{16,128}$/.test(record.request.requestId)
+      || !["submitting", "pending", "consumed"].includes(record.request.status)
+      || (record.request.deviceId != null && record.request.deviceId !== session.identity?.deviceId)
+      || (record.request.publicKeyFingerprint != null && !/^[A-Za-z0-9_-]{43}$/.test(record.request.publicKeyFingerprint)))) invalid();
+    if (record.receipt != null && (!record.receipt || typeof record.receipt !== "object" || Array.isArray(record.receipt))) invalid();
+    if (record.dataAuthorizations != null) {
+      if (!record.dataAuthorizations || typeof record.dataAuthorizations !== "object" || Array.isArray(record.dataAuthorizations)) invalid();
+      for (const [relationId, envelope] of Object.entries(record.dataAuthorizations)) {
+        if (!/^rel_[A-Za-z0-9_-]{16,128}$/.test(relationId)
+          || !exact(envelope, ["payload", "signature"])) invalid();
+        try {
+          const payload = normalizeDataAuthorizationPayload(envelope.payload);
+          if (payload.serverId !== serverId || payload.keyId !== record.pin.keyId
+            || payload.binding.identity.relationId !== relationId) invalid();
+        } catch { invalid(); }
+      }
+    }
+    if (record.phase === "identity-verified-awaiting-directory-authorization"
+      && (!session.identity || record.request?.status !== "consumed" || !record.receipt)) invalid();
+  }
+  if (!session.identity && Object.values(session.servers).some((record) => record.request || record.receipt)) invalid();
+}
+
+export async function writeProtectedJsonFile(file, value) {
+  return withFileWriteLock(file, async () => {
+    await mkdir(dirname(file), { recursive: true });
+    await writeProtectedTextFileUnlocked(file, JSON.stringify(value, null, 2), { failClosed: true });
+  });
+}
+
+export async function writeProtectedTextFile(file, text) {
+  if (typeof text !== "string") throw new TypeError("Protected file content must be text");
+  return withFileWriteLock(file, async () => {
+    await mkdir(dirname(file), { recursive: true });
+    await writeProtectedTextFileUnlocked(file, text, { failClosed: true });
   });
 }
 
@@ -423,7 +524,7 @@ async function protectSecretVaultFile(file) {
     return { protected: false, mode: "windows-acl", errorCode: "account_unknown" };
   }
   try {
-    await execFileAsync("icacls.exe", [file, "/inheritance:r", "/grant:r", `${account}:F`], {
+    await execFileAsync("icacls.exe", [toNamespacedPath(file), "/inheritance:r", "/grant:r", `${account}:F`], {
       windowsHide: true,
       timeout: 5000
     });
@@ -502,6 +603,7 @@ export async function inspectLocalState(paths = getClientPaths()) {
       inspectJsonStateFile("jobs", paths.jobsFile),
       inspectJsonStateFile("secrets", paths.secretsFile || secretStoreFile(paths)),
       inspectJsonStateFile("syncHistory", paths.syncHistoryFile),
+      inspectSyncRecoveryState(paths),
       inspectJsonStateFile("claimRecovery", claimRecoveryStoreFile(paths)),
       inspectJsonStateFile("lastSuccessfulHeartbeat", heartbeatSnapshotStoreFile(paths))
     ]);
@@ -510,6 +612,33 @@ export async function inspectLocalState(paths = getClientPaths()) {
       files
     };
   });
+}
+
+async function inspectSyncRecoveryState(paths) {
+  const candidates = [];
+  if (paths.syncRecoveryStateFile) candidates.push(paths.syncRecoveryStateFile);
+  try {
+    const entries = await readdir(paths.syncRecoveryRoot, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.isSymbolicLink()) candidates.push(join(paths.syncRecoveryRoot, entry.name, "manifest.json"));
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  let exists = false;
+  for (const file of candidates) {
+    try {
+      JSON.parse((await readFile(file, "utf8")).replace(/^\uFEFF/, ""));
+      exists = true;
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      if (error instanceof SyntaxError) {
+        return { name: "syncRecovery", path: file, exists: true, ok: false, errorCode: "local_state_corrupt", message: `Local state file is not valid JSON: ${basename(file)}` };
+      }
+      throw error;
+    }
+  }
+  return { name: "syncRecovery", path: paths.syncRecoveryRoot, exists, ok: true };
 }
 
 export async function readLastSuccessfulHeartbeat(paths = getClientPaths()) {

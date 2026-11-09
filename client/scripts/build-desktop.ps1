@@ -1,5 +1,6 @@
 param(
-  [switch]$SkipBinaryCheck
+  [switch]$SkipBinaryCheck,
+  [string]$OutputRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,9 +12,11 @@ $rootPackage = Get-Content -LiteralPath (Join-Path $projectRoot "package.json") 
 $appVersion = $rootPackage.version
 $sourceFingerprint = Get-SourceTreeFingerprint $projectRoot
 $electronDist = Join-Path $projectRoot "node_modules\electron\dist"
-$distRoot = Join-Path $projectRoot "dist\SyncraftDesktop"
-$zipPath = Join-Path $projectRoot "dist\SyncraftDesktop.zip"
-$checksumPath = Join-Path $projectRoot "dist\SyncraftDesktop.zip.sha256"
+$outputRootPath = if ($OutputRoot) { $OutputRoot } else { Join-Path $projectRoot "dist" }
+$outputRootFull = [System.IO.Path]::GetFullPath($outputRootPath)
+$distRoot = Join-Path $outputRootFull "SyncraftDesktop"
+$zipPath = Join-Path $outputRootFull "SyncraftDesktop.zip"
+$checksumPath = Join-Path $outputRootFull "SyncraftDesktop.zip.sha256"
 
 $nodeExe = $env:SFSC_NODE
 if (!$nodeExe) {
@@ -40,13 +43,18 @@ $projectRootFull = [System.IO.Path]::GetFullPath($projectRoot)
 $distRootFull = [System.IO.Path]::GetFullPath($distRoot)
 $zipPathFull = [System.IO.Path]::GetFullPath($zipPath)
 $checksumPathFull = [System.IO.Path]::GetFullPath($checksumPath)
-if (!$distRootFull.StartsWith($projectRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+$projectRootPrefix = $projectRootFull.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+$outputRootPrefix = $outputRootFull.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+if (!$outputRootFull.StartsWith($projectRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "Refusing to write outside project root: $outputRootFull"
+}
+if (!$distRootFull.StartsWith($outputRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
   throw "Refusing to write outside project root: $distRootFull"
 }
-if (!$zipPathFull.StartsWith($projectRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+if (!$zipPathFull.StartsWith($outputRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
   throw "Refusing to write outside project root: $zipPathFull"
 }
-if (!$checksumPathFull.StartsWith($projectRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+if (!$checksumPathFull.StartsWith($outputRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
   throw "Refusing to write outside project root: $checksumPathFull"
 }
 
@@ -103,6 +111,14 @@ $manifestFiles = @(
   @{ name = "resources/app/client/src/clientServer.js"; path = Join-Path $appRoot "client\src\clientServer.js" },
   @{ name = "resources/app/client/src/paths.js"; path = Join-Path $appRoot "client\src\paths.js" },
   @{ name = "resources/app/client/src/store.js"; path = Join-Path $appRoot "client\src\store.js" },
+  @{ name = "resources/app/client/src/enrollmentSession.js"; path = Join-Path $appRoot "client\src\enrollmentSession.js" },
+  @{ name = "resources/app/client/src/enrollmentDiagnostics.js"; path = Join-Path $appRoot "client\src\enrollmentDiagnostics.js" },
+  @{ name = "resources/app/client/src/sftpAccessMarker.js"; path = Join-Path $appRoot "client\src\sftpAccessMarker.js" },
+  @{ name = "resources/app/client/src/connectionRepair.js"; path = Join-Path $appRoot "client\src\connectionRepair.js" },
+  @{ name = "resources/app/client/src/firstBisyncConflict.js"; path = Join-Path $appRoot "client\src\firstBisyncConflict.js" },
+  @{ name = "resources/app/client/src/syncRecovery.js"; path = Join-Path $appRoot "client\src\syncRecovery.js" },
+  @{ name = "resources/app/src/core/dataAuthorization.js"; path = Join-Path $appRoot "src\core\dataAuthorization.js" },
+  @{ name = "resources/app/client/src/bootstrapTransport.js"; path = Join-Path $appRoot "client\src\bootstrapTransport.js" },
   @{ name = "resources/app/client/src/diagnosticBundle.js"; path = Join-Path $appRoot "client\src\diagnosticBundle.js" },
   @{ name = "resources/app/client/src/processRunner.js"; path = Join-Path $appRoot "client\src\processRunner.js" },
   @{ name = "resources/app/client/src/rcloneStats.js"; path = Join-Path $appRoot "client\src\rcloneStats.js" },
@@ -113,6 +129,7 @@ $manifestFiles = @(
   @{ name = "resources/app/client/public/app.js"; path = Join-Path $appRoot "client\public\app.js" },
   @{ name = "resources/app/client/public/styles.css"; path = Join-Path $appRoot "client\public\styles.css" },
   @{ name = "resources/app/src/core/index.js"; path = Join-Path $appRoot "src\core\index.js" },
+  @{ name = "resources/app/src/core/channelImportCode.js"; path = Join-Path $appRoot "src\core\channelImportCode.js" },
   @{ name = "resources/app/docs/INTERFACE_CONTRACT.md"; path = Join-Path $appRoot "docs\INTERFACE_CONTRACT.md" },
   @{ name = "resources/app/docs/API_MATRIX.md"; path = Join-Path $appRoot "docs\API_MATRIX.md" },
   @{ name = "resources/app/docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md"; path = Join-Path $appRoot "docs\DEPLOYMENT_AND_MIGRATION_GUIDE.md" },

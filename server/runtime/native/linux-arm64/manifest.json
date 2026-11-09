@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "2",
+  "nativeApiRevision": "2",
+  "nodeMajor": 22,
+  "napiVersion": 8,
+  "platform": "linux",
+  "arch": "arm64",
+  "libc": "musl",
+  "artifactFile": "sfsc_owner_lock.node",
+  "artifactSizeBytes": 79024,
+  "artifactSha256": "2d6ea2c63f7eedb8b2e3ecc95ef00499e6f8fdd4ae31125adb76c3f43462dd97"
+}

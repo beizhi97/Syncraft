@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "platform": "linux",
+  "arch": "arm64",
+  "artifacts": [
+    {
+      "name": "sfsc-relation-supervisor",
+      "file": "sfsc-relation-supervisor",
+      "sizeBytes": 3733811,
+      "sha256": "70441080a62b4281516c02a6d23d9925b7427a5b3b2d34e3a963bdfcee6a03a4"
+    },
+    {
+      "name": "sfsc-root-guard",
+      "file": "sfsc-root-guard",
+      "sizeBytes": 3543319,
+      "sha256": "fb9506a5449db95da53b1c225241517efde2ae695517e6a177139ee0ebd5bab5"
+    },
+    {
+      "name": "sfsc-sftp-service",
+      "file": "sfsc-sftp-service",
+      "sizeBytes": 6632706,
+      "sha256": "57bb9bb1ada629fc59328ab25a8391d502036989d6dc349a8590c5ea17589023"
+    }
+  ]
+}

@@ -36,13 +36,11 @@ function Get-SourceFingerprintFiles($repoRootFull) {
     "README.md",
     "src",
     "public",
-    "server\Dockerfile",
-    "server\sing-box.Dockerfile",
-    "server\sing-box-supervisor.sh",
-    "server\.env.example",
-    "server\docker-compose.yml",
-    "server\docker-compose.n1.yml",
-    "server\sing-box\config.example.json",
+    # The complete server source/runtime tree is shipped in the release bundle.
+    # Test-FingerprintBlockedPath below excludes local state and credentials.
+    "server",
+    # Native source is also shipped in full and fingerprinted independently.
+    "native",
     "client\src",
     "client\public",
     "client\electron",
@@ -77,14 +75,22 @@ function Get-SourceFingerprintFiles($repoRootFull) {
 
 function Test-FingerprintBlockedPath($relativePath) {
   $normalized = "$relativePath".Replace("\", "/")
+  # These checked-in templates are controlled inputs; all other server env
+  # files are runtime credentials/configuration and must stay out of hashes.
+  if ($normalized -in @("server/.env.example", "server/.env.directory.example", "server/systemd/sfsc-directory.env.example")) {
+    return $false
+  }
   foreach ($pattern in @(
     '(^|/)\.git(/|$)',
     '(^|/)node_modules(/|$)',
     '(^|/)\.tmp(/|$)',
     '(^|/)dist(/|$)',
     '(^|/)reports(/|$)',
+    '(^|/)__pycache__(/|$)',
+    '\.py[co]$',
     '(^|/)\.env$',
     '(^|/)[^/]+\.env\.local$',
+    '(^|/)\.env\..+$',
     '^server/\.env$',
     '^server/data(/|$)',
     '^server/sing-box/config\.json$',

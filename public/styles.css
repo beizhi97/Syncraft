@@ -81,6 +81,9 @@ a{color:var(--accent);text-decoration:none}
   color:var(--text-3);cursor:pointer;border-left:2px solid transparent;transition:all .15s}
 .sidebar-item:hover{color:var(--text-2);background:var(--bg)}
 .sidebar-item.active{color:var(--accent);border-left-color:var(--accent);background:var(--accent-soft)}
+.sidebar-advanced{margin:2px 0 4px;padding:0 10px;color:rgba(255,255,255,.62);font-size:12px}
+.sidebar-advanced summary{cursor:pointer;padding:7px 0;list-style-position:inside}
+.first-use-connection{margin-top:14px}
 
 /* ── Main Content ──────────────────────────────── */
 .main-wrap{flex:1;padding:16px 24px 40px;min-width:0}
@@ -350,3 +353,6 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 @media(max-width:860px){.app.app-shell{display:block}.sidebar{position:static;width:100%;height:auto;padding:10px 12px;display:grid;grid-template-columns:auto 1fr;align-items:center}.brand{margin:0}.sidebar-group{display:flex;margin:0;justify-content:flex-end}.sidebar-group-label,.sidebar-foot{display:none}.sidebar-item.nav-item{width:auto;padding:7px 9px}.main-wrap.content{padding:18px}.form-grid-2{grid-template-columns:1fr}.filter-bar.device-filters{grid-template-columns:1fr 1fr}.filter-bar.device-filters input{grid-column:1/-1}.meta-grid{grid-template-columns:1fr}.overview-device-row{grid-template-columns:minmax(120px,1fr) 90px 110px}.overview-device-row>*:last-child{display:none}.config-preview{display:none}}
 @media(max-width:560px){.sidebar{grid-template-columns:1fr}.brand{margin-bottom:8px}.sidebar-group{justify-content:flex-start;overflow-x:auto}.nav-dot{display:none}.topbar{padding:0 14px}.main-wrap.content{padding:14px}.page-head{display:grid;gap:12px}.stat-strip.metric-row{grid-template-columns:1fr}.stat-tile+.stat-tile{border-left:0;border-top:1px solid var(--border)}.filter-bar.device-filters{grid-template-columns:1fr}.filter-bar.device-filters input{grid-column:auto}.form-row{grid-template-columns:1fr;gap:5px}.overview-device-row{grid-template-columns:1fr 90px}.overview-device-row>*:nth-child(3),.overview-device-row>*:last-child{display:none}.device-row{display:grid!important}.device-actions{justify-content:flex-start}.bucket-item.item{grid-template-columns:1fr}.bucket-actions{justify-content:flex-start}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+.enrollment-relation-card{display:grid;gap:10px}.enrollment-relation-row{padding:8px 0;border-top:1px solid var(--border)}.enrollment-relation-card .device-row{align-items:center;gap:12px}.enrollment-relation-card button:disabled{opacity:.55;cursor:not-allowed}
+

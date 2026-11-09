@@ -157,6 +157,7 @@ async function buildContext() {
     "function renderDeviceRecovery(p) { this.renderCalls.deviceRecovery.push(p === null ? null : 'value'); }",
     "function renderSyncHistory() {}",
     "function renderProfileSummary() {}",
+    "function renderEnrollmentStatus() {}",
     "function renderRemoteTargetSummary() {}",
     "function applySyncDirectionAuthorization() {}",
     "function writeJob() {}",

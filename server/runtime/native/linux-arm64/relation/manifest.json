@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "platform": "linux",
+  "arch": "arm64",
+  "artifacts": [
+    {
+      "name": "sfsc-relation-supervisor",
+      "file": "sfsc-relation-supervisor",
+      "sizeBytes": 3729529,
+      "sha256": "67c5e8b2aed052c908eb6a789db4e0e5aaffdbac6506ee05e76cda993985e9ba"
+    },
+    {
+      "name": "sfsc-root-guard",
+      "file": "sfsc-root-guard",
+      "sizeBytes": 3536944,
+      "sha256": "a01a75e1991c01d2e28fc7f98b0983789dbc73099f5bdd4043c6f41eb22756a1"
+    }
+  ]
+}

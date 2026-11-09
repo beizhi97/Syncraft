@@ -7,4 +7,7 @@ if [ ! -s /run/sfsc-instance-id ]; then
   chmod 0600 /run/sfsc-instance-id
 fi
 export SFSC_INSTANCE_ID="$(cat /run/sfsc-instance-id)"
+export SFSC_RUNTIME_ADMISSION_REQUIRED=1
+export SFSC_RUNTIME_EPOCH_ROOT=/run/sfsc-runtime
+export SFSC_RELATION_STATE_PATH="${SFSC_RELATION_STATE_PATH:-/data/app/relation-services.json}"
 exec node /app/src/server.js

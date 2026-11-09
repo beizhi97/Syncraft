@@ -32,9 +32,12 @@
       </div>
       <div class="sidebar-group">
         <div class="sidebar-group-label">配置</div>
-        <button class="sidebar-item nav-item" type="button" data-tab-target="tab-vless" data-nav-group="settings"><span class="nav-dot"></span>基础设置</button>
+        <button class="sidebar-item nav-item" type="button" data-tab-target="tab-vless" data-nav-group="settings"><span class="nav-dot"></span>高级连接设置</button>
         <button class="sidebar-item nav-item" type="button" data-tab-target="tab-devices"><span class="nav-dot"></span>设备</button>
-        <button class="sidebar-item nav-item" type="button" data-tab-target="tab-tkey"><span class="nav-dot"></span>SyncKey</button>
+        <details class="sidebar-advanced">
+          <summary>兼容与高级</summary>
+          <button class="sidebar-item nav-item" type="button" data-tab-target="tab-tkey"><span class="nav-dot"></span>旧版 SyncKey</button>
+        </details>
       </div>
       <div class="sidebar-foot">
         <div class="health-indicator"><span id="healthDot" class="health-dot warn"></span><span id="healthText">检测中</span></div>
@@ -59,7 +62,7 @@
             <button id="refreshSetupBtn" class="btn-secondary" type="button">重新检测</button>
           </div>
           <div class="panel">
-            <div class="section-label">按顺序完成四步。每一步的就绪由实时证据判定（配置写入与应用时间、sing-box 进程与端口、存储端点探针），不看默认值，所以这里显示的绿灯代表真的能用。</div>
+            <div class="section-label">按目录状态、连接设置和设备配对显示进度。MinIO / S3 是兼容入口，不是普通目录首用的前置条件。</div>
             <div id="setupProgress" class="section-label">检测中</div>
             <div id="setupStepList"></div>
           </div>
@@ -71,11 +74,42 @@
             <button id="refreshOverviewBtn" class="btn-secondary" type="button">刷新状态</button>
           </div>
 
+          <section class="panel" data-component="shared-directory-enrollment">
+            <div class="panel-head"><h2>目录、配对与修复</h2><button id="refreshEnrollmentDirectoriesBtn" class="btn-secondary btn-compact" type="button">刷新</button></div>
+            <div class="panel-body">
+              <div class="section-label">开放服务器上已存在的目录，批准设备配对申请。连接状态异常时，使用修复操作重新应用。</div>
+              <div class="form-grid-2">
+                <div class="form-row"><label for="enrollmentDirectoryPath">服务器目录路径</label><input id="enrollmentDirectoryPath" type="text" class="mono" placeholder="例如 /srv/syncraft/projects"></div>
+              </div>
+              <div class="actions"><button id="openEnrollmentDirectoryBtn" class="btn-primary" type="button">开放目录</button></div>
+              <div id="enrollmentDirectoryMessage" class="section-label" role="status" aria-live="polite"></div>
+              <div id="enrollmentDirectoryList" class="stack"><div class="empty">正在读取目录...</div></div>
+              <div class="section-label">已配对设备与目录授权</div>
+              <div id="enrollmentRelationMessage" class="section-label" role="status" aria-live="polite"></div>
+              <div id="enrollmentRelationList" class="stack"><div class="empty">正在读取设备授权...</div></div>
+              <div class="section-label">设备配对申请</div>
+              <div id="enrollmentRequestList" class="stack"><div class="empty">正在读取申请...</div></div>
+              <div id="enrollmentIssuedCode" class="section-label mono" role="status" aria-live="polite"></div>
+              <div id="firstUseConnectionInputs" class="form-grid-2 first-use-connection">
+                <div class="form-row"><label for="firstUsePublicHost">外部访问地址</label><input id="firstUsePublicHost" type="text" autocomplete="url" placeholder="域名或公网 IP"></div>
+                <div class="form-row"><label for="firstUsePublicPort">外部访问端口</label><input id="firstUsePublicPort" type="number" min="1" max="65535" inputmode="numeric" placeholder="例如 45678"></div>
+              </div>
+              <div class="section-label">首次使用会自动准备并应用连接设置。服务端应用成功后会生成通道码；外部设备仍需实际导入并连接验证。</div>
+              <div class="actions"><button id="reconfigureEnrollmentChannelBtn" class="btn-primary" type="button">应用连接并签发通道码</button></div>
+              <div id="enrollmentReconfigureStatus" class="section-label mono" role="status" aria-live="polite"></div>
+              <details class="advanced-options">
+                <summary>高级操作</summary>
+                <div class="actions"><button id="createEnrollmentChannelCodeBtn" class="btn-secondary" type="button">生成接入通道码</button></div>
+                <div id="enrollmentChannelCode" class="section-label mono" role="status" aria-live="polite"></div>
+              </details>
+            </div>
+          </section>
+
           <div class="stat-strip metric-row" data-component="stat-strip" aria-label="运行摘要">
-            <div class="stat-tile metric"><span class="stat-label label">隧道</span><span class="stat-value value" id="statTunnelValue">未加载</span><span class="stat-sub" id="statTunnelSub">等待服务端状态</span></div>
+            <div class="stat-tile metric"><span class="stat-label label">已验证目录</span><span class="stat-value value" id="statDirectoryValue">未加载</span><span class="stat-sub" id="statDirectorySub">等待目录检查</span></div>
             <div class="stat-tile metric"><span class="stat-label label">在线设备</span><span class="stat-value value" id="statOnlineDevicesValue">-</span><span class="stat-sub" id="statOnlineDevicesSub">暂无设备状态</span></div>
             <div class="stat-tile metric"><span class="stat-label label">同步中</span><span class="stat-value value" id="statSyncingValue">-</span><span class="stat-sub" id="statSyncingSub">暂无同步任务</span></div>
-            <div class="stat-tile metric"><span class="stat-label label">存储用量</span><span class="stat-value value" id="statStorageUsageValue">-</span><span class="stat-sub" id="statStorageUsageSub">暂无仓库状态</span></div>
+            <div class="stat-tile metric"><span class="stat-label label">已授权设备目录关系</span><span class="stat-value value" id="statAuthorizedRelationValue">-</span><span class="stat-sub" id="statAuthorizedRelationSub">等待授权检查</span></div>
           </div>
 
           <div class="overview-grid">
@@ -86,10 +120,10 @@
             <section class="panel">
               <div class="panel-head"><h2>配置就绪度</h2></div>
               <div class="panel-body summary-list">
-                <div class="summary-row"><span class="k">服务健康</span><span id="overviewServiceState" class="status">等待状态</span></div>
-                <div class="summary-row"><span class="k">VLESS</span><span id="overviewTunnelState" class="status">等待状态</span></div>
-                <div class="summary-row"><span class="k">存储</span><span id="overviewStorageState" class="status">等待状态</span></div>
-                <div class="summary-row"><span class="k">协议</span><span id="overviewProtocolState" class="status">等待状态</span></div>
+                <div class="summary-row"><span class="k">管理 API</span><span id="overviewServiceState" class="status">等待状态</span></div>
+                <div class="summary-row"><span class="k">服务器目录</span><span id="overviewTunnelState" class="status">等待状态</span></div>
+                <div class="summary-row"><span class="k">连接设置</span><span id="overviewStorageState" class="status">等待状态</span></div>
+                <div class="summary-row"><span class="k">设备授权</span><span id="overviewProtocolState" class="status">等待状态</span></div>
               </div>
             </section>
           </div>

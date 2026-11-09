@@ -1,0 +1,592 @@
+[
+  {
+    "event": "ready",
+    "runId": "8a0dcfaa733092ca",
+    "ready": {
+      "artifacts": {
+        "rootGuard": {
+          "file": "sfsc-root-guard",
+          "sha256": "fb9506a5449db95da53b1c225241517efde2ae695517e6a177139ee0ebd5bab5",
+          "sizeBytes": 3543319
+        },
+        "sftpService": {
+          "file": "sfsc-sftp-service",
+          "sha256": "57bb9bb1ada629fc59328ab25a8391d502036989d6dc349a8590c5ea17589023",
+          "sizeBytes": 6632706
+        },
+        "supervisor": {
+          "file": "sfsc-relation-supervisor",
+          "sha256": "70441080a62b4281516c02a6d23d9925b7427a5b3b2d34e3a963bdfcee6a03a4",
+          "sizeBytes": 3733811
+        }
+      },
+      "imageIdentity": {
+        "imageId": "sha256:d80a56f5c472e21b50f350ebcb4b24d753ec033a111201e31e4f66df45990086",
+        "source": "host-asserted-docker-inspect"
+      },
+      "mode": "sftp-v2",
+      "packageManifestSha256": "dd699246bf02cb44b291b543dfa72174a75966473b59a51872e5b2bca30299bf",
+      "relations": {
+        "A": {
+          "devicePublicKeyFingerprint": "9JXJhIygFQZcOorpyPDHiwEMBXFHqBnowCGUvXzA0sw",
+          "host": "127.0.0.1",
+          "hostPublicLine": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC6docvepMtHj9P5tdMMTaJA80N/wMLtToZ3vD2RMo26",
+          "port": 40735,
+          "relationId": "rel_sKcq2bDomF267fmaRWjGJ2Ba",
+          "root": "/data/r75-v2/roots/A"
+        },
+        "B": {
+          "devicePublicKeyFingerprint": "d52qDNgNYGpBJgSAb3ATnBzOTOH1JiQxdRtYKTEzBMc",
+          "host": "127.0.0.1",
+          "hostPublicLine": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC6docvepMtHj9P5tdMMTaJA80N/wMLtToZ3vD2RMo26",
+          "port": 56539,
+          "relationId": "rel_FvAP8yhG5xvJ-Ja-s5OYQ03G",
+          "root": "/data/r75-v2/roots/B"
+        }
+      },
+      "runId": "8a0dcfaa733092ca",
+      "schemaVersion": "2",
+      "sourceManifest": {
+        "sha256": "98a28d23bd244cfa8decd0506e6d1f83af46ae2fcaa0b67d7d30029b92482e27",
+        "source": "host-asserted-source-manifest"
+      }
+    },
+    "residentOperations": [
+      {
+        "action": "start",
+        "generation": "1",
+        "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+        "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+        "operationId": "v2-8a0dcfaa733092ca-start-A-0",
+        "relation": "A"
+      },
+      {
+        "action": "start",
+        "generation": "1",
+        "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+        "identityDigest": "6abc63b2fd92a3df8193c3b0dbb4e10b6da2b2f9bc60b7ca0bb98f5ba35db450",
+        "operationId": "v2-8a0dcfaa733092ca-start-B-1",
+        "relation": "B"
+      }
+    ]
+  },
+  {
+    "ack": {
+      "commandId": "host-0-f7eda461",
+      "operations": [
+        {
+          "action": "start",
+          "generation": "1",
+          "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+          "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+          "operationId": "v2-8a0dcfaa733092ca-start-A-0",
+          "relation": "A"
+        },
+        {
+          "action": "start",
+          "generation": "1",
+          "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+          "identityDigest": "6abc63b2fd92a3df8193c3b0dbb4e10b6da2b2f9bc60b7ca0bb98f5ba35db450",
+          "operationId": "v2-8a0dcfaa733092ca-start-B-1",
+          "relation": "B"
+        },
+        {
+          "action": "disable",
+          "closure": {
+            "closed": true,
+            "listenerAbsent": true,
+            "processGone": true,
+            "sessionsGone": true
+          },
+          "handleReference": {
+            "digest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+            "generation": "1",
+            "relationId": "rel_sKcq2bDomF267fmaRWjGJ2Ba"
+          },
+          "listener": {
+            "host": "127.0.0.1",
+            "port": 40735,
+            "role": "expected"
+          },
+          "operationId": "v2-8a0dcfaa733092ca-disable-A-2",
+          "relation": "A",
+          "runtimeProcess": {
+            "parentPid": "206",
+            "parentStarttime": "519162078",
+            "pid": "213",
+            "starttime": "519162083"
+          }
+        }
+      ],
+      "runId": "8a0dcfaa733092ca",
+      "schemaVersion": "2"
+    },
+    "action": "disable-A",
+    "event": "command-ack",
+    "identityBindings": [
+      {
+        "desired": "disabled",
+        "generation": "1",
+        "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+        "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+        "phase": "stopped",
+        "relation": "A",
+        "relationId": "rel_sKcq2bDomF267fmaRWjGJ2Ba",
+        "runtimeIdentityAbsent": true,
+        "source": "manager-state-after-disable"
+      }
+    ],
+    "runId": "8a0dcfaa733092ca"
+  },
+  {
+    "ack": {
+      "commandId": "host-1-e168d340",
+      "operations": [
+        {
+          "action": "start",
+          "generation": "1",
+          "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+          "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+          "operationId": "v2-8a0dcfaa733092ca-start-A-0",
+          "relation": "A"
+        },
+        {
+          "action": "start",
+          "generation": "1",
+          "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+          "identityDigest": "6abc63b2fd92a3df8193c3b0dbb4e10b6da2b2f9bc60b7ca0bb98f5ba35db450",
+          "operationId": "v2-8a0dcfaa733092ca-start-B-1",
+          "relation": "B"
+        },
+        {
+          "action": "disable",
+          "closure": {
+            "closed": true,
+            "listenerAbsent": true,
+            "processGone": true,
+            "sessionsGone": true
+          },
+          "handleReference": {
+            "digest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+            "generation": "1",
+            "relationId": "rel_sKcq2bDomF267fmaRWjGJ2Ba"
+          },
+          "listener": {
+            "host": "127.0.0.1",
+            "port": 40735,
+            "role": "expected"
+          },
+          "operationId": "v2-8a0dcfaa733092ca-disable-A-2",
+          "relation": "A",
+          "runtimeProcess": {
+            "parentPid": "206",
+            "parentStarttime": "519162078",
+            "pid": "213",
+            "starttime": "519162083"
+          }
+        },
+        {
+          "action": "start-rejected",
+          "after": {
+            "A": {
+              "desired": "disabled",
+              "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+              "handlePresent": true,
+              "runtimeIdentityPresent": false,
+              "state": "stopped"
+            },
+            "B": {
+              "desired": "enabled",
+              "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+              "handlePresent": true,
+              "runtimeIdentityPresent": true,
+              "state": "running"
+            },
+            "ledger": {
+              "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+              "revision": 8,
+              "sha256": "d90a293376ce6e2c7658e5f6637cfbb26eea00dcc651ee5b88f6211157fe1378",
+              "sizeBytes": 9958
+            }
+          },
+          "before": {
+            "A": {
+              "desired": "disabled",
+              "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+              "handlePresent": true,
+              "runtimeIdentityPresent": false,
+              "state": "stopped"
+            },
+            "B": {
+              "desired": "enabled",
+              "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+              "handlePresent": true,
+              "runtimeIdentityPresent": true,
+              "state": "running"
+            },
+            "ledger": {
+              "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+              "revision": 8,
+              "sha256": "d90a293376ce6e2c7658e5f6637cfbb26eea00dcc651ee5b88f6211157fe1378",
+              "sizeBytes": 9958
+            }
+          },
+          "errorCode": "relation_file_service_start_blocked",
+          "expectedErrorCode": "relation_file_service_start_blocked",
+          "handleReference": {
+            "digest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+            "generation": "1",
+            "relationId": "rel_sKcq2bDomF267fmaRWjGJ2Ba"
+          },
+          "ledgerBytesEqual": true,
+          "operationId": "v2-8a0dcfaa733092ca-verify-disabled-start-A-3",
+          "relation": "A"
+        }
+      ],
+      "runId": "8a0dcfaa733092ca",
+      "schemaVersion": "2"
+    },
+    "action": "verify-disabled-A-start-rejected",
+    "event": "command-ack",
+    "identityBindings": [
+      {
+        "desired": "disabled",
+        "generation": "1",
+        "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+        "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+        "phase": "stopped",
+        "relation": "A",
+        "relationId": "rel_sKcq2bDomF267fmaRWjGJ2Ba",
+        "runtimeIdentityAbsent": true,
+        "source": "manager-state-after-disable"
+      }
+    ],
+    "runId": "8a0dcfaa733092ca"
+  },
+  {
+    "ack": {
+      "commandId": "host-2-99a7d1a1",
+      "operations": [
+        {
+          "action": "start",
+          "generation": "1",
+          "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+          "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+          "operationId": "v2-8a0dcfaa733092ca-start-A-0",
+          "relation": "A"
+        },
+        {
+          "action": "start",
+          "generation": "1",
+          "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+          "identityDigest": "6abc63b2fd92a3df8193c3b0dbb4e10b6da2b2f9bc60b7ca0bb98f5ba35db450",
+          "operationId": "v2-8a0dcfaa733092ca-start-B-1",
+          "relation": "B"
+        },
+        {
+          "action": "disable",
+          "closure": {
+            "closed": true,
+            "listenerAbsent": true,
+            "processGone": true,
+            "sessionsGone": true
+          },
+          "handleReference": {
+            "digest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+            "generation": "1",
+            "relationId": "rel_sKcq2bDomF267fmaRWjGJ2Ba"
+          },
+          "listener": {
+            "host": "127.0.0.1",
+            "port": 40735,
+            "role": "expected"
+          },
+          "operationId": "v2-8a0dcfaa733092ca-disable-A-2",
+          "relation": "A",
+          "runtimeProcess": {
+            "parentPid": "206",
+            "parentStarttime": "519162078",
+            "pid": "213",
+            "starttime": "519162083"
+          }
+        },
+        {
+          "action": "start-rejected",
+          "after": {
+            "A": {
+              "desired": "disabled",
+              "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+              "handlePresent": true,
+              "runtimeIdentityPresent": false,
+              "state": "stopped"
+            },
+            "B": {
+              "desired": "enabled",
+              "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+              "handlePresent": true,
+              "runtimeIdentityPresent": true,
+              "state": "running"
+            },
+            "ledger": {
+              "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+              "revision": 8,
+              "sha256": "d90a293376ce6e2c7658e5f6637cfbb26eea00dcc651ee5b88f6211157fe1378",
+              "sizeBytes": 9958
+            }
+          },
+          "before": {
+            "A": {
+              "desired": "disabled",
+              "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+              "handlePresent": true,
+              "runtimeIdentityPresent": false,
+              "state": "stopped"
+            },
+            "B": {
+              "desired": "enabled",
+              "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+              "handlePresent": true,
+              "runtimeIdentityPresent": true,
+              "state": "running"
+            },
+            "ledger": {
+              "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+              "revision": 8,
+              "sha256": "d90a293376ce6e2c7658e5f6637cfbb26eea00dcc651ee5b88f6211157fe1378",
+              "sizeBytes": 9958
+            }
+          },
+          "errorCode": "relation_file_service_start_blocked",
+          "expectedErrorCode": "relation_file_service_start_blocked",
+          "handleReference": {
+            "digest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+            "generation": "1",
+            "relationId": "rel_sKcq2bDomF267fmaRWjGJ2Ba"
+          },
+          "ledgerBytesEqual": true,
+          "operationId": "v2-8a0dcfaa733092ca-verify-disabled-start-A-3",
+          "relation": "A"
+        },
+        {
+          "action": "disable",
+          "closure": {
+            "closed": true,
+            "listenerAbsent": true,
+            "processGone": true,
+            "sessionsGone": true
+          },
+          "handleReference": {
+            "digest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+            "generation": "1",
+            "relationId": "rel_FvAP8yhG5xvJ-Ja-s5OYQ03G"
+          },
+          "listener": {
+            "host": "127.0.0.1",
+            "port": 56539,
+            "role": "expected"
+          },
+          "operationId": "v2-8a0dcfaa733092ca-disable-B-4",
+          "relation": "B",
+          "runtimeProcess": {
+            "parentPid": "240",
+            "parentStarttime": "519162163",
+            "pid": "247",
+            "starttime": "519162166"
+          }
+        }
+      ],
+      "runId": "8a0dcfaa733092ca",
+      "schemaVersion": "2"
+    },
+    "action": "disable-B",
+    "event": "command-ack",
+    "identityBindings": [
+      {
+        "desired": "disabled",
+        "generation": "1",
+        "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+        "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+        "phase": "stopped",
+        "relation": "A",
+        "relationId": "rel_sKcq2bDomF267fmaRWjGJ2Ba",
+        "runtimeIdentityAbsent": true,
+        "source": "manager-state-after-disable"
+      },
+      {
+        "desired": "disabled",
+        "generation": "1",
+        "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+        "identityDigest": "6abc63b2fd92a3df8193c3b0dbb4e10b6da2b2f9bc60b7ca0bb98f5ba35db450",
+        "phase": "stopped",
+        "relation": "B",
+        "relationId": "rel_FvAP8yhG5xvJ-Ja-s5OYQ03G",
+        "runtimeIdentityAbsent": true,
+        "source": "manager-state-after-disable"
+      }
+    ],
+    "runId": "8a0dcfaa733092ca"
+  },
+  {
+    "ack": {
+      "commandId": "host-3-5d34acf8",
+      "operations": [
+        {
+          "action": "start",
+          "generation": "1",
+          "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+          "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+          "operationId": "v2-8a0dcfaa733092ca-start-A-0",
+          "relation": "A"
+        },
+        {
+          "action": "start",
+          "generation": "1",
+          "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+          "identityDigest": "6abc63b2fd92a3df8193c3b0dbb4e10b6da2b2f9bc60b7ca0bb98f5ba35db450",
+          "operationId": "v2-8a0dcfaa733092ca-start-B-1",
+          "relation": "B"
+        },
+        {
+          "action": "disable",
+          "closure": {
+            "closed": true,
+            "listenerAbsent": true,
+            "processGone": true,
+            "sessionsGone": true
+          },
+          "handleReference": {
+            "digest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+            "generation": "1",
+            "relationId": "rel_sKcq2bDomF267fmaRWjGJ2Ba"
+          },
+          "listener": {
+            "host": "127.0.0.1",
+            "port": 40735,
+            "role": "expected"
+          },
+          "operationId": "v2-8a0dcfaa733092ca-disable-A-2",
+          "relation": "A",
+          "runtimeProcess": {
+            "parentPid": "206",
+            "parentStarttime": "519162078",
+            "pid": "213",
+            "starttime": "519162083"
+          }
+        },
+        {
+          "action": "start-rejected",
+          "after": {
+            "A": {
+              "desired": "disabled",
+              "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+              "handlePresent": true,
+              "runtimeIdentityPresent": false,
+              "state": "stopped"
+            },
+            "B": {
+              "desired": "enabled",
+              "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+              "handlePresent": true,
+              "runtimeIdentityPresent": true,
+              "state": "running"
+            },
+            "ledger": {
+              "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+              "revision": 8,
+              "sha256": "d90a293376ce6e2c7658e5f6637cfbb26eea00dcc651ee5b88f6211157fe1378",
+              "sizeBytes": 9958
+            }
+          },
+          "before": {
+            "A": {
+              "desired": "disabled",
+              "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+              "handlePresent": true,
+              "runtimeIdentityPresent": false,
+              "state": "stopped"
+            },
+            "B": {
+              "desired": "enabled",
+              "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+              "handlePresent": true,
+              "runtimeIdentityPresent": true,
+              "state": "running"
+            },
+            "ledger": {
+              "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+              "revision": 8,
+              "sha256": "d90a293376ce6e2c7658e5f6637cfbb26eea00dcc651ee5b88f6211157fe1378",
+              "sizeBytes": 9958
+            }
+          },
+          "errorCode": "relation_file_service_start_blocked",
+          "expectedErrorCode": "relation_file_service_start_blocked",
+          "handleReference": {
+            "digest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+            "generation": "1",
+            "relationId": "rel_sKcq2bDomF267fmaRWjGJ2Ba"
+          },
+          "ledgerBytesEqual": true,
+          "operationId": "v2-8a0dcfaa733092ca-verify-disabled-start-A-3",
+          "relation": "A"
+        },
+        {
+          "action": "disable",
+          "closure": {
+            "closed": true,
+            "listenerAbsent": true,
+            "processGone": true,
+            "sessionsGone": true
+          },
+          "handleReference": {
+            "digest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+            "generation": "1",
+            "relationId": "rel_FvAP8yhG5xvJ-Ja-s5OYQ03G"
+          },
+          "listener": {
+            "host": "127.0.0.1",
+            "port": 56539,
+            "role": "expected"
+          },
+          "operationId": "v2-8a0dcfaa733092ca-disable-B-4",
+          "relation": "B",
+          "runtimeProcess": {
+            "parentPid": "240",
+            "parentStarttime": "519162163",
+            "pid": "247",
+            "starttime": "519162166"
+          }
+        }
+      ],
+      "runId": "8a0dcfaa733092ca",
+      "schemaVersion": "2"
+    },
+    "action": "complete",
+    "event": "command-ack",
+    "identityBindings": [
+      {
+        "desired": "disabled",
+        "generation": "1",
+        "handleDigest": "baf7209010a17de041b340ec58da2ac5f016dc39cbb8500cb2b83ac6267f65af",
+        "identityDigest": "9ff39cbbcfa8e4e7035f0fde88faa06c57bacb94a82b025ff0d3d9e57c534746",
+        "phase": "stopped",
+        "relation": "A",
+        "relationId": "rel_sKcq2bDomF267fmaRWjGJ2Ba",
+        "runtimeIdentityAbsent": true,
+        "source": "manager-state-after-disable"
+      },
+      {
+        "desired": "disabled",
+        "generation": "1",
+        "handleDigest": "7204805cdfdca5beebb31a4794c558f4e57b6a2a632bb7a5e4ef42480425d2bb",
+        "identityDigest": "6abc63b2fd92a3df8193c3b0dbb4e10b6da2b2f9bc60b7ca0bb98f5ba35db450",
+        "phase": "stopped",
+        "relation": "B",
+        "relationId": "rel_FvAP8yhG5xvJ-Ja-s5OYQ03G",
+        "runtimeIdentityAbsent": true,
+        "source": "manager-state-after-disable"
+      }
+    ],
+    "runId": "8a0dcfaa733092ca"
+  }
+]

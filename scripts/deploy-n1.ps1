@@ -12,7 +12,8 @@ param(
   [switch]$AllowMismatchedSmokeBaseUrl,
   [string]$ReportPath = "",
   [string]$JsonReportPath = "",
-  [string]$SmokeJsonReportPath = ""
+  [string]$SmokeJsonReportPath = "",
+  [string]$ArchiveRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,7 +29,17 @@ $sourceFingerprint = Get-SourceTreeFingerprint $repoRoot
 $sourceTreeHash = "$($sourceFingerprint.hash)"
 $sourceBuildId = "$($sourceFingerprint.buildId)"
 $sourceBuildTime = (Get-Date).ToUniversalTime().ToString("o")
-$archiveDir = Join-Path $repoRoot ".tmp\n1-deploy"
+$repoRootFull = [System.IO.Path]::GetFullPath("$repoRoot")
+$repoRootPrefix = $repoRootFull.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+$requestedArchiveDir = if ($ArchiveRoot) {
+  if ([System.IO.Path]::IsPathRooted($ArchiveRoot)) { $ArchiveRoot } else { Join-Path $repoRootFull $ArchiveRoot }
+} else {
+  Join-Path $repoRootFull ".tmp\n1-deploy"
+}
+$archiveDir = [System.IO.Path]::GetFullPath($requestedArchiveDir)
+if (!$archiveDir.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "Refusing to write N1 source archive outside project root: $archiveDir"
+}
 $archivePath = Join-Path $archiveDir "sfsc-server-source.tgz"
 $remoteArchive = "/tmp/sfsc-server-source.tgz"
 $remoteStage = "/tmp/sfsc-server-source"
@@ -343,6 +354,10 @@ function New-SourceArchive {
   Push-Location $repoRoot
   try {
     tar -czf $archivePath `
+      --exclude=__pycache__ `
+      --exclude=*/__pycache__ `
+      --exclude=*.pyc `
+      --exclude=*.pyo `
       package.json `
       src `
       public `
@@ -412,6 +427,8 @@ function Test-ArchiveContents {
     '(^|/)node_modules(/|$)',
     '^dist(/|$)',
     '^\.tmp(/|$)',
+    '(^|/)__pycache__(/|$)',
+    '\.py[co]$',
     '^client(/|$)',
     '^tests(/|$)',
     '^docs(/|$)'

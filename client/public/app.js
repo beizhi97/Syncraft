@@ -24,10 +24,15 @@ let latestStatus = null;
 let currentAction = null;
 let latestSyncHistory = [];
 let currentJobDraft = null;
+let selectedFirstBisyncOperationId = "";
 let statusRequestInFlight = null;
 let latestStatusRequestId = 0;
 let latestAppliedStatusRequestId = 0;
 let lastPreviewJobFingerprint = "";
+let activeConnectionRepairOperationId = "";
+let activeBusyActionGroups = new Set();
+let syncRecoveryPanelsRequestInFlight = null;
+const connectionRepairStorageKey = "sfsc.connectionRepair.operation";
 const defaultRequestTimeoutMs = 15000;
 const profileImportRequestTimeoutMs = 60000;
 const syncPreparationRequestTimeoutMs = 120000;
@@ -38,6 +43,9 @@ const clientJobDraftFields = [
   "name",
   "localPath",
   "direction",
+  "storageBackend",
+  "relationId",
+  "directoryDisplayName",
   "dryRun",
   "destructiveSync",
   "safety",
@@ -59,11 +67,16 @@ const clientJobDraftFields = [
 ];
 
 on("settingsBtn", "click", openSettings);
-on("emptyImportBtn", "click", openSettings);
+on("emptyEnrollmentBtn", "click", openSettings);
 on("settingsScrim", "click", closeSettings);
 on("closeSettingsBtn", "click", closeSettings);
 on("checkBinsBtn", "click", checkBinaries);
 on("saveProfileBtn", "click", saveProfile);
+on("importEnrollmentChannelBtn", "click", importEnrollmentChannel);
+on("submitEnrollmentRequestBtn", "click", submitEnrollmentRequest);
+on("consumeEnrollmentCodeBtn", "click", consumeEnrollmentCode);
+on("refreshDirectoryAuthorizationsBtn", "click", refreshDirectoryAuthorizations);
+on("repairConnectionBtn", "click", repairSelectedConnection);
 on("startTunnelBtn", "click", startTunnel);
 on("stopTunnelBtn", "click", stopTunnel);
 on("saveJobBtn", "click", saveJob);
@@ -71,6 +84,7 @@ on("previewBtn", "click", previewJob);
 on("runSyncBtn", "click", runSync);
 on("stopSyncBtn", "click", stopSync);
 on("refreshHistoryBtn", "click", refreshSyncHistory);
+on("refreshRecoveryBtn", "click", refreshRecoveryVersions);
 on("historyStatusFilter", "change", () => renderSyncHistory(latestSyncHistory));
 on("historySearch", "input", () => renderSyncHistory(latestSyncHistory));
 on("refreshLogsBtn", "click", refreshLogs);
@@ -79,8 +93,10 @@ on("copySupportSummaryBtn", "click", copySupportSummary);
 on("exportDiagnosticsBtn", "click", exportDiagnostics);
 on("shutdownBtn", "click", shutdownClient);
 on("chooseFolderBtn", "click", chooseLocalFolder);
+on("authorizedDirectorySelect", "change", selectAuthorizedDirectory);
 on("direction", "change", syncDestructiveAvailability);
 on("direction", "change", syncBidirectionalAvailability);
+on("direction", "change", refreshSyncRecoveryPanels);
 on("scheduleMode", "change", syncScheduleControls);
 on("destructiveSync", "change", handleDestructiveToggle);
 on("bandwidthLimitEnabled", "change", syncBandwidthAvailability);
@@ -134,7 +150,8 @@ async function loadStatusOnce(requestId) {
     renderSyncHistory(latestSyncHistory);
 
     renderProfileSummary(status.profileSummary, status.heartbeat);
-    renderRemoteTargetSummary(status.jobs[status.jobs.length - 1] || currentJobDraft, status.profileSummary);
+    renderEnrollmentStatus(status.enrollment);
+    renderRemoteTargetSummary(status.jobs[status.jobs.length - 1] || currentJobDraft || {}, status.profileSummary);
     // 授权可能在导入新 SyncKey 后变化，所以每次状态刷新都重算方向可选项，
     // 不能只在 writeJob 里做——首次导入时 writeJob 可能已经跑过了。
     applySyncDirectionAuthorization();
@@ -142,6 +159,7 @@ async function loadStatusOnce(requestId) {
     if (status.jobs.length && !$("localPath").dataset.loaded) {
       writeJob(status.jobs[status.jobs.length - 1]);
       $("localPath").dataset.loaded = "1";
+      void refreshSyncRecoveryPanels();
     }
     return status;
   } catch {
@@ -179,7 +197,7 @@ function renderLiveState(status) {
     updateBodyState(status);
     const binariesReady = status.binaries.singbox.exists && status.binaries.rclone.exists;
     setPill("binStatus", binariesReady ? "组件正常" : "组件缺失", binariesReady ? "good" : "bad");
-    const profileStatus = profileStatusDisplay(status.profileImported, status.heartbeat);
+    const profileStatus = profileStatusDisplay(status.profileImported, status.heartbeat, status.enrollment);
     setPill("profileStatus", profileStatus.pill, profileStatus.state);
     setPill("tunnelStatus", status.processes.singbox.running ? "隧道运行中" : "隧道已停止", status.processes.singbox.running ? "good" : "");
     const syncPill = syncStatusPill(sync);
@@ -274,6 +292,338 @@ function formatBinaryCheckSummary(result = {}) {
   return result.ok ? "组件检测通过" : "组件检测失败";
 }
 
+async function importEnrollmentChannel() {
+  const code = $("enrollmentChannelCode").value.trim();
+  if (!code) return setEnrollmentMessage("请粘贴管理员提供的通道配置码。");
+  try {
+    const result = await clientApi.importEnrollmentChannel({ code });
+    renderEnrollmentStatus(result);
+    setEnrollmentMessage("通道签名和服务器密钥已验证。请先与管理员核对上方服务器 ID 和指纹。");
+  } catch (error) { setEnrollmentMessage(error.message || "通道配置码导入失败。", true); }
+}
+
+async function submitEnrollmentRequest() {
+  try {
+    const result = await clientApi.submitEnrollmentRequest();
+    renderEnrollmentStatus(result);
+    setEnrollmentMessage("身份申请已提交。请管理员按本次申请签发身份验证码。");
+  } catch (error) { setEnrollmentMessage(error.message || "身份申请失败。", true); }
+}
+
+async function consumeEnrollmentCode() {
+  const codeField = $("enrollmentCode");
+  const code = codeField.value.trim();
+  if (!code) return setEnrollmentMessage("请输入管理员为本次申请签发的身份验证码。");
+  try {
+    const result = await clientApi.consumeEnrollmentCode({ code });
+    codeField.value = "";
+    renderEnrollmentStatus(result);
+    setEnrollmentMessage("身份已验证；等待管理员授予同步目录权限。当前尚未具备同步权限。");
+  } catch (error) { setEnrollmentMessage(error.message || "身份验证码验证失败。", true); }
+}
+
+async function refreshDirectoryAuthorizations() {
+  const button = $("refreshDirectoryAuthorizationsBtn");
+  if (button) button.disabled = true;
+  try {
+    const result = await clientApi.refreshDataAuthorizations();
+    if (latestStatus) latestStatus.enrollment = result;
+    renderEnrollmentStatus(result);
+    const ready = Array.isArray(result.authorizedDirectories) && result.authorizedDirectories.length > 0;
+    $("directoryAuthorizationStatus").textContent = ready
+      ? `${result.authorizedDirectories.length} 个目录已获管理员授权。选择一个远端目录，再选择本地文件夹。`
+      : "身份已验证；当前尚无可用目录授权。管理员授权后再检查一次。";
+    setAction(ready ? "已取得签名目录授权。" : "身份已验证，等待管理员授予目录权限。", ready ? "good" : "");
+  } catch (error) {
+    setEnrollmentMessage(formatError(error) || "目录授权检查失败。", true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function repairSelectedConnection() {
+  const button = $("repairConnectionBtn");
+  const target = $("connectionRepairStatus");
+  const relationId = $("authorizedDirectorySelect")?.value || "";
+  if (!button || !target) return;
+  const selectedJob = currentJobDraft?.storageBackend === "sftp"
+    && currentJobDraft.relationId === relationId
+    ? currentJobDraft
+    : null;
+  let context = readConnectionRepairContext();
+  if (!context) {
+    if (!relationId) {
+      setConnectionRepairMessage("请先选择一个管理员授权目录。", true);
+      return;
+    }
+    context = {
+      operationId: crypto.randomUUID(),
+      relationId,
+      ...(selectedJob?.id ? { jobId: selectedJob.id } : {})
+    };
+    saveConnectionRepairContext(context);
+  }
+  activeConnectionRepairOperationId = context.operationId;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  setConnectionRepairMessage("连接检查已启动；正在核对组件、本地目录、身份授权和远端访问…");
+  try {
+    const response = await clientApi.startConnectionRepair(context);
+    const operation = await waitForConnectionRepair(response.operation);
+    renderConnectionRepairOperation(operation);
+    if (isConnectionRepairTerminalUi(operation.status)) {
+      clearConnectionRepairContext(context.operationId);
+      activeConnectionRepairOperationId = "";
+    }
+  } catch (error) {
+    setConnectionRepairMessage(`${formatError(error)} 如操作可能已提交，再次点击会使用同一操作编号查询，不会新建探针。`, true);
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+  }
+}
+
+async function waitForConnectionRepair(initialOperation) {
+  let operation = initialOperation || {};
+  renderConnectionRepairOperation(operation);
+  for (let attempt = 0; operation.status === "running" && attempt < 120; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    const operationId = activeConnectionRepairOperationId || operation.operationId;
+    const response = await clientApi.getConnectionRepairOperation(operationId);
+    operation = response.operation || operation;
+    renderConnectionRepairOperation(operation);
+  }
+  return operation;
+}
+
+function renderConnectionRepairOperation(operation = {}) {
+  if (operation.status === "running") {
+    const stage = {
+      queued: "等待检查",
+      components_checked: "检查客户端组件",
+      local_probe_write_started: "检查本地目录读写",
+      local_probe_cleaned: "清理本地临时探针",
+      entry_authorized: "核验设备身份和目录授权",
+      root_binding_checked: "核验文件服务和既有根标记",
+      probe_write_started: "写入随机临时探针",
+      probe_written: "读取随机临时探针",
+      probe_verified: "验证探针内容",
+      probe_cleanup_started: "清理本次临时探针",
+      probe_cleaned: "确认临时探针已清理",
+      directory_access_checked: "汇总目录访问检查"
+    }[operation.stage] || "检查连接";
+    setConnectionRepairMessage(`${stage}中…操作编号：${operation.operationId || "已保存"}`);
+    return;
+  }
+  if (operation.status === "succeeded") {
+    const checks = operation.checks || {};
+    const marker = checks.fileServiceAndRootMarker === "verified"
+      ? "文件服务和既有根标记已核验"
+      : "同步根标记尚未建立";
+    const local = checks.localDirectory === "passed" ? "本地目录通过" : "本地目录未检查";
+    const baseline = checks.syncBaseline === "preserved"
+      ? "原同步基准保留"
+      : checks.syncBaseline === "not_initialized" ? "原同步基准尚未初始化" : "未关联已保存任务";
+    setConnectionRepairMessage(
+      `连接检查完成：客户端组件通过；${local}；设备身份与授权有效；${marker}；远端目录列出、写入、读回和临时文件清理通过；${baseline}。`
+    );
+    return;
+  }
+  const code = operation.errorCode || "connection_repair_list_failed";
+  const extra = code === "connection_repair_probe_conflict"
+    ? "探针文件归属或内容不匹配，已保留文件并停止。"
+    : code === "connection_repair_cleanup_failed"
+      ? "本次探针已核实归属但未能清理，请检查授权目录中的临时探针。"
+      : operation.status === "needs_attention" ? "检查已停止，请先核对目录状态后再重试。" : "原任务和同步基准未由本次检查重置。";
+  setConnectionRepairMessage(`${formatError({ code })} ${extra}`, true);
+}
+
+function setConnectionRepairMessage(message, isError = false) {
+  const target = $("connectionRepairStatus");
+  if (!target) return;
+  target.textContent = message;
+  target.dataset.state = isError ? "error" : "ok";
+}
+
+function readConnectionRepairContext() {
+  try {
+    const value = JSON.parse(localStorage.getItem(connectionRepairStorageKey) || "null");
+    return value && typeof value.operationId === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveConnectionRepairContext(context) {
+  try { localStorage.setItem(connectionRepairStorageKey, JSON.stringify(context)); } catch {}
+}
+
+function clearConnectionRepairContext(operationId) {
+  try {
+    if (readConnectionRepairContext()?.operationId === operationId) localStorage.removeItem(connectionRepairStorageKey);
+  } catch {}
+}
+
+function isConnectionRepairTerminalUi(status) {
+  return ["succeeded", "failed", "needs_attention"].includes(status);
+}
+
+function selectAuthorizedDirectory() {
+  const select = $("authorizedDirectorySelect");
+  const relationId = select?.value || "";
+  const directory = latestStatus?.enrollment?.authorizedDirectories?.find((item) => item.relationId === relationId);
+  if (!directory) return;
+  const previous = currentJobDraft || {};
+  currentJobDraft = {
+    ...(previous.storageBackend === "sftp" ? previous : {}),
+    storageBackend: "sftp",
+    relationId,
+    directoryDisplayName: directory.displayName,
+    direction: "bidirectional"
+  };
+  fields.direction.value = "bidirectional";
+  syncBidirectionalAvailability();
+  applySyncDirectionAuthorization();
+  syncScheduleControls();
+  renderRemoteTargetSummary(currentJobDraft, latestStatus?.profileSummary);
+  setAction(`已选择管理员授权目录“${directory.displayName}”。`, "good");
+}
+
+function renderEnrollmentStatus(enrollment = {}) {
+  const target = $("enrollmentTrustSummary");
+  const phase = enrollment.phase || "not-started";
+  renderEmptyEnrollmentState(phase);
+  renderEnrollmentSteps(phase);
+  if (!target) return;
+  const directoryPanel = $("directoryAuthorizationPanel");
+  if (directoryPanel) directoryPanel.hidden = phase !== "identity-verified-awaiting-directory-authorization";
+  const requestButton = $("submitEnrollmentRequestBtn");
+  if (requestButton) requestButton.disabled = phase !== "channel-verified";
+  const verifyStep = $("enrollmentVerifyStep");
+  if (verifyStep) verifyStep.hidden = phase !== "request-pending";
+  renderAuthorizedDirectories(enrollment);
+  const hasAuthorizedDirectories = Array.isArray(enrollment.authorizedDirectories)
+    && enrollment.authorizedDirectories.length > 0;
+  if (hasAuthorizedDirectories) {
+    renderAuthorizedContent("ready");
+    $("authorizedContentValue").textContent = "本机身份已验证。同步内容由管理员签名授权，不能在客户端自行指定。";
+  } else if (phase === "identity-verified-awaiting-directory-authorization") {
+    renderAuthorizedContent("missing");
+    $("authorizedContentValue").textContent = "身份已验证；目录权限由管理员授予。获得授权后可在这里选择同步目录。";
+    renderRemoteTargetSummary({}, null);
+  }
+  const statusLabel = phase === "identity-verified-awaiting-directory-authorization"
+    ? hasAuthorizedDirectories ? "目录授权已就绪" : "身份已验证，等待目录授权"
+    : phase === "request-pending" ? "身份申请待管理员签发验证码"
+      : phase === "channel-verified" ? "通道已验证，等待提交身份申请"
+        : phase === "local-state-error" ? "本地接入状态文件异常，已停止接入操作；请按恢复说明修复后再继续" : "尚未接入";
+  target.replaceChildren();
+  const status = document.createElement("div");
+  status.className = "info-item";
+  status.innerHTML = '<span class="k">接入状态</span><span class="v"></span>';
+  status.querySelector(".v").textContent = statusLabel;
+  target.append(status);
+  if (enrollment.requestId) {
+    const request = document.createElement("div");
+    request.className = "info-item";
+    request.innerHTML = '<span class="k">申请识别码</span><span class="v"></span>';
+    request.querySelector(".v").textContent = enrollment.requestId.slice(-8).toUpperCase();
+    target.append(request);
+  }
+  if (enrollment.serverId || enrollment.serverKeyFingerprint) {
+    const details = document.createElement("details");
+    details.className = "hint";
+    const summary = document.createElement("summary");
+    summary.textContent = "连接信息（首次接入时与管理员核对）";
+    details.append(summary);
+    const info = document.createElement("div");
+    info.className = "info-list";
+    renderSummaryRows(info, [
+      ["服务器 ID", enrollment.serverId || ""],
+      ["签名密钥 ID", enrollment.signingKeyId || ""],
+      ["服务器密钥 SHA-256", enrollment.serverKeyFingerprint || ""]
+    ]);
+    details.append(info);
+    target.append(details);
+  }
+}
+
+function renderEnrollmentSteps(phase) {
+  const stepByPhase = {
+    "not-started": 0,
+    "channel-verified": 1,
+    "request-pending": 2,
+    "identity-verified-awaiting-directory-authorization": 3
+  };
+  const currentStep = stepByPhase[phase];
+  document.querySelectorAll("[data-enrollment-step]").forEach((step, index) => {
+    step.classList.toggle("complete", Number.isInteger(currentStep) && index < currentStep);
+    step.classList.toggle("current", Number.isInteger(currentStep) && index === currentStep);
+    if (Number.isInteger(currentStep) && index === currentStep) {
+      step.setAttribute("aria-current", "step");
+    } else {
+      step.removeAttribute("aria-current");
+    }
+  });
+}
+
+function renderEmptyEnrollmentState(phase) {
+  const heading = $("emptyEnrollmentHeading");
+  const description = $("emptyEnrollmentDescription");
+  const button = $("emptyEnrollmentBtn");
+  const copy = {
+    "not-started": [
+      "开始两码安全接入",
+      "粘贴管理员提供的通道配置码，提交身份申请，再输入一次性身份验证码验证设备。",
+      "开始两码接入"
+    ],
+    "channel-verified": [
+      "通道已验证",
+      "下一步提交身份申请；管理员签发一次性身份验证码后，再回来完成设备验证。",
+      "继续身份接入"
+    ],
+    "request-pending": [
+      "身份申请已提交",
+      "等待管理员为本次申请签发一次性身份验证码。",
+      "查看接入状态"
+    ]
+  }[phase] || [
+    "继续两码安全接入",
+    "在设置中查看身份接入状态。",
+    "查看接入状态"
+  ];
+  if (heading) heading.textContent = copy[0];
+  if (description) description.textContent = copy[1];
+  if (button) button.textContent = copy[2];
+}
+
+function renderAuthorizedDirectories(enrollment = {}) {
+  const select = $("authorizedDirectorySelect");
+  if (!select) return;
+  const directories = Array.isArray(enrollment.authorizedDirectories) ? enrollment.authorizedDirectories : [];
+  const selectedRelationId = currentJobDraft?.storageBackend === "sftp" ? currentJobDraft.relationId : "";
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = directories.length ? "选择管理员已授权的目录" : "检查目录授权后显示";
+  select.append(placeholder);
+  for (const item of directories) {
+    const option = document.createElement("option");
+    option.value = item.relationId;
+    option.textContent = item.displayName;
+    select.append(option);
+  }
+  select.disabled = directories.length === 0;
+  if (directories.some((item) => item.relationId === selectedRelationId)) select.value = selectedRelationId;
+}
+
+function setEnrollmentMessage(message, isError = false) {
+  const target = $("enrollmentStatusMessage");
+  if (!target) return;
+  target.textContent = message;
+  target.dataset.state = isError ? "error" : "ok";
+}
+
 async function saveProfile() {
   const code = fields.claimCode.value.trim();
   if (!code) {
@@ -342,17 +692,216 @@ async function saveJob() {
     }
     if (!confirmed) return;
     try {
-      await clientApi.saveJob({
+      const saved = await clientApi.saveJob({
         job: confirmed.job,
         confirmCompatibilityWarning: confirmed.confirmCompatibilityWarning,
         confirmDestructiveSync: confirmed.confirmDestructiveSync
       });
+      writeJob(saved.job);
       setAction("同步任务已保存。", "good");
       await loadStatus();
+      await refreshSyncRecoveryPanels();
     } catch (error) {
       setAction(`保存失败：${formatError(error)}`, "bad");
     }
+  }, "job-sync");
+}
+
+async function refreshRecoveryVersions() {
+  const panel = $("recoveryPanel");
+  const target = $("recoveryVersions");
+  const jobId = currentJobDraft?.id;
+  const contextKey = syncRecoveryPanelContextKey();
+  if (!panel || !target) return;
+  const available = Boolean(jobId && currentJobDraft?.direction === "bidirectional");
+  panel.hidden = !available;
+  if (!available) return;
+  target.textContent = "正在检查已保存版本…";
+  try {
+    const result = await clientApi.listRecoveryVersions(jobId);
+    if (contextKey !== syncRecoveryPanelContextKey()) return;
+    renderRecoveryVersions(jobId, result.versions || []);
+    $("recoveryStatus").textContent = "";
+  } catch (error) {
+    if (contextKey !== syncRecoveryPanelContextKey()) return;
+    target.textContent = "暂时无法读取恢复版本。";
+    $("recoveryStatus").textContent = formatError(error);
+  }
+}
+
+function renderRecoveryVersions(jobId, versions) {
+  const target = $("recoveryVersions");
+  target.replaceChildren();
+  if (!versions.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "尚无已完成的同步版本。每轮双向同步完成后会出现可恢复文件。";
+    target.append(empty);
+    return;
+  }
+  for (const version of versions.slice().reverse()) {
+    const group = document.createElement("section");
+    group.className = "recovery-version";
+    const heading = document.createElement("strong");
+    heading.textContent = `${new Date(version.createdAt).toLocaleString()} · ${version.status === "completed" ? "已完成" : "未完成，可查看已保存内容"}`;
+    group.append(heading);
+    for (const file of version.files || []) {
+      const row = document.createElement("div");
+      row.className = "recovery-file";
+      const description = document.createElement("span");
+      description.textContent = `${file.side === "path1" ? "本地" : "远端"} · ${file.path}`;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn-sm";
+      button.textContent = "还原为新文件…";
+      button.addEventListener("click", () => restoreRecoveryFile(jobId, version, file));
+      row.append(description, button);
+      group.append(row);
+    }
+    if (!(version.files || []).length) {
+      const none = document.createElement("p");
+      none.className = "hint";
+      none.textContent = "本轮没有产生需要恢复的旧版本。";
+      group.append(none);
+    }
+    target.append(group);
+  }
+}
+
+async function refreshFirstBisyncConflictOperations() {
+  const panel = $("firstBisyncRecoveryPanel");
+  const target = $("firstBisyncOperations");
+  const job = currentJobDraft || {};
+  const contextKey = syncRecoveryPanelContextKey(job);
+  const available = Boolean(job.id && job.direction === "bidirectional" && job.storageBackend === "sftp" && job.relationId);
+  if (!available) {
+    panel.hidden = true;
+    target.replaceChildren();
+    selectedFirstBisyncOperationId = "";
+    return;
+  }
+  target.textContent = "正在检查首次冲突保存记录…";
+  try {
+    const operations = await clientApi.listFirstBisyncConflictOperations({ job });
+    if (contextKey !== syncRecoveryPanelContextKey()) return;
+    renderFirstBisyncConflictOperations(job, operations || []);
+    $("firstBisyncRecoveryStatus").textContent = "";
+  } catch (error) {
+    if (contextKey !== syncRecoveryPanelContextKey()) return;
+    panel.hidden = false;
+    target.textContent = "无法读取首次冲突保存记录。";
+    $("firstBisyncRecoveryStatus").textContent = formatError(error);
+  }
+}
+
+function syncRecoveryPanelContextKey(job = currentJobDraft) {
+  return JSON.stringify({
+    id: job?.id || "",
+    relationId: job?.relationId || "",
+    rootId: job?.syncRelation?.rootId || "",
+    localPath: job?.localPath || "",
+    direction: job?.direction || ""
   });
+}
+
+function refreshSyncRecoveryPanels() {
+  const contextKey = syncRecoveryPanelContextKey();
+  if (syncRecoveryPanelsRequestInFlight) {
+    if (syncRecoveryPanelsRequestInFlight.contextKey === contextKey) {
+      return syncRecoveryPanelsRequestInFlight.promise;
+    }
+    return syncRecoveryPanelsRequestInFlight.promise.catch(() => {}).then(() => refreshSyncRecoveryPanels());
+  }
+  const request = (async () => {
+    await refreshRecoveryVersions();
+    await refreshFirstBisyncConflictOperations();
+  })();
+  const trackedRequest = request.finally(() => {
+    if (syncRecoveryPanelsRequestInFlight?.promise === trackedRequest) {
+      syncRecoveryPanelsRequestInFlight = null;
+    }
+  });
+  syncRecoveryPanelsRequestInFlight = { contextKey, promise: trackedRequest };
+  return trackedRequest;
+}
+
+function renderFirstBisyncConflictOperations(job, operations) {
+  const panel = $("firstBisyncRecoveryPanel");
+  const target = $("firstBisyncOperations");
+  target.replaceChildren();
+  const ordered = operations.slice().sort((left, right) => Date.parse(right.createdAt || "") - Date.parse(left.createdAt || ""));
+  if (!ordered.length) {
+    panel.hidden = true;
+    selectedFirstBisyncOperationId = "";
+    return;
+  }
+  panel.hidden = false;
+  for (const operation of ordered) {
+    const row = document.createElement("div");
+    row.className = "first-bisync-operation";
+    const summary = document.createElement("div");
+    const state = operation.status === "saved" ? "双方版本已保存" : "冲突保存未完成";
+    const fileCount = Array.isArray(operation.conflicts) ? operation.conflicts.length : 0;
+    const timestamp = operation.savedAt || operation.createdAt;
+    summary.textContent = `${state} · ${fileCount} 个冲突文件${timestamp ? ` · ${new Date(timestamp).toLocaleString()}` : ""}`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn-sm";
+    button.textContent = operation.status === "saved" ? "继续首次初始化" : "恢复冲突保存";
+    button.disabled = !operation.operationId;
+    button.addEventListener("click", () => resumeFirstBisyncConflictOperation(job, operation));
+    row.append(summary, button);
+    target.append(row);
+  }
+}
+
+async function resumeFirstBisyncConflictOperation(job, operation) {
+  const target = $("firstBisyncRecoveryStatus");
+  const operations = $("firstBisyncOperations");
+  const buttons = operations.querySelectorAll("button");
+  buttons.forEach((button) => { button.disabled = true; });
+  target.textContent = operation.status === "saved" ? "正在核对已保存的冲突操作…" : "正在从本机受保护记录恢复冲突保存…";
+  try {
+    const saved = await clientApi.resumeFirstBisyncConflictSave({ job, operationId: operation.operationId });
+    selectedFirstBisyncOperationId = saved.operationId;
+    target.textContent = "冲突双方版本已保存。点击“开始同步”确认后继续首次双向初始化。";
+    await refreshFirstBisyncConflictOperations();
+  } catch (error) {
+    target.textContent = formatError(error);
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
+async function restoreRecoveryFile(jobId, version, file) {
+  const destinationPath = `${file.path}.recovered-${version.runId.slice(0, 8)}`;
+  try {
+    const preview = await clientApi.previewRecoveryRestore(jobId, {
+      runId: version.runId, side: file.side, path: file.path, destinationPath
+    });
+    const confirmed = await requestConfirmation({
+      title: "还原为新文件",
+      body: [`来源：${file.side === "path1" ? "本地" : "远端"} / ${file.path}`,
+        `目标：${preview.destinationPath}`, `SHA-256：${preview.sourceSha256}`,
+        `预览有效期至：${formatRecoveryExpiry(preview.expiresAt)}`,
+        "目标文件已存在时系统会拒绝还原，不会覆盖。"].join("\n"),
+      submitText: "还原文件"
+    });
+    if (!confirmed) {
+      await clientApi.cancelRecoveryRestore(jobId, preview.previewId).catch(() => {});
+      $("recoveryStatus").textContent = "已取消还原；本地文件未更改。";
+      return;
+    }
+    const result = await clientApi.restoreRecoveryVersion(jobId, preview.previewId);
+    $("recoveryStatus").textContent = `已还原到 ${result.destinationPath}（SHA-256 ${result.sourceSha256}）。`;
+    await refreshRecoveryVersions();
+  } catch (error) {
+    $("recoveryStatus").textContent = formatError(error);
+  }
+}
+
+function formatRecoveryExpiry(value) {
+  const timestamp = Date.parse(value || "");
+  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : "时间未提供";
 }
 
 async function previewJob() {
@@ -390,19 +939,29 @@ async function runSync() {
     }
     if (!confirmed) return;
     if (lastPreviewJobFingerprint !== jobPreviewFingerprint(confirmed.job)) {
+      const sftpDirectory = confirmed.job.storageBackend === "sftp" && confirmed.job.relationId
+        ? latestStatus?.enrollment?.authorizedDirectories?.find(directory => directory.relationId === confirmed.job.relationId)
+        : null;
+      const isAuthorizedDirectoryJob = Boolean(confirmed.job.storageBackend === "sftp" && confirmed.job.relationId);
       const previewConfirmed = await requestConfirmation({
         title: "确认同步范围",
-        body: [
-          "当前任务尚未按最新填写内容生成预览。",
-          `本地：${confirmed.job.localPath || "未选择"}`,
-          `方向：${formatDirection(confirmed.job.direction)}`,
-          `同步空间：${formatSyncSpaceName(latestStatus?.profileSummary?.syncSpace)}`,
-          "建议先生成 rclone 命令预览，确认最终同步范围。"
-        ].join("\n"),
-        submitText: "仍然开始同步"
+        body: isAuthorizedDirectoryJob
+          ? [
+              `服务器文件夹：${confirmed.job.directoryDisplayName || sftpDirectory?.displayName || "管理员授权目录"}`,
+              `本地路径：${confirmed.job.localPath || "未选择"}`,
+              `同步方向：${formatDirection(confirmed.job.direction)}`
+            ].join("\n")
+          : [
+              "当前任务尚未按最新填写内容生成预览。",
+              `本地：${confirmed.job.localPath || "未选择"}`,
+              `方向：${formatDirection(confirmed.job.direction)}`,
+              `同步空间：${formatSyncSpaceName(latestStatus?.profileSummary?.syncSpace)}`,
+              "建议先生成 rclone 命令预览，确认最终同步范围。"
+            ].join("\n"),
+        submitText: isAuthorizedDirectoryJob ? "确认并继续" : "仍然开始同步"
       });
       if (!previewConfirmed) {
-        setAction("已取消同步。请先生成预览并确认同步范围。", "bad");
+        setAction(isAuthorizedDirectoryJob ? "已取消同步。" : "已取消同步。请先生成预览并确认同步范围。", "bad");
         return;
       }
     }
@@ -415,20 +974,58 @@ async function runSync() {
           return;
         }
         if (safetyPlan.bidirectional.initializationRequired) {
+          let savedConflicts;
+          if (selectedFirstBisyncOperationId) {
+            savedConflicts = await clientApi.resumeFirstBisyncConflictSave({
+              job: confirmed.job,
+              operationId: selectedFirstBisyncOperationId
+            });
+          } else {
+            const conflictPreview = await clientApi.previewFirstBisyncConflicts({ job: confirmed.job });
+            const conflictItems = conflictPreview.conflicts || [];
+            const conflictList = conflictItems.length
+              ? conflictItems.slice(0, 30).map(item => `• ${item.path}\n  本机 ${item.localSize} 字节 · SHA-256 ${item.localHash.slice(0, 16)}…\n  远端 ${item.remoteSize} 字节 · SHA-256 ${item.remoteHash.slice(0, 16)}…`).join("\n")
+                + (conflictItems.length > 30 ? `\n…还有 ${conflictItems.length - 30} 项` : "")
+              : "未发现同名不同内容的文件。初始化前会再次扫描；若文件有变化，系统会停止并要求重新检查。";
+            const saveConflicts = await requestConfirmation({
+              title: "先保留首次冲突的双方版本",
+              body: [
+                conflictItems.length
+                  ? "系统将把下列文件的本机版和远端版分别复制到本机同步目录中的可见冲突副本。副本名带本次操作编号和来源；不会覆盖已有文件。"
+                  : "预览未发现同名不同内容的文件。系统仍会保存本次检查结果，并在初始化前重新核对文件状态。",
+                conflictItems.length ? "初始化后，这些副本会随正常同步传到两端。" : "",
+                "",
+                conflictList
+              ].join("\n"),
+              requiredText: "保存双方版本",
+              submitText: "保存并继续"
+            });
+            if (!saveConflicts) return;
+            savedConflicts = await clientApi.saveFirstBisyncConflicts({ job: confirmed.job, previewId: conflictPreview.previewId });
+          }
+          selectedFirstBisyncOperationId = savedConflicts.operationId;
           const initialized = await requestConfirmation({
             title: "初始化双向同步",
-            body: `首次双向同步将以“${formatBisyncInitialMode(confirmed.job.safety?.bidirectional?.initialMode)}”建立基准。系统会先做只读检查，再执行 rclone bisync 初始化。`,
+            body: `首次双向同步将以“${formatBisyncInitialMode(confirmed.job.safety?.bidirectional?.initialMode)}”建立基准。首次冲突操作 ${savedConflicts.operationId} 已保存或恢复；初始化前会重新核对当前冲突集合和内容哈希，若文件变化会停止。`,
             requiredText: "初始化双向",
             submitText: "初始化"
           });
-          if (!initialized) return;
+          if (!initialized) {
+            setAction("双向基准尚未初始化；首次冲突副本仍保留，可从设置中的待继续操作恢复。", "warn");
+            void refreshFirstBisyncConflictOperations();
+            return;
+          }
           await clientApi.initializeBidirectionalSync({
             job: confirmed.job,
             safetyPlanId: safetyPlan.id,
             confirmCompatibilityWarning: confirmed.confirmCompatibilityWarning,
-            confirmBidirectionalInitialization: true
+            confirmBidirectionalInitialization: true,
+            conflictOperationId: savedConflicts.operationId
           });
+          selectedFirstBisyncOperationId = "";
           safetyPlan = await clientApi.createSyncSafetyPlan({ job: confirmed.job });
+          await refreshFirstBisyncConflictOperations();
+          setAction("首次冲突检查已完成，双向同步基准已初始化。", "good");
         }
         safetyPlanId = safetyPlan.id;
       }
@@ -447,7 +1044,7 @@ async function runSync() {
         await Promise.allSettled([loadStatus(), refreshLogs()]);
       }
     }
-  });
+  }, "job-sync");
 }
 
 function formatSyncStartError(error = {}) {
@@ -644,8 +1241,10 @@ async function chooseLocalFolder() {
 
 function readJob() {
   const base = currentJobDraft && typeof currentJobDraft === "object" ? currentJobDraft : {};
+  const selectedRelationId = $("authorizedDirectorySelect")?.value || (base.storageBackend === "sftp" ? base.relationId : "");
   return {
     ...base,
+    ...(selectedRelationId ? { storageBackend: "sftp", relationId: selectedRelationId } : {}),
     direction: readDirectionField(),
     localPath: fields.localPath.value,
     destructiveSync: fields.direction.value !== "bidirectional" && fields.destructiveSync.checked,
@@ -672,6 +1271,7 @@ function readDirectionField() {
 
 // null 表示「未知授权」：legacy/离线 profile 或还没导入，此时不施加额外限制。
 function allowedSyncDirections() {
+  if (currentJobDraft?.storageBackend === "sftp" || $("authorizedDirectorySelect")?.value) return ["bidirectional"];
   const directions = latestStatus?.profileSummary?.authorization?.directions;
   return Array.isArray(directions) && directions.length > 0 ? directions : null;
 }
@@ -702,6 +1302,19 @@ async function readConfirmedJob(action) {
     }
     confirmCompatibilityWarning = true;
   }
+  if (action === "save" && job.schedule?.mode !== "manual" && hasAutomaticScheduleChanged(job)) {
+    const authorized = await requestConfirmation({
+      title: "授权自动同步",
+      body: [
+        `计划：${describeLocalSchedule(job.schedule)}`,
+        "每次运行前会重新检查两端目录、同步基准和删除保护上限。",
+        "检查失败或超出保护上限时，本轮会停止并显示失败状态。",
+        "任务运行期间的新触发会合并，不会并行启动。"
+      ].join("\n"),
+      submitText: "确认并保存计划"
+    });
+    if (!authorized) return null;
+  }
   if (!job.destructiveSync) {
     return { job, confirmCompatibilityWarning, confirmDestructiveSync };
   }
@@ -714,6 +1327,18 @@ async function readConfirmedJob(action) {
   });
   confirmDestructiveSync = Boolean(confirmed);
   return confirmed ? { job, confirmCompatibilityWarning, confirmDestructiveSync } : null;
+}
+
+function hasAutomaticScheduleChanged(job) {
+  const saved = currentJobDraft?.schedule || { mode: "manual" };
+  return scheduleFingerprint(job.schedule) !== scheduleFingerprint(saved);
+}
+
+function scheduleFingerprint(schedule = {}) {
+  const mode = schedule?.mode || "manual";
+  if (mode === "interval") return `interval:${Number(schedule.intervalMinutes)}`;
+  if (mode === "daily") return `daily:${schedule.time || "02:00"}`;
+  return mode;
 }
 
 function currentSyncCompatibility() {
@@ -751,6 +1376,10 @@ function readSchedule() {
 
 function writeJob(job) {
   currentJobDraft = toClientJobDraft(job);
+  const directorySelect = $("authorizedDirectorySelect");
+  if (directorySelect && currentJobDraft.storageBackend === "sftp" && currentJobDraft.relationId) {
+    directorySelect.value = currentJobDraft.relationId;
+  }
   fields.direction.value = currentJobDraft.direction || fields.direction.value;
   fields.localPath.value = currentJobDraft.localPath || fields.localPath.value;
   fields.destructiveSync.checked = Boolean(currentJobDraft.destructiveSync);
@@ -873,6 +1502,13 @@ function syncScheduleControls() {
   fields.scheduleInterval.disabled = !intervalMode;
   fields.scheduleTime.hidden = !dailyMode;
   fields.scheduleTime.disabled = !dailyMode;
+}
+
+function describeLocalSchedule(schedule = {}) {
+  if (schedule.mode === "interval") return `每 ${schedule.intervalMinutes} 分钟`;
+  if (schedule.mode === "daily") return `每天 ${schedule.time || "02:00"}`;
+  if (schedule.mode === "startup") return "客户端启动时";
+  return "手动";
 }
 
 function readBandwidthLimit() {
@@ -1220,7 +1856,7 @@ function pickFolder() {
 function renderProfileSummary(summary, heartbeat = null) {
   const target = $("profileSummary");
   if (!summary) {
-    target.textContent = "等待导入服务端配置...";
+    target.textContent = "未导入旧版 SyncKey 配置；两码身份与目录授权可独立使用。";
     renderAuthorizedContent("missing");
     return;
   }
@@ -1247,6 +1883,21 @@ function renderProfileSummaryFromProfile(profile) {
 function renderRemoteTargetSummary(job = {}, profileSummary = null) {
   const target = $("remoteTargetSummary");
   if (!target) return;
+  if (job.storageBackend === "sftp" || (currentJobDraft?.storageBackend === "sftp" && $("authorizedDirectorySelect")?.value)) {
+    const directoryName = job.directoryDisplayName || currentJobDraft?.directoryDisplayName
+      || latestStatus?.enrollment?.authorizedDirectories?.find((item) => item.relationId === job.relationId)?.displayName
+      || "管理员授权目录";
+    renderSummaryRows(target, [
+      ["远端目录", directoryName],
+      ["授权方向", "双向同步"],
+      ["连接方式", "设备专用安全通道"],
+      ["执行方式", "手动运行并使用双向基准"]
+    ]);
+    $("syncSpaceLabel").textContent = "服务器文件夹";
+    $("syncSpaceSummary").textContent = directoryName;
+    return;
+  }
+  $("syncSpaceLabel").textContent = "同步空间";
   const summary = profileSummary || latestStatus?.profileSummary;
   if (summary) {
     renderSummaryRows(target, [
@@ -1260,7 +1911,7 @@ function renderRemoteTargetSummary(job = {}, profileSummary = null) {
     return;
   }
   renderSummaryRows(target, [
-    ["状态", "导入 SyncKey 后显示授权内容"]
+    ["状态", "选择管理员授权的目录后显示"]
   ]);
   renderSyncSpaceLabel(null);
 }
@@ -1269,7 +1920,7 @@ function renderSyncSpaceLabel(summary) {
   const label = $("syncSpaceSummary");
   if (!label) return;
   if (!summary) {
-    label.textContent = "导入 SyncKey 后由服务端决定。";
+    label.textContent = "选择管理员授权的目录。";
     return;
   }
   const syncId = summary.syncSpace?.syncId;
@@ -1319,11 +1970,11 @@ function renderAuthorizedContent(authorization = "missing") {
   const value = $("authorizedContentValue");
   if (!state || !value) return;
   const display = {
-    ready: ["badge ok", "授权已就绪", "此设备只能同步管理员通过 SyncKey 授权的内容。"],
+    ready: ["badge ok", "授权已就绪", "此设备只能同步管理员签名授权的内容。"],
     disabled: ["badge err", "设备已停用", "服务端已停用此设备。重新启用后才能继续同步。"],
-    unregistered: ["badge err", "设备未登记", "服务端找不到此设备。请重新生成并导入 SyncKey。"],
-    missing: ["badge neutral", "等待 SyncKey 授权", "导入 SyncKey 后显示。客户端不提供手工输入、搜索或加入同步 ID 的入口。"]
-  }[authorization] || ["badge neutral", "等待 SyncKey 授权", "导入 SyncKey 后显示。"];
+    unregistered: ["badge err", "设备未登记", "服务端找不到此设备。请联系管理员检查设备接入状态。"],
+    missing: ["badge neutral", "等待管理员目录授权", "同步内容由管理员签名授权。客户端不能自行指定目录。"]
+  }[authorization] || ["badge neutral", "等待管理员目录授权", "同步内容由管理员签名授权。客户端不能自行指定目录。"];
   state.className = display[0];
   state.textContent = display[1];
   value.textContent = display[2];
@@ -1396,6 +2047,18 @@ function setHealth(id, name, ok, detail = "") {
 // 成功问到了客户端、客户端说它连不上服务端；null 是我们连客户端都没问到，
 // 对服务端可达性没有任何观测。
 function renderHeartbeat(heartbeat, profileImported) {
+  if (profileImported === null) {
+    setPill("heartbeatStatus", "未知", "unknown");
+    setHealth("heartbeatHealth", "服务端心跳", null, "客户端离线");
+    return;
+  }
+  if (!profileImported) {
+    setPill("heartbeatStatus", "心跳不适用", "");
+    const health = $("heartbeatHealth");
+    health.textContent = "— 服务端心跳 · 两码接入不使用旧心跳";
+    health.className = "health-card neutral";
+    return;
+  }
   if (heartbeat === null) {
     setPill("heartbeatStatus", "未知", "unknown");
     setHealth("heartbeatHealth", "服务端心跳", null, "客户端离线");
@@ -1429,15 +2092,30 @@ function deviceRecoveryMessage(profileImported, heartbeat) {
     return "当前设备已被服务端停用。请在服务端控制台重新启用此设备，再等待心跳恢复。";
   }
   if (heartbeat?.remoteErrorCode === "device_not_found") {
-    return "服务端找不到当前设备。请在服务端重新生成 SyncKey，并在设置中重新导入。";
+    return "服务端找不到当前设备。请联系管理员检查设备接入状态。";
   }
   return "";
 }
 
-function profileStatusDisplay(profileImported, heartbeat) {
+function profileStatusDisplay(profileImported, heartbeat, enrollment = {}) {
   if (!profileImported) {
+    const phase = enrollment?.phase || "not-started";
+    if (phase === "channel-verified") {
+      return { pill: "通道已验证", state: "good" };
+    }
+    if (phase === "request-pending") {
+      return { pill: "等待管理员验证码", state: "warn" };
+    }
+    if (phase === "identity-verified-awaiting-directory-authorization") {
+      return Array.isArray(enrollment.authorizedDirectories) && enrollment.authorizedDirectories.length
+        ? { pill: "目录授权已就绪", state: "good" }
+        : { pill: "等待目录授权", state: "warn" };
+    }
+    if (phase === "local-state-error") {
+      return { pill: "接入状态异常", state: "bad" };
+    }
     return {
-      pill: "未导入配置",
+      pill: "等待两码接入",
       state: ""
     };
   }
@@ -1536,24 +2214,37 @@ function setAction(text, state) {
     : null;
 }
 
-async function withBusyAction(buttonId, action) {
-  const button = $(buttonId);
-  if (button?.dataset.busy === "1") {
+async function withBusyAction(buttonId, action, groupName = "") {
+  const groupButtons = groupName === "job-sync" ? ["saveJobBtn", "runSyncBtn"] : [];
+  const elements = [...new Set([buttonId, ...groupButtons])].map($).filter(Boolean);
+  if ((groupName && activeBusyActionGroups.has(groupName))
+    || elements.some((element) => element.dataset.busy === "1")) {
     return null;
   }
-  if (button) {
-    button.dataset.busy = "1";
-    button.disabled = true;
-    button.setAttribute("aria-busy", "true");
+  if (groupName) activeBusyActionGroups.add(groupName);
+  const priorStates = elements.map((element) => ({
+    element,
+    disabled: element.disabled,
+    ariaBusy: element.getAttribute?.("aria-busy") ?? null,
+    hadBusy: Object.prototype.hasOwnProperty.call(element.dataset, "busy"),
+    busy: element.dataset.busy
+  }));
+  for (const { element } of priorStates) {
+    element.dataset.busy = "1";
+    element.disabled = true;
+    element.setAttribute("aria-busy", "true");
   }
   try {
     return await action();
   } finally {
-    if (button) {
-      button.disabled = false;
-      button.removeAttribute("aria-busy");
-      delete button.dataset.busy;
+    for (const state of priorStates) {
+      state.element.disabled = state.disabled;
+      if (state.ariaBusy === null) state.element.removeAttribute("aria-busy");
+      else state.element.setAttribute("aria-busy", state.ariaBusy);
+      if (state.hadBusy) state.element.dataset.busy = state.busy;
+      else delete state.element.dataset.busy;
     }
+    if (groupName) activeBusyActionGroups.delete(groupName);
   }
 }
 
@@ -1572,7 +2263,12 @@ function setBodyState(nextState) {
 function updateBodyState(status = {}) {
   const sync = status.processes?.sync || {};
   const syncState = currentProcessSyncState(sync);
-  if (!status.profileImported) {
+  const enrollmentPhase = status.enrollment?.phase || "not-started";
+  if (enrollmentPhase === "local-state-error") {
+    setBodyState("state-error");
+    return;
+  }
+  if (!status.profileImported && enrollmentPhase !== "identity-verified-awaiting-directory-authorization") {
     setBodyState("state-empty");
     return;
   }
@@ -1607,6 +2303,8 @@ function requestConfirmation(options = {}) {
   $("confirmTitle").textContent = options.title || "确认操作";
   $("confirmBody").textContent = options.body || "";
   textLabel.hidden = !options.requiredText;
+  textLabel.textContent = options.requiredText ? `请输入 ${options.requiredText} 以确认：` : "";
+  textInput.hidden = !options.requiredText;
   textInput.value = "";
   textInput.placeholder = options.requiredText ? `输入 ${options.requiredText}` : "";
   submitBtn.textContent = options.submitText || "确认";
@@ -1671,6 +2369,70 @@ function setConfirmMessage(message) {
 
 function formatError(error) {
   const copy = {
+    directory_root_input_invalid: "目录路径无效，请重新选择同步目录。",
+    directory_root_io_failed: "无法检查同步目录，请检查磁盘和目录权限。",
+    directory_root_link_denied: "同步目录包含不受支持的链接，已停止访问。",
+    directory_root_marker_collision: "目录保护标记位置已有其他内容，已停止操作。",
+    directory_root_marker_mismatch: "目录保护标记与登记目录不匹配，请核对目录。",
+    directory_root_marker_missing: "目录保护标记缺失，已停止同步以免误判为删除。",
+    directory_root_missing: "同步目录不可用，请连接原磁盘或挂载后重试。",
+    directory_root_mount_changed: "同步目录挂载已变化，请核对原目录后再继续。",
+    directory_root_mount_unavailable: "同步目录所在磁盘或挂载当前不可用。",
+    directory_root_not_ready: "同步目录尚未就绪，请检查磁盘与读写权限。",
+    directory_root_overlap: "本地目录与同步目录重叠，无法建立安全关系。",
+    directory_root_permission_denied: "当前用户没有同步目录所需的读写权限。",
+    directory_root_record_invalid: "已登记的目录保护信息无效，需要管理员检查。",
+    directory_root_registration_incomplete: "目录登记尚未完成，当前未开放同步。",
+    directory_root_registration_review_required: "目录状态需要人工核对，当前未执行同步。",
+    directory_root_replaced: "同步目录已被替换，请核对原目录后重新连接。",
+    directory_root_space_insufficient: "同步目录可用空间不足。",
+    directory_root_space_unavailable: "无法确认同步目录剩余空间，已停止操作。",
+    connection_repair_busy: "同步或另一项连接修复正在进行，请完成后再检查。",
+    first_sync_conflict_review_required: "首次冲突保护需要人工复核；未执行初始化。请检查本地同步目录、远端权限和未完成操作后重试。",
+    first_sync_conflict_set_changed: "预览后文件发生变化。未执行初始化，请重新预览并保存当前冲突双方版本。",
+    first_sync_conflict_save_required: "初始化前必须先预览并保存双方版本。",
+    first_sync_conflict_command_failed: "首次冲突保护操作失败；未执行初始化。请检查服务端状态后重新预览。",
+    first_sync_conflict_preview_expired: "首次冲突预览已过期；未执行初始化。请重新扫描并复核冲突。",
+    first_sync_conflict_preview_required: "初始化前必须先完成首次冲突预览。",
+    first_sync_conflict_source_changed: "冲突来源文件已变化；未执行初始化。请重新扫描并复核双方版本。",
+    first_sync_conflict_stage_invalid: "首次冲突保护暂存区无效；未执行初始化，请联系管理员检查服务端状态。",
+    first_sync_conflict_target_exists: "恢复目标已存在；未覆盖现有文件，也未执行初始化。",
+    first_sync_conflict_target_invalid: "冲突恢复目标路径无效；未执行初始化，请重新选择目录。",
+    first_sync_conflict_trusted_relation_required: "首次冲突扫描缺少可信目录授权关系；未执行初始化，请检查任务授权和目录选择。",
+    first_sync_conflict_scan_failed: "首次冲突扫描失败；未执行初始化。请检查通道连接与目录权限后重试。",
+    first_sync_conflict_staging_invalid: "首次冲突保护暂存内容无效；未执行初始化，请联系管理员检查服务端状态。",
+    connection_repair_invalid: "连接修复操作与所选授权目录或本地任务不匹配。",
+    connection_repair_list_failed: "无法读取授权目录，请检查网络、通道和目录权限。",
+    connection_repair_write_failed: "无法创建目录探针；未初始化同步基准，也未执行同步。",
+    connection_repair_probe_conflict: "探针路径已有无法确认归属的文件；已停止并保留该文件。",
+    connection_repair_cleanup_failed: "本次临时探针未能清理，请管理员检查授权目录。",
+    connection_repair_read_failed: "目录探针无法读回，请检查文件服务和目录权限。",
+    enrollment_channel_stale: "通道配置已过期或不再匹配，请从 N1 管理页重新导出配置码。",
+    enrollment_reconfigure_busy: "正在应用新的通道配置，请稍后查看操作状态。",
+    enrollment_reconfigure_conflict: "重新配置请求编号已用于不同内容，请重新开始操作。",
+    enrollment_reconfigure_invalid: "新的通道配置无效，请重新检查管理员提供的内容。",
+    enrollment_reconfigure_needs_repair: "通道配置应用需要管理员修复；当前未签发新配置码。",
+    enrollment_reconfigure_not_found: "找不到这次通道配置操作记录。",
+    enrollment_reconfigure_state_invalid: "通道配置操作记录无效，需要管理员检查。",
+    enrollment_reconfigure_write_failed: "新的通道配置未能安全保存。",
+    sync_recovery_preflight_failed: "同步前无法完成恢复区检查，当前未执行同步。",
+    sync_recovery_restore_hash_mismatch: "恢复文件校验不一致，未写入目标文件。",
+    sync_recovery_restore_preview_required: "需要先预览当前还原操作。",
+    sync_recovery_restore_staging_invalid: "受保护的还原暂存区无效，未写入目标文件。",
+    sync_recovery_restore_target_exists: "还原目标已经存在，未覆盖现有文件。",
+    sync_recovery_restore_target_invalid: "还原目标必须位于本地同步文件夹内。",
+    sync_recovery_restore_preview_expired: "还原预览已过期，请重新预览。",
+    sync_recovery_review_required: "恢复区或双向同步基准需要人工核对；本次未执行同步。",
+    sync_recovery_trusted_relation_required: "当前任务没有可验证的目录授权关系，不能使用恢复功能。",
+    sync_recovery_version_not_found: "找不到这份已保存版本，或它尚未完成。",
+    sync_recovery_review_required: "恢复区或同步基准需要人工核对，当前未执行同步。",
+    sync_recovery_trusted_relation_required: "当前任务没有可验证的目录授权关系，不能使用恢复功能。",
+    sync_recovery_version_not_found: "找不到这份已保存版本，或它尚未完成。",
+    sftp_access_marker_missing: "已有同步基准对应的根标记缺失；已停止修复，不会重建标记或初始化基准。",
+    sftp_access_marker_conflict: "本机或远端访问标记与当前授权根目录冲突；拒绝覆盖，请核对原同步目录。",
+    sftp_access_marker_invalid: "SFTP 访问标记输入无效，或缺少已验证的根目录标识。",
+    sftp_access_marker_write_failed: "无法确认 SFTP 访问标记写入结果；请核对本机或远端目录后重试。",
+    sync_relation_migration_required: "现有同步关系需要人工核对；本次未更改任务或同步基准。",
     admin_auth_required: "管理 Token 不正确或已失效，请联系管理员。",
     binary_version_check_failed: "组件存在但无法运行版本检测，请重新解压或重新安装。",
     bucket_disabled: "服务端同步仓库已停用，请联系管理员选择其他仓库。",
@@ -1691,6 +2453,54 @@ function formatError(error) {
     claim_redeem_rate_limited: "SyncKey 兑换失败次数过多，请稍后再试或联系管理员重新生成。",
     device_disabled: "当前客户端已在服务端停用，请联系管理员重新启用。",
     device_not_found: "当前客户端未在服务端登记，请重新生成并导入 SyncKey。",
+    enrollment_auth_invalid: "身份验证码签名无效，请重新发起申请并联系管理员。",
+    enrollment_auth_capacity: "身份验证请求过多，请稍后重试。",
+    enrollment_auth_expired: "服务器与电脑的系统时间可能存在较大差异。请先检查本机 Windows 日期、时间和时区，并尝试立即同步；若本机时间正确，再请管理员检查服务器时间。无需重新配对、重新导入通道码或重新签发身份验证码。",
+    enrollment_auth_replayed: "该身份验证请求已使用，请重新发起申请。",
+    enrollment_binding_mismatch: "身份申请与授权目录不匹配，请联系管理员重新签发。",
+    enrollment_catalog_not_ready: "身份接入目录尚未就绪，请联系管理员检查服务端设置。",
+    enrollment_channel_invalid: "请先导入管理员提供的通道配置码。",
+    enrollment_channel_mismatch: "通道配置与身份申请不匹配，请重新导入管理员提供的通道配置码。",
+    enrollment_channel_not_ready: "服务端身份接入通道尚未就绪，请检查连接地址、端口和通道设置后重试。",
+    enrollment_channel_expired: "通道配置已过期，请重新复制管理员提供的通道配置码。",
+    enrollment_code_expired: "身份验证码已过期，请管理员重新签发。",
+    enrollment_code_invalid: "身份验证码无效或不属于当前申请，请核对申请后联系管理员。",
+    enrollment_code_used: "身份验证码已使用，请重新发起身份申请。",
+    enrollment_device_revoked: "该客户端身份已撤销，请联系管理员。",
+    enrollment_endpoint_invalid: "接入地址无效，请重新导入管理员提供的通道配置码。",
+    enrollment_identity_conflict: "客户端身份与服务端已登记身份冲突，请联系管理员处理。",
+    enrollment_identity_missing: "本地设备身份文件缺失或损坏，请先修复本地状态。",
+    enrollment_proxy_unavailable: "首次接入隧道不可用，请检查 sing-box 组件和网络。",
+    enrollment_public_key_mismatch: "身份公钥与服务端登记不一致，请联系管理员核对。",
+    enrollment_relation_conflict: "同步关系与当前授权冲突，请联系管理员核对目录绑定。",
+    enrollment_relation_denied: "尚未获得同步目录权限，请等待管理员授权。",
+    enrollment_relation_revoked: "该同步关系已撤销，请联系管理员。",
+    enrollment_revocation_identity_conflict: "撤销期间关系身份发生变化，请管理员检查 operation 状态。",
+    enrollment_revocation_incomplete: "撤销尚未完成；请查询并继续同一 operation。",
+    enrollment_revocation_invalid: "撤销请求无效，请检查目标和 operation ID。",
+    enrollment_revocation_operation_conflict: "该 operation ID 已用于其他撤销目标。",
+    enrollment_revocation_operation_not_found: "找不到该撤销 operation。",
+    enrollment_revocation_not_ready: "关系服务尚未就绪，撤销尚未开始。",
+    enrollment_revocation_overlay_not_applied: "撤销后的数据配置尚未确认应用。",
+    enrollment_revocation_recovery_pending: "撤销恢复尚未完成，暂时不能申请数据授权。",
+    enrollment_request_exists: "该身份申请已存在，请查看当前申请状态。",
+    enrollment_request_invalid: "身份申请内容无效，请重新提交。",
+    enrollment_request_mismatch: "身份验证码不属于当前设备或申请，请核对后重试。",
+    enrollment_request_not_found: "服务端找不到该身份申请，请重新提交申请。",
+    enrollment_response_invalid: "身份接入响应无效，请检查服务端版本或联系管理员。",
+    enrollment_signer_invalid: "服务端身份签名组件不可用，请联系管理员。",
+    enrollment_state_invalid: "服务端身份状态无效，请联系管理员检查服务端数据。",
+    enrollment_state_conflict: "身份状态已变化，请刷新后重试。",
+    enrollment_transport_failed: "首次接入隧道连接失败，请检查网络和服务端状态。",
+    enrollment_trust_failed: "服务器密钥或身份回执签名校验失败，请与管理员核对指纹。",
+    enrollment_trust_verifier_required: "缺少独立的服务器密钥 pin，无法验证接入通道。",
+    data_authorization_invalid: "服务端目录授权内容无效，无法安全连接。",
+    data_authorization_mismatch: "服务端目录授权与当前设备身份不匹配。",
+    data_authorization_trust_failed: "服务端目录授权签名或有效期验证失败。",
+    enrollment_data_authorization_denied: "当前设备尚未获得该目录授权，请联系管理员。",
+    enrollment_data_channel_not_ready: "服务端安全数据通道尚未应用，请联系管理员。",
+    enrollment_data_relation_start_failed: "服务器未能启动受保护的目录服务，请管理员检查服务能力和权限后重试。",
+    enrollment_data_relation_not_ready: "服务端目录传输服务尚未就绪，请联系管理员。",
     heartbeat_auth_invalid: "心跳签名无效，请重新导入 SyncKey。",
     heartbeat_auth_required: "心跳缺少签名，请重新导入 SyncKey。",
     heartbeat_rate_limited: "心跳失败次数过多，服务端已临时限速，稍后会自动重试。",
@@ -1724,6 +2534,7 @@ function formatError(error) {
     singbox_restart_unavailable: "服务端未配置隧道重启服务，请联系管理员检查部署。",
     storage_request_failed: "存储服务请求失败，请联系管理员检查 MinIO、地址和密钥。",
     sync_already_running: "已有其他同步任务正在运行，请等待完成后再启动这个任务。",
+    sync_relation_migration_required: "双向同步关系需要迁移或重新确认，请先完成关系评审后再保存、预览或运行。",
     sync_direction_not_authorized: "这台设备在当前同步空间没有该方向的授权，请向管理员索取新的 SyncKey。",
     sync_id_unavailable: "这个同步空间名称已被占用，请联系管理员。",
     sync_space_access_denied: "这台设备没有该同步空间的授权，请向管理员索取新的 SyncKey。",
@@ -2227,6 +3038,15 @@ async function readJsonOrFallback(response) {
 
 const clientApi = Object.freeze({
   getStatus: () => requestJson({ method: "GET", path: "/api/client/status" }),
+  startConnectionRepair: (body) => requestJson({ method: "POST", path: "/api/enrollment/connection/repair", body }),
+  getConnectionRepairOperation: (operationId) => requestJson({
+    method: "GET",
+    path: "/api/enrollment/connection/repair/" + encodeURIComponent(operationId)
+  }),
+  importEnrollmentChannel: (body) => requestJson({ method: "POST", path: "/api/enrollment/channel/import", body }),
+  submitEnrollmentRequest: () => requestJson({ method: "POST", path: "/api/enrollment/request", body: {} }),
+  consumeEnrollmentCode: (body) => requestJson({ method: "POST", path: "/api/enrollment/consume", body }),
+  refreshDataAuthorizations: () => requestJson({ method: "POST", path: "/api/enrollment/data-authorizations/refresh", body: {} }),
   checkBinaries: () => requestJson({ method: "POST", path: "/api/binaries/check", body: {}, allowOkFalse: true }),
   importProfile: (body, options = {}) => requestJson({ method: "POST", path: "/api/profile/import", body, ...options }),
   startTunnel: () => requestJson({ method: "POST", path: "/api/singbox/start", body: {} }),
@@ -2235,11 +3055,19 @@ const clientApi = Object.freeze({
   previewSync: (body) => requestJson({ method: "POST", path: "/api/sync/preview", body }),
   createSyncSafetyPlan: (body) => requestJson({ method: "POST", path: "/api/sync/safety-plan", body, timeoutMs: syncPreparationRequestTimeoutMs }).then((result) => result.plan),
   initializeBidirectionalSync: (body) => requestJson({ method: "POST", path: "/api/sync/bisync/initialize", body, timeoutMs: bidirectionalInitializationRequestTimeoutMs }).then((result) => result.initialization),
+  previewFirstBisyncConflicts: (body) => requestJson({ method: "POST", path: "/api/sync/bisync/conflicts/preview", body, timeoutMs: syncPreparationRequestTimeoutMs }).then((result) => result.preview),
+  saveFirstBisyncConflicts: (body) => requestJson({ method: "POST", path: "/api/sync/bisync/conflicts/save", body, timeoutMs: syncPreparationRequestTimeoutMs }).then((result) => result.saved),
+  listFirstBisyncConflictOperations: (body) => requestJson({ method: "POST", path: "/api/sync/bisync/conflicts/operations", body, timeoutMs: syncPreparationRequestTimeoutMs }).then((result) => result.operations),
+  resumeFirstBisyncConflictSave: (body) => requestJson({ method: "POST", path: "/api/sync/bisync/conflicts/resume", body, timeoutMs: syncPreparationRequestTimeoutMs }).then((result) => result.saved),
   runSync: (body) => requestJson({ method: "POST", path: "/api/sync/run", body, timeoutMs: syncRunRequestTimeoutMs }),
   stopSync: () => requestJson({ method: "POST", path: "/api/sync/stop", body: {} }),
   getLogs: () => requestJson({ method: "GET", path: "/api/logs" }),
   exportDiagnostics: () => requestJson({ method: "GET", path: "/api/diagnostics/export" }),
   getSyncHistory: () => requestJson({ method: "GET", path: "/api/sync/history" }),
+  listRecoveryVersions: (jobId) => requestJson({ method: "GET", path: `/api/jobs/${encodeURIComponent(jobId)}/recovery`, timeoutMs: syncPreparationRequestTimeoutMs }),
+  previewRecoveryRestore: (jobId, body) => requestJson({ method: "POST", path: `/api/jobs/${encodeURIComponent(jobId)}/recovery/restore-preview`, body }).then(result => result.preview),
+  restoreRecoveryVersion: (jobId, previewId) => requestJson({ method: "POST", path: `/api/jobs/${encodeURIComponent(jobId)}/recovery/restore`, body: { previewId } }),
+  cancelRecoveryRestore: (jobId, previewId) => requestJson({ method: "POST", path: `/api/jobs/${encodeURIComponent(jobId)}/recovery/restore-cancel`, body: { previewId } }),
   shutdown: () => requestJson({ method: "POST", path: "/api/client/shutdown", body: {} })
 });
 

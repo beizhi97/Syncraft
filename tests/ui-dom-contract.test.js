@@ -34,14 +34,17 @@ test("production UI pages keep the design DOM contract executable", async () => 
         "claimOut",
         "refreshSingboxConfigBtn",
         "tunnelOut",
-        "statTunnelValue",
-        "statTunnelSub",
+        "statDirectoryValue",
+        "statDirectorySub",
         "statOnlineDevicesValue",
         "statOnlineDevicesSub",
         "statSyncingValue",
         "statSyncingSub",
-        "statStorageUsageValue",
-        "statStorageUsageSub"
+        "statAuthorizedRelationValue",
+        "statAuthorizedRelationSub",
+        "enrollmentRelationList",
+        "firstUsePublicHost",
+        "firstUsePublicPort"
       ]
     }
   ];
@@ -64,6 +67,20 @@ test("production UI pages keep the design DOM contract executable", async () => 
     const inlineHandlers = [...html.matchAll(/<[^>]+\s(on[a-z][\w:-]*)\s*=/gi)].map((match) => match[1]).sort();
     assert.deepEqual(inlineHandlers, [], `${page.name} production HTML should not include inline on* handlers`);
   }
+});
+
+test("server enrollment authorization UI distinguishes relation and device revocation", async () => {
+  const html = await readFile(join(projectRoot, "public", "index.html"), "utf8");
+  const app = await readFile(join(projectRoot, "public", "app.js"), "utf8");
+
+  assert.match(html, /id="enrollmentRelationList"/);
+  assert.match(app, /撤销此目录授权/);
+  assert.match(app, /revokeDevice\.textContent = "撤销设备授权"/);
+  assert.match(app, /retry\.textContent = "继续"/);
+  assert.match(app, /授权已撤销，相关传输已停止/);
+  assert.match(app, /授权已停用，正在停止传输；可点击继续/);
+  const revocationUi = app.slice(app.indexOf("async function loadEnrollmentRelations()"), app.indexOf("async function loadEnrollmentRequests()"));
+  assert.doesNotMatch(revocationUi, /enrollment device|VLESS 停用|operation ID|配置回执|已持久化|收敛/i);
 });
 
 test("server claim output remains writable by production app.js", async () => {
@@ -92,6 +109,209 @@ test("client import errors stay above the settings drawer", async () => {
   assert.match(css, /#actionMessage\{[^}]*position:fixed[^}]*z-index:2[1-9]\d/);
 });
 
+test("enrollment timestamp expiry explains clock correction without re-pairing", async () => {
+  const authority = await readFile(join(projectRoot, "src", "core", "enrollmentAuthority.js"), "utf8");
+  const clientApp = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
+  const serverApp = await readFile(join(projectRoot, "public", "app.js"), "utf8");
+  const guidance = "服务器与电脑的系统时间可能存在较大差异。请先检查本机 Windows 日期、时间和时区，并尝试立即同步；若本机时间正确，再请管理员检查服务器时间。无需重新配对、重新导入通道码或重新签发身份验证码。";
+
+  assert.match(authority, /enrollment_auth_expired[\s\S]*Authorization request timestamp is outside the allowed window/);
+  assert.ok(clientApp.includes(`enrollment_auth_expired: "${guidance}"`));
+  assert.ok(serverApp.includes(`enrollment_auth_expired: "${guidance}"`));
+});
+
+test("client first-use and recovery UI follows the current no-overwrite contracts", async () => {
+  const html = await readFile(join(projectRoot, "client", "public", "index.html"), "utf8");
+  const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
+  const restoreRecoveryFile = extractFunction(app, "restoreRecoveryFile");
+  const formatRecoveryExpiry = extractFunction(app, "formatRecoveryExpiry");
+  const renderEnrollmentSteps = extractFunction(app, "renderEnrollmentSteps");
+  const renderHeartbeat = extractFunction(app, "renderHeartbeat");
+  const resumeFirstBisyncConflictOperation = extractFunction(app, "resumeFirstBisyncConflictOperation");
+  const readConfirmedJob = extractFunction(app, "readConfirmedJob");
+  const hasAutomaticScheduleChanged = extractFunction(app, "hasAutomaticScheduleChanged");
+  const scheduleFingerprint = extractFunction(app, "scheduleFingerprint");
+  const advanced = extractDetailsById(html, "advancedDiagnostics");
+
+  for (const id of ["recoveryPanel", "recoveryVersions", "recoveryStatus", "refreshRecoveryBtn", "firstBisyncRecoveryPanel", "firstBisyncOperations", "firstBisyncRecoveryStatus"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /导入通道配置码[\s\S]*提交身份申请[\s\S]*身份验证码/);
+  assert.match(html, /高级兼容：旧版 SyncKey/);
+  assert.match(html, /已有文件不会被覆盖/);
+  assert.doesNotMatch(advanced.slice(0, advanced.indexOf("安装与文件校验")), /id="(?:protocolCompatibility|secretVaultStatus|previewBtn|syncHistoryList|logOutput)"/);
+  for (const id of ["protocolCompatibility", "secretVaultStatus", "startTunnelBtn", "previewBtn", "syncHistoryList", "logOutput"]) {
+    assert.match(advanced, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /id="heartbeatStatus"[^>]*>\s*<span class="dot"><\/span>心跳不适用/);
+  assert.match(html, /<label id="syncSpaceLabel">同步空间<\/label>/);
+  assert.match(app, /\$\("syncSpaceLabel"\)\.textContent = "服务器文件夹"/);
+  assert.match(app, /action === "save" && job\.schedule\?\.mode !== "manual" && hasAutomaticScheduleChanged\(job\)/);
+  assert.doesNotMatch(readConfirmedJob, /requiredText:\s*"授权自动同步"/);
+  assert.match(app, /function renderEnrollmentStatus\([\s\S]*?renderEnrollmentSteps\(phase\)/);
+  const advancedStart = html.indexOf('id="advancedSettingsContent"');
+  const advancedEnd = html.indexOf('id="saveJobBtn"', advancedStart);
+  assert.ok(advancedStart >= 0 && advancedEnd > advancedStart);
+  assert.ok(html.indexOf('id="destructiveSync"') > advancedStart && html.indexOf('id="destructiveSync"') < advancedEnd);
+  assert.ok(html.indexOf('id="bisyncInitialMode"') > advancedStart && html.indexOf('id="bisyncInitialMode"') < advancedEnd);
+  assert.match(app, /\/recovery\/restore-cancel/);
+  assert.match(app, /path: "\/api\/sync\/bisync\/conflicts\/operations"/);
+  assert.match(app, /path: "\/api\/sync\/bisync\/conflicts\/resume"/);
+
+  async function confirmScheduleFor(action, savedSchedule, requestedSchedule) {
+    const scheduleContext = { confirmations: [] };
+    runInNewContext(`
+      const currentJobDraft = { schedule: ${JSON.stringify(savedSchedule)} };
+      function readJob() { return { direction: "bidirectional", destructiveSync: false, schedule: ${JSON.stringify(requestedSchedule)} }; }
+      function currentSyncCompatibility() { return null; }
+      function describeLocalSchedule(schedule) { return schedule.mode; }
+      async function requestConfirmation(options) { confirmations.push(options); return true; }
+      ${scheduleFingerprint}
+      ${hasAutomaticScheduleChanged}
+      ${readConfirmedJob}
+      globalThis.confirm = () => readConfirmedJob(${JSON.stringify(action)});
+    `, scheduleContext);
+    await scheduleContext.confirm();
+    return scheduleContext.confirmations;
+  }
+  assert.equal((await confirmScheduleFor("run", { mode: "interval", intervalMinutes: 30 }, { mode: "interval", intervalMinutes: 30 })).length, 0);
+  assert.equal((await confirmScheduleFor("save", { mode: "interval", intervalMinutes: 30 }, { mode: "interval", intervalMinutes: 30 })).length, 0);
+  assert.equal((await confirmScheduleFor("save", { mode: "interval", intervalMinutes: "30" }, { mode: "interval", intervalMinutes: 30 })).length, 0);
+  const changedScheduleConfirmations = await confirmScheduleFor("save", { mode: "manual" }, { mode: "interval", intervalMinutes: 30 });
+  assert.equal(changedScheduleConfirmations.length, 1);
+  assert.equal(changedScheduleConfirmations[0].submitText, "确认并保存计划");
+  assert.equal(changedScheduleConfirmations[0].requiredText, undefined);
+
+  const context = { calls: [], confirmations: [], confirmed: false, status: { textContent: "" } };
+  runInNewContext(`
+    function $(id) { if (id !== "recoveryStatus") throw new Error("unexpected element " + id); return status; }
+    function formatError(error) { return error.message; }
+    async function refreshRecoveryVersions() { calls.push({ type: "refresh" }); }
+    async function requestConfirmation(options) { confirmations.push(options); return confirmed; }
+    const clientApi = {
+      async previewRecoveryRestore(jobId, body) {
+        calls.push({ type: "preview", jobId, body });
+        return { previewId: "preview-1", destinationPath: "notes.txt.recovered-run-1234", sourceSha256: "a".repeat(64), expiresAt: "2026-10-31T12:00:00.000Z" };
+      },
+      async cancelRecoveryRestore(jobId, previewId) { calls.push({ type: "cancel", jobId, previewId }); },
+      async restoreRecoveryVersion(jobId, previewId) {
+        calls.push({ type: "restore", jobId, previewId });
+        return { destinationPath: "notes.txt.recovered-run-1234", sourceSha256: "a".repeat(64) };
+      }
+    };
+    ${formatRecoveryExpiry}
+    ${restoreRecoveryFile}
+    globalThis.restoreFile = (confirmedValue) => {
+      confirmed = confirmedValue;
+      return restoreRecoveryFile("job-1", { runId: "run-12345678" }, { side: "path1", path: "notes.txt" });
+    };
+  `, context);
+
+  await context.restoreFile(false);
+  assert.deepEqual(context.calls.map(({ type }) => type), ["preview", "cancel"]);
+  assert.equal(context.calls[0].jobId, "job-1");
+  assert.deepEqual(JSON.parse(JSON.stringify(context.calls[0].body)), {
+    runId: "run-12345678", side: "path1", path: "notes.txt", destinationPath: "notes.txt.recovered-run-1234"
+  });
+  assert.match(context.confirmations[0].body, /目标文件已存在时系统会拒绝还原，不会覆盖/);
+  assert.match(context.confirmations[0].body, /预览有效期至/);
+  assert.equal(context.status.textContent, "已取消还原；本地文件未更改。");
+
+  context.calls.length = 0;
+  context.confirmations.length = 0;
+  await context.restoreFile(true);
+  assert.deepEqual(context.calls.map(({ type }) => type), ["preview", "restore", "refresh"]);
+  assert.equal(context.calls[1].previewId, "preview-1");
+  assert.match(context.status.textContent, /已还原到 notes\.txt\.recovered-run-1234/);
+
+  const stepNodes = Array.from({ length: 3 }, () => ({
+    classes: {}, attributes: {},
+    classList: { toggle(name, enabled) { this.owner.classes[name] = enabled; }, owner: null },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    removeAttribute(name) { delete this.attributes[name]; }
+  }));
+  for (const node of stepNodes) node.classList.owner = node;
+  const stepsContext = { stepNodes };
+  runInNewContext(`
+    const document = { querySelectorAll: () => stepNodes };
+    ${renderEnrollmentSteps}
+    globalThis.renderSteps = renderEnrollmentSteps;
+  `, stepsContext);
+  stepsContext.renderSteps("request-pending");
+  const stepSnapshot = JSON.parse(JSON.stringify(stepNodes.map((node) => [node.classes.complete, node.classes.current, node.attributes["aria-current"] || ""])));
+  assert.deepEqual(stepSnapshot, [
+    [true, false, ""], [true, false, ""], [false, true, "step"]
+  ]);
+
+  const heartbeatContext = { rendered: [] };
+  runInNewContext(`
+    const health = {};
+    function $(id) { if (id !== "heartbeatHealth") throw new Error("unexpected element " + id); return health; }
+    function setPill(...args) { rendered.push(["pill", ...args]); }
+    function setHealth(...args) { rendered.push(["health", ...args]); }
+    ${renderHeartbeat}
+    globalThis.renderStatus = renderHeartbeat;
+    globalThis.getHealth = () => health;
+  `, heartbeatContext);
+  heartbeatContext.renderStatus(null, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(heartbeatContext.rendered)), [
+    ["pill", "heartbeatStatus", "心跳不适用", ""]
+  ]);
+  assert.equal(heartbeatContext.getHealth().textContent, "— 服务端心跳 · 两码接入不使用旧心跳");
+  assert.equal(heartbeatContext.getHealth().className, "health-card neutral");
+  heartbeatContext.rendered.length = 0;
+  heartbeatContext.renderStatus(null, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(heartbeatContext.rendered)), [
+    ["pill", "heartbeatStatus", "未知", "unknown"],
+    ["health", "heartbeatHealth", "服务端心跳", null, "客户端离线"]
+  ]);
+
+  const conflictContext = { calls: [], buttons: [{ disabled: false }], status: { textContent: "" } };
+  runInNewContext(`
+    let selectedFirstBisyncOperationId = "";
+    function $(id) {
+      if (id === "firstBisyncRecoveryStatus") return status;
+      if (id === "firstBisyncOperations") return { querySelectorAll: () => buttons };
+      throw new Error("unexpected element " + id);
+    }
+    function formatError(error) { return error.message; }
+    const clientApi = {
+      async resumeFirstBisyncConflictSave(body) {
+        calls.push(body);
+        return { operationId: body.operationId, status: "saved" };
+      }
+    };
+    async function refreshFirstBisyncConflictOperations() { calls.push({ type: "refresh" }); }
+    ${resumeFirstBisyncConflictOperation}
+    globalThis.resumeConflict = (job, operation) => resumeFirstBisyncConflictOperation(job, operation);
+    globalThis.selectedOperation = () => selectedFirstBisyncOperationId;
+  `, conflictContext);
+  await conflictContext.resumeConflict({ id: "job-9", relationId: "rel_123", direction: "bidirectional" }, {
+    operationId: "operation-5", status: "saving"
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(conflictContext.calls)), [
+    { job: { id: "job-9", relationId: "rel_123", direction: "bidirectional" }, operationId: "operation-5" },
+    { type: "refresh" }
+  ]);
+  assert.equal(conflictContext.selectedOperation(), "operation-5");
+  assert.equal(conflictContext.status.textContent, "冲突双方版本已保存。点击“开始同步”确认后继续首次双向初始化。");
+});
+
+function extractDetailsById(html, id) {
+  const start = html.indexOf(`<details id="${id}"`);
+  assert.ok(start >= 0, `expected details element ${id}`);
+  const tagPattern = /<details\b[^>]*>|<\/details>/g;
+  tagPattern.lastIndex = start;
+  let depth = 0;
+  let match;
+  while ((match = tagPattern.exec(html))) {
+    if (match[0].startsWith("<details")) depth += 1;
+    else depth -= 1;
+    if (depth === 0) return html.slice(start, tagPattern.lastIndex);
+  }
+  assert.fail(`expected details element ${id} to close`);
+}
+
 test("server shell health and stat strip avoid stale optimistic status", async () => {
   const html = await readFile(join(projectRoot, "public", "index.html"), "utf8");
   const app = await readFile(join(projectRoot, "public", "app.js"), "utf8");
@@ -101,13 +321,40 @@ test("server shell health and stat strip avoid stale optimistic status", async (
   assert.match(html, /id="healthDot" class="health-dot warn"/);
   assert.match(html, /id="healthText">检测中/);
   assert.doesNotMatch(html, /id="healthDot" class="health-dot ok"/);
-  for (const id of ["statTunnelSub", "statOnlineDevicesSub", "statSyncingSub", "statStorageUsageSub"]) {
+  for (const id of ["statDirectorySub", "statOnlineDevicesSub", "statSyncingSub", "statAuthorizedRelationSub"]) {
     assert.match(html, new RegExp(`id="${id}"`));
     assert.match(renderStatStrip, new RegExp(`setStatText\\("${id}"`));
   }
   assert.match(checkHealth, /serviceHealth\.restartRequired/);
   assert.match(checkHealth, /classList\.remove\("ok", "good", "warn", "err"\)/);
-  assert.match(checkHealth, /API 可达 · 待重启/);
+  assert.match(checkHealth, /管理 API 可达 · 待重启/);
+  assert.doesNotMatch(html, /id="statTunnelValue"|id="statStorageUsageValue"/);
+  assert.match(renderStatStrip, /activeRootCount/);
+  assert.match(renderStatStrip, /authorizedRelationCount/);
+});
+
+test("server first use applies generated REALITY settings before reconfiguration", async () => {
+  const app = await readFile(join(projectRoot, "public", "app.js"), "utf8");
+  const firstUse = extractFunction(app, "reconfigureEnrollmentChannel");
+  assert.match(firstUse, /protocol: "vless-reality-tcp"/);
+  assert.match(firstUse, /api\("\/api\/admin\/singbox\/apply"/);
+  assert.match(firstUse, /api\("\/api\/admin\/enrollment\/v1\/reconfigure"/);
+  assert.ok(firstUse.indexOf("/api/admin/singbox/apply") < firstUse.indexOf("/api/admin/enrollment/v1/reconfigure"));
+  assert.match(firstUse, /外部访问地址和 1–65535 之间的端口/);
+});
+
+test("server enrollment lists remain available without auth only when server auth is disabled", async () => {
+  const app = await readFile(join(projectRoot, "public", "app.js"), "utf8");
+  const directories = extractFunction(app, "loadEnrollmentDirectories");
+  const requests = extractFunction(app, "loadEnrollmentRequests");
+  for (const body of [directories, requests]) {
+    assert.match(body, /adminAuthEnabled && !adminToken/);
+    assert.match(body, /api\("\/api\/admin\/enrollment\/v1\//);
+    assert.doesNotMatch(body, /!adminToken\) return/);
+  }
+  assert.ok(requests.indexOf("/api/admin/enrollment/v1/directories") < requests.indexOf("/api/admin/enrollment/v1/requests"));
+  assert.match(requests, /if \(!activeDirectories\.length\)/);
+  assert.match(requests, /开放并验证服务器目录后，设备配对申请会显示在这里/);
 });
 
 test("server live refresh updates both device cards and top-level statistics", async () => {
@@ -511,6 +758,204 @@ test("server console can create a device without spending a SyncKey", async () =
   assert.equal(context.calls.length, 1);
   assert.equal(context.actions.at(-1).tone, "warn");
   assert.match(context.actions.at(-1).message, /已存在/);
+});
+
+test("client recovery panels load sequentially on first status load and direction changes", async () => {
+  const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
+  const refreshPanels = extractFunction(app, "refreshSyncRecoveryPanels");
+  const recoveryPanelContextKey = extractFunction(app, "syncRecoveryPanelContextKey");
+  const loadStatusOnce = extractFunction(app, "loadStatusOnce");
+
+  assert.match(loadStatusOnce, /void refreshSyncRecoveryPanels\(\)/);
+  assert.match(app, /on\("direction",\s*"change",\s*refreshSyncRecoveryPanels\)/);
+  assert.doesNotMatch(app, /on\("direction",\s*"change",\s*refreshRecoveryVersions\)/);
+  assert.doesNotMatch(app, /on\("direction",\s*"change",\s*refreshFirstBisyncConflictOperations\)/);
+
+  const calls = [];
+  const rendered = [];
+  let activeRequests = 0;
+  let maxActiveRequests = 0;
+  const job = { id: "job-1", direction: "bidirectional", storageBackend: "sftp", relationId: "rel-1" };
+  const context = {
+    currentJobDraft: null,
+    latestStatusRequestId: 1,
+    latestAppliedStatusRequestId: 0,
+    latestSyncHistory: [],
+    selectedFirstBisyncOperationId: "",
+    setTimeout,
+    rendered,
+    clientApi: {
+      async getStatus() {
+        return { jobs: [job], syncHistory: [], profileSummary: {}, heartbeat: {}, enrollment: {} };
+      },
+      async listRecoveryVersions() {
+        activeRequests += 1;
+        maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
+        calls.push("recovery:start");
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        calls.push("recovery:end");
+        activeRequests -= 1;
+        return { versions: [] };
+      },
+      async listFirstBisyncConflictOperations() {
+        activeRequests += 1;
+        maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
+        calls.push("conflicts:start");
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        calls.push("conflicts:end");
+        activeRequests -= 1;
+        return [];
+      }
+    },
+    elements: {
+      localPath: { dataset: {} },
+      recoveryPanel: {}, recoveryVersions: {}, recoveryStatus: {},
+      firstBisyncRecoveryPanel: {}, firstBisyncOperations: {}, firstBisyncRecoveryStatus: {}
+    },
+    formatError: (error) => error.message
+  };
+  runInNewContext(`
+    function $(id) { return elements[id]; }
+    function writeJob(job) { currentJobDraft = job; }
+    function renderObservedConfig() {}
+    function renderLiveState() {}
+    function renderSyncHistory() {}
+    function renderProfileSummary() {}
+    function renderEnrollmentStatus() {}
+    function renderRemoteTargetSummary() {}
+    function applySyncDirectionAuthorization() {}
+    function renderRecoveryVersions() { elements.recoveryVersions.textContent = "ready"; rendered.push("recovery"); }
+    function renderFirstBisyncConflictOperations() { elements.firstBisyncOperations.textContent = "ready"; rendered.push("conflicts"); }
+    let currentJobDraft = null;
+    let syncRecoveryPanelsRequestInFlight = null;
+    let latestStatusRequestId = 1;
+    let latestAppliedStatusRequestId = 0;
+    let latestSyncHistory = [];
+    ${extractFunction(app, "refreshRecoveryVersions")}
+    ${extractFunction(app, "refreshFirstBisyncConflictOperations")}
+    ${recoveryPanelContextKey}
+    ${refreshPanels}
+    ${loadStatusOnce}
+    globalThis.firstStatusLoad = () => loadStatusOnce(1);
+  `, context);
+
+  await context.firstStatusLoad();
+  for (let attempt = 0; attempt < 20 && rendered.length < 2; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(maxActiveRequests, 1);
+  assert.deepEqual(calls, ["recovery:start", "recovery:end", "conflicts:start", "conflicts:end"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(rendered)), ["recovery", "conflicts"]);
+  assert.equal(context.elements.recoveryVersions.textContent, "ready");
+  assert.equal(context.elements.firstBisyncOperations.textContent, "ready");
+});
+
+test("client recovery request remains alive past the old timeout before conflict listing", async () => {
+  const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
+  const apiStart = app.indexOf("const clientApi = Object.freeze({");
+  const apiEnd = app.indexOf("\n});\n\nasync function requestJson", apiStart);
+  assert.notEqual(apiStart, -1);
+  assert.notEqual(apiEnd, -1);
+  const clientApi = app.slice(apiStart, apiEnd + "\n});".length).replace("const clientApi =", "globalThis.clientApi =");
+  const recoveryPanelContextKey = extractFunction(app, "syncRecoveryPanelContextKey");
+  const requestTimeoutConstants = [...app.matchAll(/const \w+RequestTimeoutMs = \d+;/g)].map(([declaration]) => declaration);
+  assert.ok(requestTimeoutConstants.some((declaration) => declaration.startsWith("const defaultRequestTimeoutMs =")));
+  assert.ok(requestTimeoutConstants.some((declaration) => declaration.startsWith("const syncPreparationRequestTimeoutMs =")));
+
+  let now = 0;
+  let nextTimerId = 1;
+  const timers = new Map();
+  const setVirtualTimeout = (callback, delay) => {
+    const id = nextTimerId++;
+    timers.set(id, { at: now + Number(delay), callback });
+    return id;
+  };
+  const clearVirtualTimeout = (id) => timers.delete(id);
+  const advanceClock = async (milliseconds) => {
+    now += milliseconds;
+    for (const [id, timer] of [...timers].sort((left, right) => left[1].at - right[1].at)) {
+      if (timer.at <= now && timers.delete(id)) timer.callback();
+    }
+    await Promise.resolve();
+  };
+
+  const calls = [];
+  let activeRequests = 0;
+  let maxActiveRequests = 0;
+  let finishRecovery;
+  const context = {
+    AbortController,
+    encodeURIComponent,
+    setTimeout: setVirtualTimeout,
+    clearTimeout: clearVirtualTimeout,
+    fetch: async (path, options) => {
+      calls.push({ path, signal: options.signal });
+      activeRequests += 1;
+      maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
+      if (path.endsWith("/recovery")) {
+        return await new Promise((resolve, reject) => {
+          const onAbort = () => {
+            activeRequests -= 1;
+            const error = new Error("aborted");
+            error.name = "AbortError";
+            reject(error);
+          };
+          options.signal.addEventListener("abort", onAbort, { once: true });
+          finishRecovery = () => {
+            options.signal.removeEventListener("abort", onAbort);
+            activeRequests -= 1;
+            resolve({ ok: true, status: 200, text: async () => JSON.stringify({ versions: [] }) });
+          };
+        });
+      }
+      const response = activeRequests > 1
+        ? { ok: false, status: 409, text: async () => JSON.stringify({ error: "sync_already_running" }) }
+        : { ok: true, status: 200, text: async () => JSON.stringify({ operations: [] }) };
+      activeRequests -= 1;
+      return response;
+    },
+    currentJobDraft: { id: "job-1", direction: "bidirectional", storageBackend: "sftp", relationId: "rel-1" },
+    selectedFirstBisyncOperationId: "",
+    elements: {
+      recoveryPanel: {}, recoveryVersions: {}, recoveryStatus: {},
+      firstBisyncRecoveryPanel: {}, firstBisyncOperations: {}, firstBisyncRecoveryStatus: {}
+    },
+    formatError: (error) => error.message
+  };
+
+  runInNewContext(`
+    async function readJsonOrFallback(response) { return JSON.parse(await response.text()); }
+    ${requestTimeoutConstants.join("\n")}
+    ${extractFunction(app, "requestJson")}
+    ${clientApi}
+    function $(id) { return elements[id]; }
+    function renderRecoveryVersions() { elements.recoveryVersions.textContent = "ready"; }
+    function renderFirstBisyncConflictOperations() { elements.firstBisyncOperations.textContent = "ready"; }
+    let syncRecoveryPanelsRequestInFlight = null;
+    ${extractFunction(app, "refreshRecoveryVersions")}
+    ${extractFunction(app, "refreshFirstBisyncConflictOperations")}
+    ${recoveryPanelContextKey}
+    ${extractFunction(app, "refreshSyncRecoveryPanels")}
+    globalThis.refreshPanels = refreshSyncRecoveryPanels;
+  `, context);
+
+  const panelRefresh = context.refreshPanels();
+  await Promise.resolve();
+  assert.equal(calls.length, 1, `fetches=${JSON.stringify(calls)} status=${context.elements.recoveryStatus.textContent}`);
+  await advanceClock(16000);
+  for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
+  assert.equal(calls[0].signal.aborted, false, "recovery listing should not abort at the former 15-second limit");
+  assert.equal(calls.length, 1, "conflict listing should wait for recovery listing to finish");
+
+  finishRecovery();
+  await panelRefresh;
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].path, /\/recovery$/);
+  assert.equal(calls[1].path, "/api/sync/bisync/conflicts/operations");
+  assert.equal(calls[1].signal.aborted, false);
+  assert.equal(maxActiveRequests, 1, "the backend data-operation lock should never see overlapping list requests");
+  assert.equal(context.elements.recoveryVersions.textContent, "ready");
+  assert.equal(context.elements.firstBisyncOperations.textContent, "ready");
 });
 
 function extractFunction(source, name) {

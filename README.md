@@ -1,77 +1,73 @@
 # Syncraft
 
-> 基于 VLESS 隧道和 S3 兼容存储的自托管 Windows 文件夹同步工具。
+> 将 Windows 普通目录与自托管 N1/Linux 目录双向同步的工具，连接配置码与设备身份验证码分步使用。
 
-Syncraft 把 `sing-box`、`rclone` 和 MinIO/S3 组合成一套可管理的同步服务：管理员在服务端管理设备并签发一次性 SyncKey，Windows 客户端导入后即可创建同步任务。同步流量只交给 rclone 进程走本地代理，不会修改系统代理、路由、DNS、TUN 或防火墙。
+普通目录模式面向 N1/Linux 主机上由管理员开放的既有目录。客户端先导入管理员签发的通道配置码，再提交设备身份申请；管理员独立签发身份验证码后，用户选择获授权的目录和本地文件夹，确认首次双向冲突，再启用自动同步。通道配置码建立接入通道，身份验证码验证设备身份，两者不可互换。同步流量只由受管理的同步进程通过本地数据通道传输，不修改系统代理、路由、DNS、TUN 或防火墙。
 
-当前版本为 **0.3.0-rc.3 产品候选版**，以已验证的产品化基线为起点。它提供 Windows 桌面包、便携包和 Docker 服务端部署包；桌面 ZIP 是默认交付形态，便携 ZIP 用于兼容回退，目前不提供安装程序。
+当前工作以产品化基线为基础，处于产品验收候选阶段，尚不能据此判断已发布或生产就绪。Windows 客户端当前以 ZIP 包形态交付；本仓库没有 Windows 安装程序。N1 普通目录部署入口见 [`server/DEPLOYMENT.md`](server/DEPLOYMENT.md)，其安装脚本为 `server/install-n1-directory-appliance.sh`。本 README 不提供新的公网性能结论。
 
 本版在 rc.1 基线上完成了一轮完整的白盒安全审查与加固：管理 Token 默认强制、凭证不再经命令行传递、密钥文件写入前先收紧 ACL、心跳与 SyncKey 兑换限速、本地接口读写均拒绝跨站浏览器请求、二进制与容器镜像按哈希/digest 钉定。审查结论与逐项实施记录见 [`SECURITY_REVIEW_2026-07-25.md`](SECURITY_REVIEW_2026-07-25.md) 与 [`SECURITY_HARDENING_CLOSEOUT_2026-07-26.md`](SECURITY_HARDENING_CLOSEOUT_2026-07-26.md)。
 
-从更早版本升级时有两处行为变化需注意：服务端 Compose 现在要求显式设置 `MINIO_ROOT_PASSWORD`，缺失即拒绝启动，不再回退到占位密码；未设置管理 Token 时管理接口默认拒绝访问，本地开发需显式设置 `SFSC_ALLOW_NO_ADMIN_TOKEN=1`。
+MinIO/S3 仍作为兼容模式保留，可从 [`server/DEPLOYMENT_AND_MIGRATION_GUIDE.md`](docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md) 查阅旧部署与迁移说明；普通目录模式不要求配置 MinIO。两种 appliance 模式共享状态和端口，不能同时运行，切换前请按部署文档核对服务状态。
 
 ## 用户交付入口
 
 本仓库是开发主仓库，统一维护客户端、服务端、共享协议和测试。普通使用者按目标选择独立交付仓库：
 
-- [Syncraft-server](https://github.com/beizhi97/Syncraft-server)：仅包含服务端部署所需的 Docker Compose、源码与运维说明；克隆后即可部署。
-- [Syncraft-client](https://github.com/beizhi97/Syncraft-client)：仅包含 Windows 下载与使用说明；从 Release 下载已打包的 `SyncraftDesktop.zip`，无需安装 Node.js。
+- [Syncraft-server](https://github.com/beizhi97/Syncraft-server)：服务端交付仓库入口；请核对对应版本是否已发布普通目录部署资产。
+- [Syncraft-client](https://github.com/beizhi97/Syncraft-client)：Windows 客户端交付仓库入口；本候选尚不能据此认定已有公开下载包。
 
-客户端可执行文件始终作为 GitHub Release 资产交付，不提交到任一 Git 仓库的提交历史。两个交付仓库都以本仓库的协议 v1 基线和版本标签为准。
+Windows 客户端当前构建形态是 ZIP，不是安装程序。发布状态须以对应 Release 页面和候选验收记录为准；不要把本地构建产物视为已发布版本。
 
 ## 适合谁使用
 
-- 想在自己的服务器、NAS 或 N1 上部署私有同步服务的个人或小团队。
-- 希望让 Windows 文件夹通过 VLESS 安全访问 MinIO/S3 存储的人。
-- 需要由管理员控制设备、同步空间和一次性授权，而不是把存储密钥散落到客户端的人。
+- 想在 N1/Linux 主机上开放普通目录，并从 Windows 设备双向同步的个人或小团队。
+- 需要分开管理通道接入与设备身份授权，并保留已有任务目录和双向基准的人。
+- 需要保留 MinIO/S3 部署的现有用户；该路径仍作为兼容模式提供。
 
 ## 你会得到什么
 
-- Appliance 服务端：systemd 管理 appliance 与独立 MinIO 容器，appliance 内由 s6 管理 Node、sing-box，并内置 rclone。
-- Windows 客户端：内置 `sing-box.exe` 和 `rclone.exe`，支持上传、下载、双向同步和定时任务；具体可用方向由管理员签发的授权决定。
-- SyncKey 一次性导入：客户端不需要手工填写 S3 密钥、VLESS 参数、远端路径或同步方向。
+- 普通目录 appliance：管理员登记主机上已存在的目录，服务端按授权目录为设备提供数据通道。
+- Windows 客户端：支持普通目录上传、下载、双向同步和定时任务；可用目录与方向由服务端授权决定。
+- 分步首次接入：通道配置码与身份验证码分别导入/输入，身份验证后再选择授权目录和本地文件夹。
+- 首次双向冲突保护：用户预览并保存冲突副本，显式确认后才初始化双向同步。
+- 连接修复和重新配置：客户端可修复连接；服务端一键重配可沿用现有设备、任务目录和同步基准。
 - 同步进度、最近历史、脱敏日志和诊断包。
-- 发布包 SHA-256、`release-manifest.json` 和 CI/preflight 校验。
+- 发布候选使用 ZIP、SHA-256、`release-manifest.json` 和 CI/preflight 校验；每个候选包仍需独立验收。
 
 ## 使用教程
 
-下面的流程按“管理员先部署服务端，Windows 用户再接入客户端”设计。第一次使用时，先从管理员处获取一个新的 SyncKey；不要把完整 SyncKey、VLESS URI、管理 Token 或存储密钥发到聊天群、Issue 或截图中。
+下面按“管理员部署 N1 普通目录服务，Windows 用户完成两码接入”说明。不要把完整通道配置码、身份验证码、管理 Token 或通道连接信息发到聊天群、Issue 或截图中。
 
 ### 1. 管理员部署服务端
 
-准备一台能够运行 Docker 和 systemd 的 Linux 服务器，并确保域名及现有公网入口已指向服务器、管理端口和 VLESS 端口可从客户端网络访问。通用开发环境仍可使用 Compose，N1 正式环境使用 `server/install-n1-appliance.sh` 安装。
+准备一台能够运行 Docker 和 systemd 的 N1/Linux 服务器，并由管理员预先创建要开放的主机目录。按 [普通目录部署文档](server/DEPLOYMENT.md) 准备 `.env.directory`，并使用实际脚本 `server/install-n1-directory-appliance.sh` 安装；可先使用脚本的 `SFSC_DIRECTORY_CHECK_ONLY=1` 检查路径和部署输入。该部署说明描述安装操作，不代表此候选已在用户环境安装或发布。
 
 ```bash
-cd server
-cp .env.example .env
+sudo install -d -m 0750 /srv/syncraft-shares
+sudo cp server/.env.directory.example server/.env.directory
+sudoedit server/.env.directory
 ```
 
-编辑 `server/.env`，至少设置以下值：
+设置非占位管理 Token 和客户端可访问的服务端地址。不要把 S3/MinIO 密钥加到普通目录配置中。安装命令示例：
 
-```text
-SFSC_PUBLIC_HOST=sync.example.com
-SFSC_ADMIN_TOKEN=请替换为高强度随机值
-MINIO_ROOT_PASSWORD=请替换为高强度随机值
+```sh
+sudo sh server/install-n1-directory-appliance.sh /srv/syncraft-shares
 ```
 
-然后启动服务：
+登录管理控制台后按顺序完成：
 
-```bash
-docker compose up --build -d
-```
+1. 开放管理员预先创建的目录。
+2. 填写外部连接地址，应用连接设置并生成通道配置码。
+3. 在 Windows 客户端导入通道配置码并提交设备身份申请。
+4. 为申请选择获授权的目录，签发独立的一次性身份验证码。
+5. 在客户端输入身份验证码，再选择目录和本地文件夹。
 
-访问 `https://sync.example.com/`，使用管理 Token 进入控制台。首次进入时控制台会显示“首次配置”面板，按依赖顺序引导四步：
-
-1. **存储**：填写 S3/MinIO 配置并替换出厂占位口令。就绪判定来自实时探针（endpoint 可达、数据目录可写、口令已更换），不是“填了就算好”。
-2. **隧道**：生成并写入 sing-box 配置，重启 sing-box，然后标记已应用。就绪要求进程存活且端口在监听。
-3. **第一个设备**：注册设备。注意这一步会让隧道重新变为“待应用”——新设备意味着 sing-box 配置多了一个 VLESS 用户，需要回到第二步再应用一次，否则这台设备连不进来。
-4. **签发 SyncKey**：为该设备创建同步空间与一次性 SyncKey。
-
-四步全部就绪后，面板和导航入口自动收起。概览页的服务、隧道、存储三盏灯读的是同一份证据，所以零配置的新部署不会显示为全绿。服务端的完整部署、备份、升级和恢复流程见 [部署与迁移指南](docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md)。
+普通目录安装不会停止或删除 MinIO。若旧 S3 appliance 已启用，切换时需遵循部署文档的显式替换步骤，不要同时启动两种 appliance unit。
 
 ### 2. 校验并启动 Windows 客户端
 
-从 Release 获取 `SyncraftDesktop.zip` 和同名 `.sha256` 文件。先在 PowerShell 中核对 ZIP 的 SHA-256 首列，再解压到用户可写且不会被清理的目录，例如 `C:\Tools\Syncraft\`；不要直接在 ZIP、下载临时目录或系统受保护目录中运行。
+使用经过验收并实际发布的 Windows ZIP；若当前只有本地候选包，则从验收交付目录获取 ZIP 和同名 `.sha256` 文件。先在 PowerShell 中核对 ZIP 的 SHA-256，再解压到用户可写且不会被清理的目录，例如 `C:\Tools\Syncraft\`；不要直接在 ZIP、下载临时目录或系统受保护目录中运行。当前没有 Windows 安装程序。
 
 ```powershell
 Get-FileHash -LiteralPath .\SyncraftDesktop.zip -Algorithm SHA256
@@ -87,29 +83,27 @@ SyncraftDesktop\Syncraft.exe
 
 ![Syncraft 首次启动实际截图](docs/images/client-first-run.png)
 
-### 3. 导入管理员签发的 SyncKey
+### 3. 导入通道配置码并完成身份验证
 
-点击右上角的“设置”，在“服务端配置”中粘贴管理员提供的完整 SyncKey，然后点击“导入”。成功后页面会显示“配置已导入”，并自动保存必要的本地安全配置。
+客户端首次运行时先粘贴通道配置码并提交身份申请。管理员在设备申请列表中选择目录并签发身份验证码；用户再将该验证码输入客户端。通道配置码用于建立连接，身份验证码用于验证设备，不要把身份验证码当作连接配置码导入。
 
-![SyncKey 导入实际截图](docs/images/client-settings-import.png)
-
-请只在本机粘贴 SyncKey。导入失败时，不要反复复制完整密钥到日志或聊天窗口；优先记录页面显示的稳定错误码，并使用“导出诊断包”生成脱敏信息。
+身份验证本身不表示目录授权或同步已成功。客户端只显示服务端已授予的目录；用户再选择该目录和 Windows 本地文件夹。
 
 ### 4. 创建同步任务
 
-导入成功后，主界面真正需要你决定的只有本地文件夹和计划；同步空间与远端目标由 SyncKey 决定，同步方向由授权收窄：
+授权就绪后，选择获授权目录和 Windows 本地文件夹，再设置同步方向与计划：
 
 1. “本地文件夹”：选择或输入需要同步的目录。这是唯一必填项。
-2. “同步空间”：只读显示，内容是管理员签发的同步 ID 和该空间的用途（备份、分发或协作）。客户端不提供切换空间、填写远端路径或选择子目录的入口——远端目标由服务端在签发 SyncKey 时绑定，客户端拿不到也不需要知道物理存储位置。
-3. “同步方向”：只列出当前空间授权给本设备的方向。只授权一个方向时选择器会置灰，并说明方向由服务端决定；这种情况下方向不是一个选择，所以不摆成选择题。
-4. “计划任务”：手动、每隔若干分钟、每天定时或启动时。首次建议保持“手动”，用少量文件验证通过后再设定自动执行。
-5. 点击“保存任务”。需要先确认执行参数时，在“设置”中生成 rclone 命令预览；确认后再点击“开始同步”。
+2. “同步目录”：只显示管理员授权的目录，不允许填写或切换未授权的服务端路径。
+3. “同步方向”：只列出当前目录授权允许的方向。
+4. “计划任务”：首次建议先手动验证。确认目录和首次同步结果无误后，可选择间隔、每日或启动时自动同步；危险同步计划需要明确授权。
+5. 双向同步首次运行前，先查看冲突预览并保存冲突副本，再明确确认初始化。已有 relation/baseline 的任务应继续复用；修复连接或签发新通道码不会要求删除任务或重新建立同步基准。
 
 ![同步任务配置实际截图](docs/images/client-task-setup.png)
 
-> 上图摄于本轮改动之前，仍显示已移除的“远端子目录”“并行文件”“单文件线程”字段，且把同步空间画成下拉框。以正文描述为准；重截流程见 [截图说明](docs/images/README.md)。
+> 上图摄于早期 S3/SyncKey 界面，可能与当前两码接入和目录选择界面不同；以当前候选客户端实际界面和合同为准。重截流程见 [截图说明](docs/images/README.md)。
 
-默认上传和下载使用 `copy`，不会删除目标端多余文件。开启“镜像同步”会删除目标端多余文件，客户端会要求再次确认；双向同步会使用 rclone bisync，首次执行前建议先用少量测试文件验证。
+自动同步按用户选择的 schedule 运行；每次执行前重新验证当前任务授权、安全计划、目录 marker 和既有双向基准。任何需人工确认的首次初始化都不会由调度器自动执行。
 
 ### 5. 查看进度与排障
 
@@ -212,7 +206,7 @@ scripts/             CI、smoke、发布与 N1 自动化
 - [接口合同](docs/INTERFACE_CONTRACT.md)：客户端和服务端 API、SyncKey、profile、心跳与稳定错误码的唯一基线。
 - [API 矩阵](docs/API_MATRIX.md)：双端路由与调用方。
 - [部署与迁移指南](docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md)：Docker、N1、客户端状态恢复、升级和发布。
-- [SyncKey 协议](docs/T_KEY_PROTOCOL.md)：一次性授权的格式和生命周期。
+- [SyncKey 协议](docs/T_KEY_PROTOCOL.md)：旧 S3/MinIO 兼容模式的一次性授权格式和生命周期。
 - [软件设计说明](docs/SOFTWARE_DESIGN_SPEC.md)：整体设计。
 - [内部试运行清单](docs/INTERNAL_TRIAL_CHECKLIST.md) 与 [试点运行手册](docs/PILOT_RUNBOOK.md)：面向小范围试用。
 

@@ -140,6 +140,13 @@ export function isServerStateLockOwnerStale(owner, current = {}) {
 
 function registerRelease({ lockPath, ownerPath, owner, heartbeatMs, onLockLost }) {
   let released = false;
+  const signalHandlers = new Map();
+  const removeProcessListeners = () => {
+    process.removeListener("exit", onExit);
+    for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
+    signalHandlers.clear();
+  };
+  const onExit = () => release();
   const heartbeat = setInterval(() => {
     // Losing ownership means another process reclaimed the lock and is now also
     // writing the same state file. Silently skipping the heartbeat used to leave
@@ -147,6 +154,7 @@ function registerRelease({ lockPath, ownerPath, owner, heartbeatMs, onLockLost }
     if (!isCurrentOwner(ownerPath, owner)) {
       clearInterval(heartbeat);
       released = true;
+      removeProcessListeners();
       const lost = createHttpError("server_state_locked", 409, `Server state lock ownership was lost: ${lockPath}`);
       if (onLockLost) {
         onLockLost(lost);
@@ -168,14 +176,17 @@ function registerRelease({ lockPath, ownerPath, owner, heartbeatMs, onLockLost }
     if (released) return;
     released = true;
     clearInterval(heartbeat);
+    removeProcessListeners();
     if (isCurrentOwner(ownerPath, owner)) rmSync(lockPath, { recursive: true, force: true });
   };
-  process.once("exit", release);
+  process.once("exit", onExit);
   for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.once(signal, () => {
+    const handler = () => {
       release();
       process.exit(0);
-    });
+    };
+    signalHandlers.set(signal, handler);
+    process.once(signal, handler);
   }
   return release;
 }

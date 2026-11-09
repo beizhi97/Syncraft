@@ -1,6 +1,7 @@
 param(
   [string]$OutputDir = "",
   [string]$BundleName = "",
+  [string]$ClientPackageRoot = "",
   [switch]$SkipPreflight,
   [string]$PreflightReportPath = "",
   [string]$PreflightJsonReportPath = "",
@@ -24,11 +25,24 @@ if (!$BundleName) {
 }
 
 $resolvedOutputDir = [System.IO.Path]::GetFullPath($OutputDir)
+$repoRootFull = [System.IO.Path]::GetFullPath("$repoRoot")
+$repoRootPrefix = $repoRootFull.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+$requestedClientPackageRoot = if ($ClientPackageRoot) {
+  if ([System.IO.Path]::IsPathRooted($ClientPackageRoot)) { $ClientPackageRoot } else { Join-Path $repoRootFull $ClientPackageRoot }
+} else {
+  Join-Path $repoRootFull "dist"
+}
+$resolvedClientPackageRoot = [System.IO.Path]::GetFullPath($requestedClientPackageRoot)
+if (!$resolvedClientPackageRoot.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "Refusing to read client packages outside project root: $resolvedClientPackageRoot"
+}
+$resolvedClientPackageRoot = [System.IO.Path]::GetFullPath($resolvedClientPackageRoot)
 $stageRoot = Join-Path $resolvedOutputDir $BundleName
 $zipPath = Join-Path $resolvedOutputDir "$BundleName.zip"
 $checksumPath = Join-Path $resolvedOutputDir "$BundleName.zip.sha256"
 $signaturePath = Join-Path $resolvedOutputDir "$BundleName.zip.sig"
-$preflightReportDir = Join-Path $repoRoot ".tmp\release-bundle\reports"
+$preflightRunId = [Guid]::NewGuid().ToString("N")
+$preflightReportDir = Join-Path $repoRoot ".tmp\release-bundle-$preflightRunId\reports"
 $preflightTextReport = Join-Path $preflightReportDir "preflight.txt"
 $preflightJsonReport = Join-Path $preflightReportDir "preflight.json"
 $preflightEvidenceSource = "strict"
@@ -130,9 +144,11 @@ function Test-BlockedPath($relativePath, $extraPatterns = @()) {
     '(^|/)\.tmp(/|$)',
     '(^|/)dist(/|$)',
     '(^|/)\.env$',
+    '(^|/)__pycache__(/|$)',
+    '\.py[co]$',
     '(^|/)[^/]+\.env\.local$',
     '^server/\.env$',
-    '^server/\.env\.(?!example$)',
+    '^server/\.env\.(?!(?:example|directory\.example)$)',
     '^server/data(/|$)',
     '^server/sing-box/config\.json$',
     '^server/sing-box/.*\.(key|pem)$',
@@ -325,7 +341,7 @@ if (!$SkipPreflight) {
 if (!$SkipPreflight) {
   Info "Running strict release preflight..."
   New-Item -ItemType Directory -Force -Path $preflightReportDir | Out-Null
-  & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\preflight-release.ps1") -ReportPath $preflightTextReport -JsonReportPath $preflightJsonReport
+  & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\preflight-release.ps1") -ReportPath $preflightTextReport -JsonReportPath $preflightJsonReport -ClientPackageRoot $resolvedClientPackageRoot -ReleaseBundleRoot $resolvedOutputDir
   if ($LASTEXITCODE -ne 0) {
     throw "Strict release preflight failed."
   }
@@ -343,16 +359,16 @@ if (!$SkipPreflight) {
 }
 
 $requiredArtifacts = @(
-  @{ Source = Join-Path $repoRoot "dist\SyncraftDesktop.zip"; Destination = "release-artifacts/windows-client/SyncraftDesktop.zip"; Label = "desktop ZIP" },
-  @{ Source = Join-Path $repoRoot "dist\SyncraftDesktop.zip.sha256"; Destination = "release-artifacts/windows-client/SyncraftDesktop.zip.sha256"; Label = "desktop ZIP checksum" },
-  @{ Source = Join-Path $repoRoot "dist\SyncraftDesktop\release-manifest.json"; Destination = "release-artifacts/windows-client/SyncraftDesktop.release-manifest.json"; Label = "desktop release manifest" },
-  @{ Source = Join-Path $repoRoot "dist\SyncraftClient.zip"; Destination = "release-artifacts/windows-client/SyncraftClient.zip"; Label = "portable ZIP" },
-  @{ Source = Join-Path $repoRoot "dist\SyncraftClient.zip.sha256"; Destination = "release-artifacts/windows-client/SyncraftClient.zip.sha256"; Label = "portable ZIP checksum" },
-  @{ Source = Join-Path $repoRoot "dist\SyncraftClient\release-manifest.json"; Destination = "release-artifacts/windows-client/SyncraftClient.release-manifest.json"; Label = "portable release manifest" }
+  @{ Source = Join-Path $resolvedClientPackageRoot "SyncraftDesktop.zip"; Destination = "release-artifacts/windows-client/SyncraftDesktop.zip"; Label = "desktop ZIP" },
+  @{ Source = Join-Path $resolvedClientPackageRoot "SyncraftDesktop.zip.sha256"; Destination = "release-artifacts/windows-client/SyncraftDesktop.zip.sha256"; Label = "desktop ZIP checksum" },
+  @{ Source = Join-Path $resolvedClientPackageRoot "SyncraftDesktop\release-manifest.json"; Destination = "release-artifacts/windows-client/SyncraftDesktop.release-manifest.json"; Label = "desktop release manifest" },
+  @{ Source = Join-Path $resolvedClientPackageRoot "SyncraftClient.zip"; Destination = "release-artifacts/windows-client/SyncraftClient.zip"; Label = "portable ZIP" },
+  @{ Source = Join-Path $resolvedClientPackageRoot "SyncraftClient.zip.sha256"; Destination = "release-artifacts/windows-client/SyncraftClient.zip.sha256"; Label = "portable ZIP checksum" },
+  @{ Source = Join-Path $resolvedClientPackageRoot "SyncraftClient\release-manifest.json"; Destination = "release-artifacts/windows-client/SyncraftClient.release-manifest.json"; Label = "portable release manifest" }
 )
 
-Test-ZipChecksum (Join-Path $repoRoot "dist\SyncraftDesktop.zip") (Join-Path $repoRoot "dist\SyncraftDesktop.zip.sha256")
-Test-ZipChecksum (Join-Path $repoRoot "dist\SyncraftClient.zip") (Join-Path $repoRoot "dist\SyncraftClient.zip.sha256")
+Test-ZipChecksum (Join-Path $resolvedClientPackageRoot "SyncraftDesktop.zip") (Join-Path $resolvedClientPackageRoot "SyncraftDesktop.zip.sha256")
+Test-ZipChecksum (Join-Path $resolvedClientPackageRoot "SyncraftClient.zip") (Join-Path $resolvedClientPackageRoot "SyncraftClient.zip.sha256")
 
 if (Test-Path -LiteralPath $stageRoot) {
   Remove-Item -LiteralPath $stageRoot -Recurse -Force
@@ -371,10 +387,8 @@ foreach ($file in @("README.md", "package.json", "pnpm-lock.yaml", "pnpm-workspa
 foreach ($dir in @("docs", "src", "public", "tests", "scripts", "client")) {
   Copy-TreeIntoBundle (Join-Path $repoRoot $dir) $dir
 }
-New-Item -ItemType Directory -Force -Path (Join-Path $stageRoot "server\sing-box") | Out-Null
-foreach ($file in @("README.md", "Dockerfile", "sing-box.Dockerfile", "sing-box-supervisor.sh", ".env.example", "docker-compose.yml", "docker-compose.n1.yml", "sing-box/config.example.json")) {
-  Copy-FileIntoBundle (Join-Path $repoRoot "server\$file") "server/$($file.Replace('\', '/'))"
-}
+Copy-TreeIntoBundle (Join-Path $repoRoot "native") "native"
+Copy-TreeIntoBundle (Join-Path $repoRoot "server") "server"
 foreach ($artifact in $requiredArtifacts) {
   Copy-FileIntoBundle $artifact.Source $artifact.Destination
 }
@@ -404,8 +418,8 @@ foreach ($artifact in $requiredArtifacts) {
   $artifactSummaries += Get-FileSummary (Join-Path $stageRoot $artifact.Destination) $artifact.Destination
 }
 $clientPackages = Get-ClientPackageBatchSummary `
-  (Join-Path $repoRoot "dist\SyncraftDesktop\release-manifest.json") `
-  (Join-Path $repoRoot "dist\SyncraftClient\release-manifest.json")
+  (Join-Path $resolvedClientPackageRoot "SyncraftDesktop\release-manifest.json") `
+  (Join-Path $resolvedClientPackageRoot "SyncraftClient\release-manifest.json")
 $preflightEvidence = if ($preflightEvidenceSource -eq "skipped") {
   [ordered]@{
     mode = "skipped"
@@ -470,7 +484,12 @@ $bundleManifestPath = Join-Path $stageRoot "release-bundle-manifest.json"
 Write-SafeJsonReport $bundleManifestPath $bundleManifest "release bundle manifest" 6
 
 Assert-StagedReportsSafe
-Compress-Archive -LiteralPath $stageRoot -DestinationPath $zipPath -Force
+$zipBuilder = Join-Path $repoRoot "scripts\lib\release-zip.mjs"
+Require-File $zipBuilder "release ZIP builder"
+& node $zipBuilder $stageRoot $zipPath $BundleName
+if ($LASTEXITCODE -ne 0) {
+  throw "Release ZIP creation failed for $zipPath"
+}
 $bundleHash = Get-Sha256HexFromFile $zipPath
 "$bundleHash  $BundleName.zip" | Set-Content -LiteralPath $checksumPath -Encoding ASCII
 

@@ -25,12 +25,15 @@ test("首次运行就绪度有独立端点，且不把未配置的部署报成�
       PUBLIC_SERVER_URL: baseUrl,
       SERVER_DATA_ROOT: join(tempRoot, "data"),
       SINGBOX_CONFIG_PATH: join(tempRoot, "sing-box", "config.json"),
+      SFSC_ENROLLMENT_BOOTSTRAP_PORT: "0",
       // 服务端默认对缺失管理 token fail-closed；本测试不验证鉴权，显式退出该门槛。
       SFSC_ALLOW_NO_ADMIN_TOKEN: "1",
       // 指向一个必定连不上的存储端点：这就是「全新部署，MinIO 还没起来」。
       S3_ENDPOINT: `http://127.0.0.1:${await getFreePort()}`
     }
   });
+  const startupOutput = [];
+  child.stderr.on("data", chunk => startupOutput.push(String(chunk)));
 
   t.after(async () => {
     if (!child.killed && child.exitCode === null) {
@@ -43,28 +46,32 @@ test("首次运行就绪度有独立端点，且不把未配置的部署报成�
     await rm(tempRoot, { recursive: true, force: true });
   });
 
-  await waitForHealth(baseUrl, child);
+  await waitForHealth(baseUrl, child, () => startupOutput.join(""));
+
+  const healthResponse = await fetch(`${baseUrl}/api/health`);
+  assert.equal(healthResponse.status, 200);
+  const apiHealth = await healthResponse.json();
+  assert.equal(apiHealth.ok, true, "the console API health lamp must not depend on MinIO availability");
+  assert.equal(apiHealth.serviceHealth.ok, true);
 
   const response = await fetch(`${baseUrl}/api/admin/setup`);
   assert.equal(response.status, 200);
   const payload = await response.json();
 
-  assert.deepEqual(Object.keys(payload).sort(), ["complete", "currentStepId", "steps"]);
-  assert.deepEqual(payload.steps.map((step) => step.id), ["storage", "tunnel", "device", "synckey"]);
+  assert.deepEqual(Object.keys(payload).sort(), ["complete", "currentStepId", "enrollmentRevocations", "steps"]);
+  assert.deepEqual(payload.enrollmentRevocations, { ready: true, pendingRecovery: false });
+  assert.deepEqual(payload.steps.map((step) => step.id), ["directory", "repair", "pairing"]);
 
-  // 这是上一轮 P0 的回归锁：零配置部署必须报未完成，第一步停在存储。
+  // MinIO 未启动不再阻塞普通目录首用；没有已验证目录时仍必须保持未完成。
   assert.equal(payload.complete, false);
-  assert.equal(payload.currentStepId, "storage");
+  assert.equal(payload.currentStepId, "directory");
 
   const byId = Object.fromEntries(payload.steps.map((step) => [step.id, step]));
-  assert.equal(byId.storage.ready, false);
-  assert.equal(byId.storage.evidence.endpointReachable, false);
-  // 隧道在零配置下曾被报成「已配置并应用」，因为 protocol 有硬编码默认值。
-  assert.equal(byId.tunnel.ready, false);
-  assert.equal(byId.tunnel.evidence.configWrittenAt, null);
-  assert.equal(byId.tunnel.evidence.appliedAt, null);
-  assert.equal(byId.device.ready, false);
-  assert.equal(byId.synckey.ready, false);
+  assert.equal(byId.directory.evidence.directoryEvidenceAvailable, true);
+  assert.equal(byId.directory.evidence.activeRootCount, 0);
+  assert.equal(byId.repair.ready, false);
+  assert.equal(byId.repair.evidence.configDigestAvailable, false);
+  assert.equal(byId.pairing.ready, false);
 
   // 响应不得夹带凭据：就绪度是给界面点灯用的，不该成为一条泄露通道。
   const serialized = JSON.stringify(payload);
@@ -82,12 +89,12 @@ async function getFreePort() {
   return port;
 }
 
-async function waitForHealth(baseUrl, child) {
+async function waitForHealth(baseUrl, child, getStartupOutput = () => "") {
   const deadline = Date.now() + 5000;
   let lastError = null;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
-      throw new Error(`server exited before health check: ${child.exitCode}`);
+      throw new Error(`server exited before health check: ${child.exitCode}\n${getStartupOutput()}`);
     }
     try {
       const response = await fetch(`${baseUrl}/api/health`);

@@ -1,6 +1,6 @@
 export { parseVlessUri } from "./vless.js";
 export { buildClientSingboxConfig } from "./singbox.js";
-export { buildRclonePreview } from "./rclone.js";
+export { buildRclonePreview, toRcloneBisyncResyncMode } from "./rclone.js";
 export { buildMinioPolicyName, buildMinioPrefixPolicy } from "./minioPolicy.js";
 export { computeNextRun, describeSchedule, normalizeSchedule } from "./scheduler.js";
 export {

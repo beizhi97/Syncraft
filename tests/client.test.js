@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildJobFromProfile,
@@ -12,7 +13,7 @@ import {
   encodeClaimToken,
   encodeImportProfile
 } from "../src/core/index.js";
-import { ensureClientDirs, getClientPaths } from "../client/src/paths.js";
+import { ensureClientDirs, getClientPaths, getFirstBisyncConflictPathsForRelation } from "../client/src/paths.js";
 import { buildDiagnosticBundle } from "../client/src/diagnosticBundle.js";
 import { resolveProfileImport } from "../client/src/profileImport.js";
 import { ManagedProcess, readRecentLogWithMeta, redactLogText, runBuffered } from "../client/src/processRunner.js";
@@ -42,7 +43,9 @@ import {
   saveJobs,
   saveProfile,
   snapshotProfileImportState,
-  writeJsonFile
+  writeJsonFile,
+  writeProtectedJsonFile,
+  protectLocalSecretFile
 } from "../client/src/store.js";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -380,12 +383,15 @@ test("client UI preserves loaded job fields when reading the edit form without e
   assert.match(app, /function jobPreviewFingerprint\(job = \{\}\)/);
   assert.match(app, /lastPreviewJobFingerprint = jobPreviewFingerprint\(job\)/);
   assert.match(app, /title: "确认同步范围"/);
-  // 确认框不再叫「远端目标」：客户端已经没有远端路由可选，能确认的只有同步范围。
-  assert.doesNotMatch(app, /远端目标|远端目录/);
+  // The run confirmation must describe the authorized sync scope, not expose a
+  // user-editable remote route. Other UI copy may correctly call it a remote directory.
+  const runSyncSource = extractBrowserFunctionRange(app, "async function runSync()", "async function stopSync");
+  assert.match(runSyncSource, /title: "确认同步范围"/);
+  assert.doesNotMatch(runSyncSource, /远端目标|远端目录|remoteFolder|serverSpace/);
   assert.doesNotMatch(app, /function updateRemoteTargetDraft\(\)/);
   assert.match(app, /Object\.hasOwn\(job, field\)/);
   assert.match(app, /function renderRemoteTargetSummary\(job = \{\}, profileSummary = null\)/);
-  assert.match(app, /renderRemoteTargetSummary\(status\.jobs\[status\.jobs\.length - 1\] \|\| currentJobDraft, status\.profileSummary\)/);
+  assert.match(app, /renderRemoteTargetSummary\(status\.jobs\[status\.jobs\.length - 1\] \|\| currentJobDraft \|\| \{\}, status\.profileSummary\)/);
   // 摘要从「整个已授权同步内容」这一句占位，换成服务端实际签发的空间、角色与方向。
   // 仓库名和前缀仍然不能出现——不泄露存储路由这条约束没有放松。
   assert.match(app, /\["同步空间", formatSyncSpaceName\(summary\.syncSpace\)\]/);
@@ -448,13 +454,17 @@ test("client empty state import action opens settings", async () => {
   const html = await readFile(join(projectRoot, "client", "public", "index.html"), "utf8");
   const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
 
-  assert.match(html, /id="emptyImportBtn"/);
-  assert.match(html, /<button id="emptyImportBtn">导入 SyncKey<\/button>/);
+  assert.match(html, /id="emptyEnrollmentBtn"/);
+  assert.match(html, /<button id="emptyEnrollmentBtn">开始两码接入<\/button>/);
+  assert.match(html, /开始两码安全接入/);
+  assert.match(html, /粘贴管理员提供的通道配置码，提交身份申请，再输入一次性身份验证码/);
+  assert.match(html, /id="advancedDiagnostics"[\s\S]*兼容模式：旧版 SyncKey/);
+  assert.doesNotMatch(html, /id="advancedDiagnostics"[^>]*open/);
   assert.match(html, /首次使用清单/);
-  assert.match(html, /校验 ZIP 旁边的 \.sha256 文件/);
-  assert.match(html, /解压到桌面或文档等用户可写目录/);
-  assert.match(html, /不要发送完整 SyncKey、sfsc:\/\/ 导入 URI 或 VLESS URI/);
-  assert.match(app, /on\("emptyImportBtn", "click", openSettings\)/);
+  assert.match(html, /首次使用清单[\s\S]*选择管理员授权目录和本地文件夹[\s\S]*首次差异与冲突保护/);
+  assert.match(html, /id="advancedDiagnostics"[\s\S]*SHA-256 文件[\s\S]*解压到用户可写/);
+  assert.match(html, /不要发送通道配置码、一次性身份验证码或完整 VLESS URI/);
+  assert.match(app, /on\("emptyEnrollmentBtn", "click", openSettings\)/);
 });
 
 test("client static shell starts from a real empty state without demo data", async () => {
@@ -462,8 +472,8 @@ test("client static shell starts from a real empty state without demo data", asy
 
   assert.match(html, /组件检测中/);
   assert.match(html, /等待导入/);
-  assert.match(html, /心跳未配置/);
-  assert.match(html, /等待服务端心跳后确认协议兼容性/);
+  assert.match(html, /心跳不适用/);
+  assert.match(html, /id="advancedDiagnostics"[\s\S]*等待服务端心跳后确认协议兼容性/);
   assert.match(html, /暂无同步历史/);
   assert.match(html, /暂无日志/);
   assert.doesNotMatch(html, /value="D:\\/);
@@ -1079,8 +1089,9 @@ test("client UI surfaces heartbeat status from local runtime state", async () =>
   // 心跳与设备恢复的渲染入口已并入 renderLiveState：离线时必须传 null 走未知分支，
   // 而不是不调用从而留下上一次成功轮询的心跳结论。断言仍然钉「渲染器收到哪些参数」。
   assert.match(app, /renderHeartbeat\(unknown \? null : status\.heartbeat, unknown \? null : status\.profileImported\)/);
+  assert.match(app, /function renderHeartbeat\(heartbeat, profileImported\)[\s\S]*?if \(!profileImported\)[\s\S]*?心跳不适用/);
   assert.match(app, /renderDeviceRecovery\(unknown \? null : status\.profileImported, unknown \? null : status\.heartbeat\)/);
-  assert.match(app, /profileStatusDisplay\(status\.profileImported, status\.heartbeat\)/);
+  assert.match(app, /profileStatusDisplay\(status\.profileImported, status\.heartbeat, status\.enrollment\)/);
   assert.match(app, /function heartbeatDisplay/);
   assert.match(app, /function formatHeartbeatDevice\(device\)/);
   assert.match(app, /device\.sync\?\.currentFile \|\| device\.sync\?\.lastRun\?\.currentFile/);
@@ -1092,7 +1103,7 @@ test("client UI surfaces heartbeat status from local runtime state", async () =>
   assert.match(app, /pill: "设备已停用"/);
   assert.match(app, /pill: "设备未登记"/);
   assert.match(app, /请在服务端控制台重新启用此设备/);
-  assert.match(app, /请在服务端重新生成 SyncKey/);
+  assert.match(app, /请联系管理员检查设备接入状态/);
   assert.match(app, /formatError\(\{ code: heartbeat\.remoteErrorCode/);
   assert.match(app, /details\.push\(`服务端：\$\{remoteMessage\}`\)/);
 });
@@ -1173,7 +1184,7 @@ test("client heartbeat normalizes last run summaries through the shared contract
   assert.match(server, /normalizeSyncRun/);
   assert.match(server, /const lastRun = normalizeSyncRun\(syncHistory\[0\] \|\| sync\.lastRun \|\| null\)/);
   assert.match(server, /scheduler: buildSchedulerStatus\(\)/);
-  assert.match(server, /runSync\(body\.job \|\| \{\}, \{ trigger: "manual" \}\)/);
+  assert.match(server, /runSync\(body\.job \|\| \{\}, \{ trigger: "manual", safetyPlanId: body\.safetyPlanId \}\)/);
   assert.match(server, /runSync\(due\.job, \{ trigger: "scheduler" \}\)/);
   assert.match(server, /trigger: normalizeSyncRunTrigger\(run\.trigger\)/);
   assert.match(server, /metrics\.errorCode \|\| exit\.errorCode \|\| "rclone_sync_failed"/);
@@ -1215,15 +1226,16 @@ test("client sync run uses one profile and job snapshot for fingerprint and exec
   assert.match(server, /const runPlan = await buildSyncRunPlan\(job\)/);
   assert.match(server, /function getTunnelUri\(profile\)/);
   assert.match(server, /async function buildSyncRunPlan\(job = \{\}\)/);
-  assert.match(server, /const normalizedJob = buildJobFromProfile\(profile, job\)/);
+  assert.match(server, /const normalizedJob = await normalizeJobWithProfile\(profile, job, \{/);
   assert.match(server, /tunnelUri/);
   assert.match(server, /return buildSyncPreviewFromNormalizedJob\(normalized\)/);
   assert.match(server, /async function runSyncExclusive\(runPlan, options = \{\}\)/);
-  assert.match(runSyncExclusiveSource, /const \{ normalizedJob, tunnelUri \} = runPlan/);
-  assert.match(runSyncExclusiveSource, /const recovery = getSyncRecoveryPaths\(normalizedJob\)/);
-  assert.match(runSyncExclusiveSource, /const preview = \(await buildSyncPreviewFromNormalizedJob\(normalizedJob, \{/);
-  assert.match(runSyncExclusiveSource, /backupDir: recovery\?\.current \|\| ""/);
-  assert.match(runSyncExclusiveSource, /pruneSyncRecovery\(preview, recovery, normalizedJob\.safety\.recoveryRetentionDays\)/);
+  assert.match(runSyncExclusiveSource, /const \{ normalizedJob, tunnelUri, dataTunnel = false \} = runPlan/);
+  assert.match(runSyncExclusiveSource, /const recoveryPaths = normalizedJob\.direction === "bidirectional" && !legacyCompatibleBisync/);
+  assert.match(runSyncExclusiveSource, /let preview = \(await buildSyncPreviewFromNormalizedJob\(normalizedJob, \{/);
+  assert.match(runSyncExclusiveSource, /backupDir: singleDirectionRecovery\?\.current \|\| ""/);
+  assert.match(runSyncExclusiveSource, /prepareSyncRecovery\(/);
+  assert.match(runSyncExclusiveSource, /completeSyncRecoveryRun\(/);
   assert.doesNotMatch(runSyncExclusiveSource, /normalizeJob/);
   assert.doesNotMatch(runSyncExclusiveSource, /readProfile/);
   assert.doesNotMatch(runSyncExclusiveSource, /readStoredProfile/);
@@ -1327,6 +1339,7 @@ test("client confirms sync compatibility warnings before saving or running sync"
 test("client confirmation modal resolves only valid user decisions", async () => {
   const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
   const context = buildConfirmationContext(app);
+  const inputElement = context.elements.confirmTextInput;
 
   const requiredDecision = context.requestConfirmation({
     title: "确认危险同步",
@@ -1339,6 +1352,9 @@ test("client confirmation modal resolves only valid user decisions", async () =>
   assert.equal(context.elements.confirmTitle.textContent, "确认危险同步");
   assert.equal(context.elements.confirmBody.textContent, "该操作会修改目标文件。");
   assert.equal(context.elements.confirmTextLabel.hidden, false);
+  assert.equal(context.elements.confirmTextLabel.textContent, "请输入 确认同步 以确认：");
+  assert.equal(context.elements.confirmTextInput, inputElement);
+  assert.equal(context.elements.confirmTextInput.hidden, false);
   assert.equal(context.elements.confirmTextInput.placeholder, "输入 确认同步");
   assert.equal(context.elements.confirmTextInput.focused, true);
   assert.equal(context.elements.confirmSubmitBtn.textContent, "继续同步");
@@ -1370,12 +1386,28 @@ test("client confirmation modal resolves only valid user decisions", async () =>
   assert.equal(context.elements.confirmGate.classList.contains("open"), false);
   assert.equal(context.elements.confirmMessage.hidden, true);
 
+  const noTextDecision = context.requestConfirmation({
+    title: "确认同步范围",
+    body: "服务器文件夹：团队文档\n本地路径：D:\\Sync\\Team\n同步方向：双向",
+    submitText: "确认并继续"
+  });
+  assert.equal(context.elements.confirmTextLabel.hidden, true);
+  assert.equal(context.elements.confirmTextInput.hidden, true);
+  assert.equal(context.elements.confirmTextInput, inputElement);
+  assert.equal(context.elements.confirmSubmitBtn.textContent, "确认并继续");
+  assert.match(context.elements.confirmBody.textContent, /服务器文件夹：团队文档/);
+  assert.match(context.elements.confirmBody.textContent, /本地路径：D:\\Sync\\Team/);
+  assert.match(context.elements.confirmBody.textContent, /同步方向：双向/);
+  context.cancelConfirmation();
+  assert.equal(await noTextDecision, null);
+
   const cancelDecision = context.requestConfirmation({
     title: "确认协议兼容性风险",
     body: "服务端建议升级。",
     submitText: "继续保存"
   });
   assert.equal(context.elements.confirmTextLabel.hidden, true);
+  assert.equal(context.elements.confirmTextInput.hidden, true);
   assert.equal(context.elements.confirmTextInput.placeholder, "");
   assert.equal(context.elements.confirmSubmitBtn.focused, true);
   context.cancelConfirmation();
@@ -1383,11 +1415,18 @@ test("client confirmation modal resolves only valid user decisions", async () =>
   assert.equal(context.elements.confirmGate.hidden, true);
 
   const supersededDecision = context.requestConfirmation({ requiredText: "旧确认" });
+  assert.equal(context.elements.confirmTextInput.hidden, false);
+  assert.equal(context.elements.confirmTextLabel.hidden, false);
+  assert.equal(context.elements.confirmTextLabel.textContent, "请输入 旧确认 以确认：");
+  assert.equal(context.elements.confirmTextInput, inputElement);
   let supersededValue = "pending";
   supersededDecision.then((value) => {
     supersededValue = value;
   });
   const latestDecision = context.requestConfirmation({ requiredText: "新确认" });
+  assert.equal(context.elements.confirmTextLabel.textContent, "请输入 新确认 以确认：");
+  assert.equal(context.elements.confirmTextInput.hidden, false);
+  assert.equal(context.elements.confirmTextInput, inputElement);
   await Promise.resolve();
   assert.equal(supersededValue, null);
   context.cancelConfirmation();
@@ -1534,6 +1573,140 @@ test("client forwards compatibility confirmation to bidirectional initialization
   const initialization = context.apiCalls.find((call) => call.name === "initializeBidirectionalSync");
   assert.equal(initialization.payload.confirmCompatibilityWarning, true);
   assert.equal(initialization.payload.confirmBidirectionalInitialization, true);
+});
+
+test("authorized SFTP directory and local path survive save, preview, initialization, and ordinary run", async () => {
+  const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
+  const jobFunctions = extractBrowserFunctionRange(
+    app,
+    "function selectAuthorizedDirectory()",
+    "function renderEnrollmentStatus(enrollment = {})"
+  ) + extractBrowserFunctionRange(
+    app,
+    "function readJob()",
+    "function readSchedule()"
+  );
+  const directorySelect = makeFakeElement();
+  directorySelect.value = "relation_authorized_123";
+  const context = {
+    elements: { authorizedDirectorySelect: directorySelect },
+    latestStatus: {
+      enrollment: {
+        authorizedDirectories: [{
+          relationId: "relation_authorized_123",
+          displayName: "团队文档"
+        }]
+      }
+    },
+    currentJobDraft: null,
+    fields: {
+      direction: { value: "upload" },
+      localPath: { value: "D:\\Sync\\Team" },
+      destructiveSync: { checked: false },
+      bisyncInitialMode: { value: "newer" }
+    },
+    actions: []
+  };
+  runInNewContext([
+    "const $ = (id) => elements[id];",
+    "function syncBidirectionalAvailability() {}",
+    "function applySyncDirectionAuthorization() {}",
+    "function syncScheduleControls() {}",
+    "function renderRemoteTargetSummary() {}",
+    "function setAction(text, state) { actions.push({ text, state }); }",
+    "function readDirectionField() { return fields.direction.value; }",
+    "function readBandwidthLimit() { return 'off'; }",
+    "function readSchedule() { return { mode: 'manual' }; }",
+    jobFunctions,
+    "this.selectAuthorizedDirectory = selectAuthorizedDirectory;",
+    "this.readJob = readJob;"
+  ].join("\n"), context);
+
+  context.selectAuthorizedDirectory();
+  const job = context.readJob();
+  assert.equal(job.storageBackend, "sftp");
+  assert.equal(job.relationId, "relation_authorized_123");
+  assert.equal(job.directoryDisplayName, "团队文档");
+  assert.equal(job.direction, "bidirectional");
+  assert.equal(job.localPath, "D:\\Sync\\Team");
+
+  const runContext = buildSaveRunContext(app);
+  runContext.confirmedJob = {
+    job,
+    confirmCompatibilityWarning: false,
+    confirmDestructiveSync: false
+  };
+  runContext.safetyPlans.push(
+    { id: "before-init", deletions: { allowed: true }, bidirectional: { initializationRequired: true } },
+    { id: "after-init", deletions: { allowed: true }, bidirectional: { initializationRequired: false } }
+  );
+  await runContext.saveJob();
+  runContext.confirmedJob = {
+    job,
+    confirmCompatibilityWarning: false,
+    confirmDestructiveSync: false
+  };
+  runContext.lastPreviewJobFingerprint = "";
+  await runContext.runSync();
+
+  assert.equal(runContext.confirmations[0].title, "确认同步范围");
+  assert.match(runContext.confirmations[0].body, /服务器文件夹：团队文档/);
+  assert.match(runContext.confirmations[0].body, /本地路径：D:\\Sync\\Team/);
+  assert.match(runContext.confirmations[0].body, /同步方向：双向/);
+  assert.equal(runContext.confirmations[0].submitText, "确认并继续");
+
+  const calls = runContext.apiCalls;
+  assert.deepEqual(calls.map((call) => call.name), [
+    "saveJob",
+    "createSyncSafetyPlan",
+    "previewFirstBisyncConflicts",
+    "saveFirstBisyncConflicts",
+    "initializeBidirectionalSync",
+    "createSyncSafetyPlan",
+    "runSync"
+  ]);
+  for (const call of calls.filter((item) => item.payload?.job)) {
+    assert.equal(call.payload.job.storageBackend, "sftp");
+    assert.equal(call.payload.job.relationId, "relation_authorized_123");
+    assert.equal(call.payload.job.localPath, "D:\\Sync\\Team");
+  }
+  assert.equal(calls[4].payload.safetyPlanId, "before-init");
+  assert.equal(calls[4].payload.confirmBidirectionalInitialization, true);
+  assert.equal(calls[6].payload.safetyPlanId, "after-init");
+});
+
+test("SFTP marker creation is behind the confirmed initialization plan and regular execution only validates", async () => {
+  const server = await readFile(join(projectRoot, "client", "src", "clientServer.js"), "utf8");
+  const normalizeStart = server.indexOf("async function normalizeJob(job = {}) {");
+  const normalizeEnd = server.indexOf("async function refreshRelationDataAuthorization", normalizeStart);
+  const normalizeJobSource = server.slice(normalizeStart, normalizeEnd);
+  assert.ok(normalizeStart >= 0 && normalizeEnd > normalizeStart);
+  assert.ok(normalizeJobSource.indexOf('if (job.storageBackend === "sftp")') < normalizeJobSource.indexOf("await readProfile(paths)"));
+  assert.match(normalizeJobSource, /return normalizeSftpJobWithAuthorization\(job, payload\)/);
+
+  const planStart = server.indexOf("async function createSyncSafetyPlan(job = {}) {");
+  const planEnd = server.indexOf("async function listSyncFiles", planStart);
+  const safetyPlanSource = server.slice(planStart, planEnd);
+  assert.ok(planStart >= 0 && planEnd > planStart);
+  assert.match(safetyPlanSource, /verifySftpAccessMarkers\(preview, normalizedJob, \{ createMissing: false \}\)/);
+  assert.doesNotMatch(safetyPlanSource, /createMissing: true/);
+
+  const initializeStart = server.indexOf("async function initializeBidirectionalSync(body = {}) {");
+  const initializeEnd = server.indexOf("async function isBisyncInitialized", initializeStart);
+  const initializeSource = server.slice(initializeStart, initializeEnd);
+  assert.ok(initializeStart >= 0 && initializeEnd > initializeStart);
+  const confirmIndex = initializeSource.indexOf("body.confirmBidirectionalInitialization !== true");
+  const planGuardIndex = initializeSource.indexOf("!plan || plan.consumed");
+  const markerCreateIndex = initializeSource.indexOf("verifySftpAccessMarkers(preview, normalizedJob, { createMissing: true })");
+  assert.ok(confirmIndex >= 0 && planGuardIndex > confirmIndex && markerCreateIndex > planGuardIndex);
+  assert.match(initializeSource, /plan\.consumed = true/);
+
+  const runStart = server.indexOf("async function runSyncExclusive(runPlan, options = {}) {");
+  const runEnd = server.indexOf("async function ensureSyncRunBinaries", runStart);
+  const ordinaryRunSource = server.slice(runStart, runEnd);
+  assert.ok(runStart >= 0 && runEnd > runStart);
+  assert.match(ordinaryRunSource, /verifySftpAccessMarkers\(preview, normalizedJob, \{ createMissing: false \}\)/);
+  assert.doesNotMatch(ordinaryRunSource, /createMissing: true/);
 });
 
 test("client reports a pending stop when the sync process outlives the stop timeout", async () => {
@@ -1690,13 +1863,13 @@ test("client status polling reuses in-flight background requests and ignores sta
 test("client long-running UI actions disable buttons and show shutdown failures", async () => {
   const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
 
-  assert.match(app, /async function withBusyAction\(buttonId, action\)/);
-  assert.match(app, /button\?\.dataset\.busy === "1"/);
-  assert.match(app, /button\.disabled = true/);
-  assert.match(app, /button\.setAttribute\("aria-busy", "true"\)/);
-  assert.match(app, /button\.disabled = false/);
-  assert.match(app, /button\.removeAttribute\("aria-busy"\)/);
-  assert.match(app, /delete button\.dataset\.busy/);
+  assert.match(app, /async function withBusyAction\(buttonId, action/);
+  assert.match(app, /elements\.some\(\(element\) => element\.dataset\.busy === "1"\)/);
+  assert.match(app, /element\.disabled = true/);
+  assert.match(app, /element\.setAttribute\("aria-busy", "true"\)/);
+  assert.match(app, /state\.element\.disabled = state\.disabled/);
+  assert.match(app, /state\.element\.removeAttribute\("aria-busy"\)/);
+  assert.match(app, /delete state\.element\.dataset\.busy/);
 
   for (const buttonId of [
     "checkBinsBtn",
@@ -1757,6 +1930,128 @@ test("client busy action ignores duplicate clicks and always restores button sta
   assert.equal(context.elements.runSyncBtn.disabled, false);
   assert.equal(context.elements.runSyncBtn.dataset.busy, undefined);
   assert.equal(context.elements.runSyncBtn.attributes["aria-busy"], undefined);
+});
+
+test("saving a job and starting sync share one UI lock while stop stays available", async () => {
+  const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
+  const saveStart = app.indexOf("async function saveJob()");
+  const saveEnd = app.indexOf("\nasync function refreshRecoveryVersions", saveStart);
+  const runStart = app.indexOf("async function runSync()");
+  const runEnd = app.indexOf("\nfunction formatSyncStartError", runStart);
+  assert.notEqual(saveStart, -1);
+  assert.notEqual(saveEnd, -1);
+  assert.notEqual(runStart, -1);
+  assert.notEqual(runEnd, -1);
+  const context = buildBusyActionContext(app);
+  const saving = deferred();
+  let saveCalls = 0;
+  let runCalls = 0;
+  let stopCalls = 0;
+  const saveResult = context.withBusyAction("saveJobBtn", async () => {
+    saveCalls += 1;
+    return saving.promise;
+  }, "job-sync");
+  assert.equal(context.elements.saveJobBtn.disabled, true);
+  assert.equal(context.elements.runSyncBtn.disabled, true);
+
+  assert.equal(await context.withBusyAction("runSyncBtn", async () => {
+    runCalls += 1;
+  }, "job-sync"), null);
+  assert.equal(runCalls, 0);
+  await context.withBusyAction("stopSyncBtn", async () => {
+    stopCalls += 1;
+  });
+  assert.equal(stopCalls, 1);
+  assert.equal(context.elements.stopSyncBtn.disabled, false);
+
+  saving.resolve("saved");
+  assert.equal(await saveResult, "saved");
+  assert.equal(saveCalls, 1);
+  assert.equal(context.elements.saveJobBtn.disabled, false);
+  assert.equal(context.elements.runSyncBtn.disabled, false);
+
+  const running = deferred();
+  const runResult = context.withBusyAction("runSyncBtn", async () => running.promise, "job-sync");
+  assert.equal(context.elements.saveJobBtn.disabled, true);
+  assert.equal(await context.withBusyAction("saveJobBtn", async () => {
+    saveCalls += 1;
+  }, "job-sync"), null);
+  assert.equal(saveCalls, 1);
+  assert.equal(context.elements.stopSyncBtn.disabled, false);
+  running.reject(new Error("cancelled or failed"));
+  await assert.rejects(runResult, /cancelled or failed/);
+  assert.equal(context.elements.saveJobBtn.disabled, false);
+  assert.equal(context.elements.runSyncBtn.disabled, false);
+
+  assert.match(app.slice(saveStart, saveEnd), /withBusyAction\("saveJobBtn",[\s\S]*\}, "job-sync"\);/);
+  assert.match(app.slice(runStart, runEnd), /withBusyAction\("runSyncBtn",[\s\S]*\}, "job-sync"\);/);
+  assert.match(app.slice(saveStart, saveEnd), /await refreshSyncRecoveryPanels\(\)/);
+  assert.doesNotMatch(app.slice(saveStart, saveEnd), /await refreshRecoveryVersions\(\)|await refreshFirstBisyncConflictOperations\(\)/);
+});
+
+test("initial job load and save share one in-flight recovery panel refresh", async () => {
+  const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
+  const statusStart = app.indexOf("async function loadStatusOnce(requestId)");
+  const statusEnd = app.indexOf("async function checkBinaries", statusStart);
+  assert.notEqual(statusStart, -1);
+  assert.notEqual(statusEnd, -1);
+  assert.match(app.slice(statusStart, statusEnd), /void refreshSyncRecoveryPanels\(\)/);
+  const source = extractBrowserFunctionRange(
+    app,
+    "function refreshSyncRecoveryPanels()",
+    "function renderFirstBisyncConflictOperations"
+  );
+  const contextKeySource = extractBrowserFunctionRange(
+    app,
+    "function syncRecoveryPanelContextKey(job = currentJobDraft)",
+    "function refreshSyncRecoveryPanels"
+  );
+  const recoveryGates = [deferred(), deferred(), deferred()];
+  const conflictGates = [deferred(), deferred(), deferred()];
+  const calls = { recovery: [], conflicts: [] };
+  const context = { calls, recoveryGates, conflictGates };
+  runInNewContext([
+    'let currentJobDraft = { id: "job-1", relationId: "relation-1", localPath: "C:/one", direction: "bidirectional" };',
+    "let syncRecoveryPanelsRequestInFlight = null;",
+    contextKeySource,
+    "function refreshRecoveryVersions() { const index = calls.recovery.push(currentJobDraft.id) - 1; return recoveryGates[index].promise; }",
+    "function refreshFirstBisyncConflictOperations() { const index = calls.conflicts.push(currentJobDraft.id) - 1; return conflictGates[index].promise; }",
+    source,
+    "this.refreshSyncRecoveryPanels = refreshSyncRecoveryPanels;",
+    "this.setCurrentJob = (job) => { currentJobDraft = job; };"
+  ].join("\n"), context);
+  const firstRefresh = context.refreshSyncRecoveryPanels();
+  const saveRefresh = context.refreshSyncRecoveryPanels();
+  assert.deepEqual(calls.recovery, ["job-1"]);
+  assert.deepEqual(calls.conflicts, []);
+  recoveryGates[0].resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.conflicts, ["job-1"]);
+  conflictGates[0].resolve();
+  await Promise.all([firstRefresh, saveRefresh]);
+
+  const oldJobRefresh = context.refreshSyncRecoveryPanels();
+  context.setCurrentJob({ id: "job-2", relationId: "relation-2", localPath: "C:/two", direction: "bidirectional" });
+  const newJobRefresh = context.refreshSyncRecoveryPanels();
+  assert.deepEqual(calls.recovery, ["job-1", "job-1"]);
+  recoveryGates[1].resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.conflicts, ["job-1", "job-2"]);
+  conflictGates[1].resolve();
+  await oldJobRefresh;
+  assert.deepEqual(calls.recovery, ["job-1", "job-1", "job-2"]);
+  recoveryGates[2].resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.conflicts, ["job-1", "job-2", "job-2"]);
+  conflictGates[2].resolve();
+  await newJobRefresh;
+
+  const recoveryStart = app.indexOf("async function refreshRecoveryVersions()");
+  const recoveryEnd = app.indexOf("function renderRecoveryVersions", recoveryStart);
+  const conflictsStart = app.indexOf("async function refreshFirstBisyncConflictOperations()");
+  const conflictsEnd = app.indexOf("function syncRecoveryPanelContextKey", conflictsStart);
+  assert.match(app.slice(recoveryStart, recoveryEnd), /contextKey !== syncRecoveryPanelContextKey\(\)/);
+  assert.match(app.slice(conflictsStart, conflictsEnd), /contextKey !== syncRecoveryPanelContextKey\(\)/);
 });
 
 test("client folder picker uses Electron path and falls back to manual paste", async () => {
@@ -2037,7 +2332,7 @@ test("client local API uses explicit startup-stage error codes", async () => {
   assert.match(server, /createHttpError\("rclone_config_failed"/);
   assert.match(server, /redactLogText/);
   assert.match(server, /const runPlan = await buildSyncRunPlan\(job\)/);
-  assert.match(server, /const \{ normalizedJob, tunnelUri \} = runPlan/);
+  assert.match(server, /const \{ normalizedJob, tunnelUri, dataTunnel = false \} = runPlan/);
   assert.match(server, /const detail = redactRcloneConfigFailureDetail\(remoteConfig, normalizedJob, preview\)/);
   assert.match(server, /parseProtocolRequest\(PROTOCOL_REQUESTS\.CLIENT_SINGBOX_START, await readJson\(req\)\);\s+return json\(res, \{ singbox: await startSingboxFromImportedProfile\(\) \}\)/);
   assert.match(server, /async function startSingboxFromImportedProfile\(\)\s+\{\s+return startSingbox\(\{ useStoredProfile: true \}\);/);
@@ -2452,6 +2747,59 @@ test("client store writes local JSON state atomically", async () => {
   assert.match(store, /"secret_vault_unprotected",\s*\n\s*503/);
 });
 
+test("Windows protected writes keep owner-only ACLs on long relation paths and short paths", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-long-acl-"));
+  try {
+    const relationPathSuffix = join("first-bisync-conflicts", "0".repeat(64), "manifest.json");
+    const targetStatePathLength = 239;
+    const targetDataRootLength = targetStatePathLength - relationPathSuffix.length - 1;
+    const paddingLength = targetDataRootLength - tempRoot.length - 1;
+    assert.ok(paddingLength > 0, `Temporary root is too long to form regression path: ${tempRoot.length}`);
+    const paths = getFirstBisyncConflictPathsForRelation({
+      relationId: "rel_acl_path_regression",
+      baselineId: "baseline_acl_path_regression",
+      rootId: "root_acl_path_regression"
+    }, { dataRoot: join(tempRoot, "d".repeat(paddingLength)) });
+    assert.equal(paths.stateFile.length, targetStatePathLength);
+
+    const protectedState = { fixture: "long relation manifest" };
+    await writeProtectedJsonFile(paths.stateFile, protectedState);
+    assert.deepEqual(JSON.parse(await readFile(paths.stateFile, "utf8")), protectedState);
+
+    const account = process.env.USERDOMAIN
+      ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}`
+      : process.env.USERNAME;
+    assert.ok(account, "Windows account identity must be available for ACL verification");
+    const assertOwnerOnlyAcl = (file, namespaced = false) => {
+      const aclPath = namespaced ? win32.toNamespacedPath(file) : file;
+      const output = execFileSync("icacls.exe", [aclPath], { encoding: "utf8", windowsHide: true });
+      const entries = output.split(/\r?\n/).filter(line => /:\(/.test(line));
+      assert.equal(entries.length, 1, `Expected one explicit ACL entry for ${file}: ${output}`);
+      assert.ok(entries[0].includes(`${account}:(F)`), `Expected full control for ${account}: ${output}`);
+      assert.doesNotMatch(entries[0], /\(I\)/, `ACL must not inherit permissions: ${output}`);
+    };
+    assertOwnerOnlyAcl(paths.stateFile);
+
+    const operationId = "12345678-1234-1234-1234-123456789abc";
+    const stagedPath = join(paths.stagingRoot, `first-bisync-conflict-${operationId}`, "0-local.bin");
+    await mkdir(join(stagedPath, ".."), { recursive: true });
+    await writeFile(stagedPath, "synthetic staged conflict", "utf8");
+    const stagingProtection = await protectLocalSecretFile(stagedPath);
+    assert.equal(stagingProtection.protected, true, JSON.stringify(stagingProtection));
+    assertOwnerOnlyAcl(stagedPath, true);
+
+    const shortPath = join(tempRoot, "short-state.json");
+    const shortState = { fixture: "short path compatibility" };
+    await writeProtectedJsonFile(shortPath, shortState);
+    assert.deepEqual(JSON.parse(await readFile(shortPath, "utf8")), shortState);
+    assertOwnerOnlyAcl(shortPath);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("client store write queues continue after a failed JSON write", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "sfsc-write-queue-failure-"));
   const stateFile = join(tempRoot, "state.json");
@@ -2661,6 +3009,7 @@ test("client store reports corrupt local JSON state without breaking history rea
     jobsFile: join(tempRoot, "jobs.json"),
     secretsFile: join(tempRoot, "secrets.json"),
     syncHistoryFile: join(tempRoot, "sync-history.json"),
+    syncRecoveryRoot: join(tempRoot, "sync-recovery"),
     claimRecoveryFile: join(tempRoot, "claim-recovery.json"),
     heartbeatSnapshotFile: join(tempRoot, "last-successful-heartbeat.json")
   };
@@ -2880,15 +3229,18 @@ test("client refreshes saved jobs when importing a new profile", async () => {
   const store = await readFile(join(projectRoot, "client", "src", "store.js"), "utf8");
   const httpContract = await readFile(join(projectRoot, "tests", "client-http.test.js"), "utf8");
 
-  assert.match(server, /await refreshJobsForProfile\(profile\)/);
+  assert.match(server, /await refreshJobsForProfile\(profile, previousProfile\)/);
   assert.match(server, /function pickUserJobFields/);
-  assert.match(server, /buildJobFromProfile\(profile, pickUserJobFields\(job\)\)/);
+  assert.match(server, /const userFields = pickUserJobFields\(job\)/);
+  assert.match(server, /\.\.\.buildJobFromProfile\(profile, userFields\)/);
+  assert.match(server, /if \(candidateJob\.direction !== "bidirectional"\)/);
   assert.match(server, /saveJobs\(refreshed, paths\)/);
   assert.match(store, /export async function saveJobs/);
   assert.match(httpContract, /previewFromMinimalJob/);
   assert.match(httpContract, /--checkers/);
   assert.match(httpContract, /--s3-chunk-size/);
-  assert.match(httpContract, /socks5:\/\/127\.0\.0\.1:18082/);
+  assert.match(server, /const SFTP_DATA_SOCKS_PORT = 18082/);
+  assert.match(server, /socksProxy: `127\.0\.0\.1:\$\{localProxyPort\}`/);
 });
 
 test("client redeems a claim token into a complete profile", async () => {
@@ -3778,6 +4130,7 @@ function buildConfirmedJobContext(app, options = {}) {
   const fields = {
     direction: { value: jobOptions.direction || "upload" },
     localPath: { value: jobOptions.localPath || "D:\\Work" },
+    bisyncInitialMode: { value: "newer" },
     transfers: { value: String(jobOptions.transfers || 4) },
     streams: { value: String(jobOptions.streams || 8) },
     destructiveSync: { checked: Boolean(jobOptions.destructiveSync) }
@@ -3786,6 +4139,7 @@ function buildConfirmedJobContext(app, options = {}) {
     fields,
     confirmations: [],
     confirmationQueue: [],
+    document: { getElementById: () => ({ value: "" }) },
     latestStatus: compatibility ? { heartbeat: { ok: true, compatibility } } : {},
     currentJobDraft: {
       name: "Home Sync",
@@ -3794,6 +4148,7 @@ function buildConfirmedJobContext(app, options = {}) {
     }
   };
   runInNewContext([
+    "const $ = (id) => document.getElementById(id);",
     "function readPositiveIntegerField(field) { return Number(field.value); }",
     "function readBandwidthLimit() { return 'off'; }",
     "function readSchedule() { return { mode: 'manual' }; }",
@@ -3811,38 +4166,57 @@ function buildConfirmedJobContext(app, options = {}) {
 }
 
 function buildSaveRunContext(app) {
-  const source = extractBrowserFunctionRange(
+  const saveSource = extractBrowserFunctionRange(
     app,
     "async function saveJob",
-    "async function stopSync"
+    "async function refreshRecoveryVersions"
+  );
+  const runSource = extractBrowserFunctionRange(
+    app,
+    "async function runSync()",
+    "function formatSyncStartError"
   );
   const context = {
     confirmedJob: null,
     apiCalls: [],
+    confirmations: [],
     safetyPlans: [],
     actions: [],
+    latestStatus: { enrollment: { authorizedDirectories: [{ relationId: "relation_authorized_123", displayName: "团队文档" }] } },
     loadStatusCalls: 0,
     refreshLogsCalls: 0,
     lastPreviewJobFingerprint: "same"
   };
   runInNewContext([
+    "const elements = new Map();",
+    "const $ = (id) => { if (!elements.has(id)) elements.set(id, { value: '', textContent: '', hidden: false, dataset: {} }); return elements.get(id); };",
     "async function withBusyAction(buttonId, action) { return action(); }",
     "async function readConfirmedJob() { return this.confirmedJob; }",
     "function setAction(text, state) { actions.push({ text, state }); }",
     "function formatError(error) { return error?.message || String(error); }",
-    "function formatDirection(value) { return value || ''; }",
+    "function formatDirection(value) { return value === 'bidirectional' ? '双向' : value || ''; }",
     "function formatBisyncInitialMode(value) { return value || ''; }",
+    "function writeJob() {}",
+    "let selectedFirstBisyncOperationId = '';",
     "function jobPreviewFingerprint() { return 'same'; }",
-    "async function requestConfirmation() { return { confirmed: true }; }",
+    "async function requestConfirmation(options) { confirmations.push(options); return { confirmed: true }; }",
     "async function loadStatus() { this.loadStatusCalls += 1; }",
     "async function refreshLogs() { this.refreshLogsCalls += 1; }",
+    "async function refreshRecoveryVersions() {}",
+    "async function refreshFirstBisyncConflictOperations() {}",
+    "async function refreshSyncRecoveryPanels() {}",
+    "let currentJobDraft = null;",
     "const clientApi = {",
     "  saveJob: async (payload) => { apiCalls.push({ name: 'saveJob', payload }); return { ok: true }; },",
     "  createSyncSafetyPlan: async (payload) => { apiCalls.push({ name: 'createSyncSafetyPlan', payload }); return this.safetyPlans.shift(); },",
+    "  previewFirstBisyncConflicts: async (payload) => { apiCalls.push({ name: 'previewFirstBisyncConflicts', payload }); return { previewId: 'preview-1', conflicts: [] }; },",
+    "  saveFirstBisyncConflicts: async (payload) => { apiCalls.push({ name: 'saveFirstBisyncConflicts', payload }); return { operationId: 'operation-1' }; },",
+    "  resumeFirstBisyncConflictSave: async (payload) => { apiCalls.push({ name: 'resumeFirstBisyncConflictSave', payload }); return { operationId: payload.operationId }; },",
     "  initializeBidirectionalSync: async (payload) => { apiCalls.push({ name: 'initializeBidirectionalSync', payload }); return { ok: true }; },",
     "  runSync: async (payload) => { apiCalls.push({ name: 'runSync', payload }); return { ok: true}; }",
     "};",
-    source,
+    saveSource,
+    runSource,
     "this.saveJob = saveJob;",
     "this.runSync = runSync;"
   ].join("\n"), context);
@@ -3861,12 +4235,15 @@ function buildStopSyncContext(app, stopResponse) {
     refreshLogsCalls: 0
   };
   runInNewContext([
+    "const elements = new Map();",
+    "const $ = (id) => { if (!elements.has(id)) elements.set(id, { value: '', textContent: '', hidden: false, dataset: {} }); return elements.get(id); };",
     "async function withBusyAction(buttonId, action) { return action(); }",
     "function setAction(text, state) { actions.push({ text, state }); }",
     "function formatError(error) { return error?.message || String(error); }",
     `const clientApi = { stopSync: async () => (${JSON.stringify(stopResponse)}) };`,
     "async function loadStatus() { this.loadStatusCalls += 1; }",
     "async function refreshLogs() { this.refreshLogsCalls += 1; }",
+    "async function refreshFirstBisyncConflictOperations() {}",
     source,
     "this.stopSync = stopSync;"
   ].join("\n"), context);
@@ -3931,6 +4308,8 @@ function buildStatusPollingContext(app) {
     // 于是离线分支一执行就 ReferenceError——那正是 catch 分支只重置 6 处、剩下 23 处
     // 留成残影却长期无人发现的原因：这条路径在任何测试里都没真正跑过。
     "function setBodyState() {}",
+    "function renderObservedConfig(status) { $('clientVersion').textContent = status.appVersion; }",
+    "function renderLiveState(status) { $('tunnelStatus').textContent = status === null ? '未知' : status.processes.singbox.running ? '隧道运行中' : '隧道已停止'; }",
     "let currentAction = null;",
     // liveStateSignature 要用它算事件签名。漏桩的表现极具误导性：ReferenceError 被
     // loadStatusOnce 的裸 catch 吞掉，loadStatus 于是返回 undefined，报错长成
@@ -3955,6 +4334,7 @@ function buildStatusPollingContext(app) {
     "function renderScheduler() {}",
     "function renderSyncHistory() {}",
     "function renderProfileSummary() {}",
+    "function renderEnrollmentStatus() {}",
     "function renderRemoteTargetSummary() {}",
     // 方向授权改选择器可选项，与状态轮询的去重/丢弃逻辑无关，这里存根即可。
     "function applySyncDirectionAuthorization() {}",
@@ -3965,6 +4345,192 @@ function buildStatusPollingContext(app) {
   return context;
 }
 
+test("first status render with no saved jobs does not switch the live UI to offline", async () => {
+  const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
+  const loadStatusOnceSource = extractBrowserFunctionRange(
+    app,
+    "async function loadStatusOnce(requestId)",
+    "// ── 活状态与事件"
+  );
+  const remoteTargetSource = extractBrowserFunctionRange(
+    app,
+    "function renderRemoteTargetSummary(job = {}, profileSummary = null)",
+    "function renderSyncSpaceLabel"
+  );
+  const status = makeClientStatus({ appVersion: "0.3.0-rc.3", singboxRunning: false });
+  status.profileImported = false;
+  status.heartbeat = null;
+  status.jobs = [];
+  status.enrollment = { phase: "not-started", authorizedDirectories: [] };
+  const liveStates = [];
+  const target = makeFakeElement();
+  const context = {
+    latestAppliedStatusRequestId: 0,
+    latestStatusRequestId: 1,
+    latestStatus: null,
+    latestSyncHistory: [],
+    currentJobDraft: null,
+    document: { getElementById: (id) => id === "remoteTargetSummary" ? target : makeFakeElement() },
+    clientApi: { getStatus: async () => status },
+    liveStates,
+    status
+  };
+  runInNewContext([
+    "const $ = (id) => document.getElementById(id);",
+    "function renderObservedConfig() {}",
+    "function renderLiveState(value) { liveStates.push(value); }",
+    "function renderSyncHistory() {}",
+    "function renderProfileSummary() {}",
+    "function renderEnrollmentStatus() {}",
+    "function applySyncDirectionAuthorization() {}",
+    "function writeJob() {}",
+    "function renderSummaryRows() {}",
+    "function renderSyncSpaceLabel() {}",
+    remoteTargetSource,
+    loadStatusOnceSource,
+    "this.loadStatusOnce = loadStatusOnce;"
+  ].join("\n"), context);
+
+  const result = await context.loadStatusOnce(1);
+  assert.equal(result, status);
+  assert.deepEqual(Array.from(context.liveStates), [status]);
+});
+
+test("two-code enrollment keeps profileless SFTP visible at the authorized-directory phase", async () => {
+  const app = await readFile(join(projectRoot, "client", "public", "app.js"), "utf8");
+  const html = await readFile(join(projectRoot, "client", "public", "index.html"), "utf8");
+  const css = await readFile(join(projectRoot, "client", "public", "styles.css"), "utf8");
+  const updateBodySource = extractBrowserFunctionRange(
+    app,
+    "function updateBodyState(status = {})",
+    "function currentProcessSyncState"
+  );
+  const profileStatusSource = extractBrowserFunctionRange(
+    app,
+    "function profileStatusDisplay(profileImported, heartbeat, enrollment = {})",
+    "function heartbeatDisplay"
+  );
+  const enrollmentStatusSource = extractBrowserFunctionRange(
+    app,
+    "function renderEnrollmentStatus(enrollment = {})",
+    "function renderEnrollmentSteps(phase)"
+  );
+  const bodyStates = [];
+  const context = { bodyStates };
+  runInNewContext([
+    "function setBodyState(value) { bodyStates.push(value); }",
+    "function currentProcessSyncState(sync = {}) { return String(sync.metrics?.syncState || sync.syncState || sync.state || '').toLowerCase(); }",
+    updateBodySource,
+    profileStatusSource,
+    "this.updateBodyState = updateBodyState;",
+    "this.profileStatusDisplay = profileStatusDisplay;"
+  ].join("\n"), context);
+
+  const enrollmentCases = [
+    { phase: "not-started", body: "state-empty", pill: "等待两码接入", state: "" },
+    { phase: "channel-verified", body: "state-empty", pill: "通道已验证", state: "good" },
+    { phase: "request-pending", body: "state-empty", pill: "等待管理员验证码", state: "warn" },
+    {
+      phase: "identity-verified-awaiting-directory-authorization",
+      authorizedDirectories: [],
+      body: "state-normal",
+      pill: "等待目录授权",
+      state: "warn"
+    },
+    {
+      phase: "identity-verified-awaiting-directory-authorization",
+      authorizedDirectories: [{ relationId: "relation_1" }],
+      body: "state-normal",
+      pill: "目录授权已就绪",
+      state: "good"
+    },
+    { phase: "local-state-error", body: "state-error", pill: "接入状态异常", state: "bad" }
+  ];
+  for (const item of enrollmentCases) {
+    const status = {
+      profileImported: false,
+      enrollment: { phase: item.phase, authorizedDirectories: item.authorizedDirectories || [] },
+      processes: { sync: { running: false, metrics: { syncState: "idle" } } },
+      lastSync: null
+    };
+    context.bodyStates.length = 0;
+    context.updateBodyState(status);
+    assert.equal(context.bodyStates.at(-1), item.body, item.phase);
+    const profileStatus = context.profileStatusDisplay(false, null, status.enrollment);
+    assert.equal(profileStatus.pill, item.pill, item.phase);
+    assert.equal(profileStatus.state, item.state, item.phase);
+    assert.equal(status.profileImported, false);
+  }
+
+  const summaryTarget = {
+    children: [],
+    replaceChildren() { this.children = []; },
+    append(child) { this.children.push(child); }
+  };
+  const summaryElements = {
+    enrollmentTrustSummary: summaryTarget,
+    directoryAuthorizationPanel: makeFakeElement(),
+    submitEnrollmentRequestBtn: makeFakeElement(),
+    enrollmentVerifyStep: makeFakeElement(),
+    authorizedContentValue: makeFakeElement()
+  };
+  const summaryContext = {
+    elements: summaryElements,
+    document: {
+      createElement() {
+        const value = { textContent: "" };
+        return {
+          className: "",
+          innerHTML: "",
+          querySelector(selector) {
+            assert.equal(selector, ".v");
+            return value;
+          },
+          value
+        };
+      }
+    }
+  };
+  runInNewContext([
+    "function $(id) { return elements[id]; }",
+    "function renderEmptyEnrollmentState() {}",
+    "function renderEnrollmentSteps() {}",
+    "function renderAuthorizedDirectories() {}",
+    "function renderAuthorizedContent() {}",
+    "function renderRemoteTargetSummary() {}",
+    enrollmentStatusSource,
+    "this.renderEnrollmentStatus = renderEnrollmentStatus;"
+  ].join("\n"), summaryContext);
+  const summaryCases = [
+    {
+      authorizedDirectories: [],
+      summary: "身份已验证，等待目录授权",
+      pill: "等待目录授权"
+    },
+    {
+      authorizedDirectories: [{ relationId: "relation_1", displayName: "团队文档" }],
+      summary: "目录授权已就绪",
+      pill: "目录授权已就绪"
+    }
+  ];
+  for (const item of summaryCases) {
+    summaryTarget.children = [];
+    const enrollment = {
+      phase: "identity-verified-awaiting-directory-authorization",
+      authorizedDirectories: item.authorizedDirectories
+    };
+    summaryContext.renderEnrollmentStatus(enrollment);
+    assert.equal(summaryTarget.children[0].value.textContent, item.summary);
+    assert.equal(context.profileStatusDisplay(false, null, enrollment).pill, item.pill);
+  }
+
+  const mainMarkup = html.slice(html.indexOf("<main class=\"main-wrap\">"), html.indexOf("Settings Drawer"));
+  assert.doesNotMatch(mainMarkup, /SyncKey/);
+  assert.match(html, /兼容模式：旧版 SyncKey/);
+  assert.match(app, /directoryPanel\.hidden = phase !== "identity-verified-awaiting-directory-authorization"/);
+  assert.match(css, /body\.state-empty \.task-panel\{display:none\}/);
+});
+
 function buildBusyActionContext(app) {
   const source = extractBrowserFunctionRange(
     app,
@@ -3972,7 +4538,9 @@ function buildBusyActionContext(app) {
     "function setVisibility"
   );
   const elements = {
-    runSyncBtn: makeFakeElement()
+    saveJobBtn: makeFakeElement(),
+    runSyncBtn: makeFakeElement(),
+    stopSyncBtn: makeFakeElement()
   };
   const context = {
     elements,
@@ -3982,6 +4550,7 @@ function buildBusyActionContext(app) {
   };
   runInNewContext([
     "const $ = (id) => document.getElementById(id);",
+    "const activeBusyActionGroups = new Set();",
     source,
     "this.withBusyAction = withBusyAction;"
   ].join("\n"), context);
@@ -4107,6 +4676,9 @@ function makeFakeElement() {
     },
     setAttribute(name, value) {
       attributes[name] = String(value);
+    },
+    getAttribute(name) {
+      return attributes[name] ?? null;
     },
     removeAttribute(name) {
       delete attributes[name];

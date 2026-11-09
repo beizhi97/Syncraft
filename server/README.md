@@ -1,5 +1,7 @@
 # Server Appliance
 
+> **普通目录 N1 部署请看 [DEPLOYMENT.md](DEPLOYMENT.md)。** 本 README 后续保留的是旧 S3/MinIO 兼容安装和 Compose 说明；`install-n1-appliance.sh` 仍安装该兼容模式。
+
 The N1 server runs as a systemd-managed appliance container. The appliance image contains Node.js, sing-box, rclone, MinIO Client, and s6-overlay. MinIO remains a separate container and keeps its own storage lifecycle.
 
 The two boot units are:

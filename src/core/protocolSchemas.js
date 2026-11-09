@@ -3,12 +3,24 @@ import { requireSyncSpaceMode } from "./syncSpaceMode.js";
 
 export const PROTOCOL_REQUESTS = Object.freeze({
   CLIENT_BINARIES_CHECK: "client.binariesCheck",
+  CLIENT_CONNECTION_REPAIR: "client.connectionRepair",
+  CLIENT_ENROLLMENT_CHANNEL_IMPORT: "client.enrollmentChannelImport",
+  CLIENT_ENROLLMENT_DATA_AUTHORIZATIONS_REFRESH: "client.enrollmentDataAuthorizationsRefresh",
+  CLIENT_ENROLLMENT_REQUEST: "client.enrollmentRequest",
+  CLIENT_ENROLLMENT_CONSUME: "client.enrollmentConsume",
   CLIENT_JOB_SAVE: "client.jobSave",
   CLIENT_PROFILE_IMPORT: "client.profileImport",
   CLIENT_SHUTDOWN: "client.shutdown",
   CLIENT_SINGBOX_START: "client.singboxStart",
   CLIENT_SINGBOX_STOP: "client.singboxStop",
   CLIENT_SYNC_BISYNC_INITIALIZE: "client.syncBisyncInitialize",
+  CLIENT_SYNC_BISYNC_CONFLICT_PREVIEW: "client.syncBisyncConflictPreview",
+  CLIENT_SYNC_BISYNC_CONFLICT_SAVE: "client.syncBisyncConflictSave",
+  CLIENT_SYNC_BISYNC_CONFLICT_OPERATIONS: "client.syncBisyncConflictOperations",
+  CLIENT_SYNC_BISYNC_CONFLICT_RESUME: "client.syncBisyncConflictResume",
+  CLIENT_SYNC_RECOVERY_RESTORE_PREVIEW: "client.syncRecoveryRestorePreview",
+  CLIENT_SYNC_RECOVERY_RESTORE: "client.syncRecoveryRestore",
+  CLIENT_SYNC_RECOVERY_RESTORE_CANCEL: "client.syncRecoveryRestoreCancel",
   CLIENT_SYNC_SAFETY_PLAN: "client.syncSafetyPlan",
   CLIENT_SYNC_PREVIEW: "client.syncPreview",
   CLIENT_SYNC_RUN: "client.syncRun",
@@ -19,6 +31,11 @@ export const PROTOCOL_REQUESTS = Object.freeze({
   SERVER_ADMIN_STORAGE_BUCKET_DISABLE: "server.admin.storageBucketDisable",
   SERVER_ADMIN_STORAGE_BUCKET_ENABLE: "server.admin.storageBucketEnable",
   SERVER_ADMIN_STORAGE_BUCKET_REFRESH: "server.admin.storageBucketRefresh",
+  SERVER_ADMIN_ENROLLMENT_DIRECTORY_REGISTER: "server.admin.enrollmentDirectoryRegister",
+  SERVER_ADMIN_ENROLLMENT_CHANNEL_CODE: "server.admin.enrollmentChannelCode",
+  SERVER_ADMIN_ENROLLMENT_RECONFIGURE: "server.admin.enrollmentReconfigure",
+  SERVER_ADMIN_ENROLLMENT_REVOKE: "server.admin.enrollmentRevoke",
+  SERVER_ADMIN_ENROLLMENT_ISSUE: "server.admin.enrollmentIssue",
   SERVER_ADMIN_STORAGE_SAVE: "server.admin.storageSave",
   SERVER_ADMIN_SYNC_SPACE_CREATE: "server.admin.syncSpaceCreate",
   SERVER_ADMIN_SINGBOX_APPLY: "server.admin.singboxApply",
@@ -76,7 +93,12 @@ const CLIENT_JOB_STRING_FIELDS = [
   "s3ChunkSize",
   "chunkSize",
   "cutoff",
-  "bandwidthLimit"
+  "bandwidthLimit",
+  "clientName",
+  "relationId",
+  "remoteName",
+  "rootPath",
+  "storageBackend"
 ];
 const CLIENT_JOB_JSON_FIELDS = [
   "localProxyPort",
@@ -166,6 +188,16 @@ export function parseProtocolRequest(name, body = {}) {
   switch (name) {
     case PROTOCOL_REQUESTS.CLIENT_BINARIES_CHECK:
       return parseEmptyObjectRequest(body, "client binaries check request");
+    case PROTOCOL_REQUESTS.CLIENT_CONNECTION_REPAIR:
+      return parseClientConnectionRepairRequest(body);
+    case PROTOCOL_REQUESTS.CLIENT_ENROLLMENT_CHANNEL_IMPORT:
+      return parseClientEnrollmentCodeRequest(body, "client enrollment channel import request");
+    case PROTOCOL_REQUESTS.CLIENT_ENROLLMENT_REQUEST:
+      return parseEmptyObjectRequest(body, "client enrollment request");
+    case PROTOCOL_REQUESTS.CLIENT_ENROLLMENT_DATA_AUTHORIZATIONS_REFRESH:
+      return parseEmptyObjectRequest(body, "client enrollment data authorizations refresh request");
+    case PROTOCOL_REQUESTS.CLIENT_ENROLLMENT_CONSUME:
+      return parseClientEnrollmentCodeRequest(body, "client enrollment code consumption request");
     case PROTOCOL_REQUESTS.CLIENT_SHUTDOWN:
       return parseEmptyObjectRequest(body, "client shutdown request");
     case PROTOCOL_REQUESTS.CLIENT_PROFILE_IMPORT:
@@ -184,8 +216,23 @@ export function parseProtocolRequest(name, body = {}) {
       return parseClientJobRequest(body, {
         label: "client bisync initialize request",
         allowSafetyPlanId: true,
-        allowBisyncInitializationConfirmation: true
+        allowBisyncInitializationConfirmation: true,
+        allowFirstConflictOperationId: true
       });
+    case PROTOCOL_REQUESTS.CLIENT_SYNC_BISYNC_CONFLICT_PREVIEW:
+      return parseStrictClientJobRequest(body, ["job"], "client bisync conflict preview request");
+    case PROTOCOL_REQUESTS.CLIENT_SYNC_BISYNC_CONFLICT_SAVE:
+      return parseStrictClientJobRequest(body, ["job", "previewId"], "client bisync conflict save request");
+    case PROTOCOL_REQUESTS.CLIENT_SYNC_BISYNC_CONFLICT_OPERATIONS:
+      return parseStrictClientJobRequest(body, ["job"], "client bisync conflict operations request");
+    case PROTOCOL_REQUESTS.CLIENT_SYNC_BISYNC_CONFLICT_RESUME:
+      return parseStrictClientJobRequest(body, ["job", "operationId"], "client bisync conflict resume request");
+    case PROTOCOL_REQUESTS.CLIENT_SYNC_RECOVERY_RESTORE_PREVIEW:
+      return parseStrictSyncRecoveryRestorePreviewRequest(body);
+    case PROTOCOL_REQUESTS.CLIENT_SYNC_RECOVERY_RESTORE:
+      return parseStrictSyncRecoveryPreviewIdRequest(body, "client sync recovery restore request");
+    case PROTOCOL_REQUESTS.CLIENT_SYNC_RECOVERY_RESTORE_CANCEL:
+      return parseStrictSyncRecoveryPreviewIdRequest(body, "client sync recovery restore cancel request");
     case PROTOCOL_REQUESTS.CLIENT_SYNC_RUN:
       return parseClientJobRequest(body, { label: "client sync run request", allowSafetyPlanId: true });
     case PROTOCOL_REQUESTS.CLIENT_SYNC_STOP:
@@ -198,6 +245,16 @@ export function parseProtocolRequest(name, body = {}) {
       return parseServerAdminStorageBucketCreateRequest(body);
     case PROTOCOL_REQUESTS.SERVER_ADMIN_STORAGE_BUCKET_REFRESH:
       return parseEmptyObjectRequest(body, "admin storage bucket refresh request");
+    case PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_DIRECTORY_REGISTER:
+      return parseServerAdminEnrollmentDirectoryRequest(body);
+    case PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_CHANNEL_CODE:
+      return parseEmptyObjectRequest(body, "admin enrollment channel-code request");
+    case PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_RECONFIGURE:
+      return parseServerAdminEnrollmentReconfigureRequest(body);
+    case PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_REVOKE:
+      return parseServerAdminEnrollmentRevokeRequest(body);
+    case PROTOCOL_REQUESTS.SERVER_ADMIN_ENROLLMENT_ISSUE:
+      return parseServerAdminEnrollmentIssueRequest(body);
     case PROTOCOL_REQUESTS.SERVER_ADMIN_STORAGE_BUCKET_ENABLE:
       return parseServerAdminStorageBucketToggleRequest(body, "admin storage bucket enable request");
     case PROTOCOL_REQUESTS.SERVER_ADMIN_STORAGE_BUCKET_DISABLE:
@@ -246,6 +303,58 @@ export function parseProtocolRequest(name, body = {}) {
   }
 }
 
+function parseStrictSyncRecoveryRestorePreviewRequest(body) {
+  const input = requirePlainObject(body, "client sync recovery restore preview request");
+  if (Object.keys(input).some(field => !["runId", "side", "path", "destinationPath"].includes(field))) {
+    throw createHttpError("validation_failed", 400, "client sync recovery restore preview request contains unsupported fields");
+  }
+  const output = {};
+  copyOptionalStringFields(input, output, ["runId", "side", "path", "destinationPath"]);
+  if (!output.runId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(output.runId)
+    || !["path1", "path2"].includes(output.side) || !output.path || !output.destinationPath) {
+    throw createHttpError("validation_failed", 400, "client sync recovery restore preview request is incomplete or invalid");
+  }
+  return output;
+}
+
+function parseStrictSyncRecoveryPreviewIdRequest(body, label) {
+  const input = requirePlainObject(body, label);
+  if (Object.keys(input).some(field => field !== "previewId")) {
+    throw createHttpError("validation_failed", 400, `${label} contains unsupported fields`);
+  }
+  const output = {};
+  copyOptionalStringFields(input, output, ["previewId"]);
+  if (!output.previewId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(output.previewId)) {
+    throw createHttpError("validation_failed", 400, `${label} requires a UUID previewId`);
+  }
+  return output;
+}
+
+function parseClientConnectionRepairRequest(body) {
+  const label = "client connection repair request";
+  const input = requirePlainObject(body, label);
+  const allowed = ["operationId", "relationId", "jobId"];
+  if (Object.keys(input).some(field => !allowed.includes(field))) {
+    throw createHttpError("validation_failed", 400, `${label} contains unsupported fields`);
+  }
+  const output = {};
+  copyOptionalStringFields(input, output, allowed);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(output.operationId || "")
+    || !/^[A-Za-z0-9_-]{1,128}$/.test(output.relationId || "")
+    || (Object.hasOwn(input, "jobId") && !output.jobId)) {
+    throw createHttpError("validation_failed", 400, `${label} is incomplete or invalid`);
+  }
+  return output;
+}
+
+function parseClientEnrollmentCodeRequest(body, label) {
+  const input = requirePlainObject(body, label);
+  const code = input.code;
+  if (typeof code !== "string") throw createHttpError("validation_failed", 400, `${label} code must be a string`);
+  if (!code.trim()) throw createHttpError("validation_failed", 400, `${label} code is required`);
+  return { code: code.trim() };
+}
+
 function parseClientProfileImportRequest(body) {
   const input = requirePlainObject(body, "client profile import request");
   const output = {};
@@ -283,6 +392,31 @@ function parseClientJobRequest(body, options = {}) {
   }
   if (options.allowBisyncInitializationConfirmation) {
     copyOptionalBooleanField(input, output, "confirmBidirectionalInitialization");
+  }
+  if (options.allowFirstConflictOperationId) {
+    copyOptionalStringFields(input, output, ["conflictOperationId"]);
+    if (output.conflictOperationId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(output.conflictOperationId)) {
+      throw createHttpError("validation_failed", 400, "conflictOperationId must be a UUID");
+    }
+  }
+  return output;
+}
+
+function parseStrictClientJobRequest(body, fields, label) {
+  const input = requirePlainObject(body, label);
+  if (Object.keys(input).some(field => !fields.includes(field)) || !input.job) {
+    throw createHttpError("validation_failed", 400, `${label} contains unsupported or missing fields`);
+  }
+  const output = { job: parseClientJobPayload(input.job, `${label}.job`) };
+  if (fields.includes("previewId")) {
+    copyOptionalStringFields(input, output, ["previewId"]);
+    if (!output.previewId) throw createHttpError("validation_failed", 400, `${label} requires previewId`);
+  }
+  if (fields.includes("operationId")) {
+    copyOptionalStringFields(input, output, ["operationId"]);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(output.operationId || "")) {
+      throw createHttpError("validation_failed", 400, `${label} requires a UUID operationId`);
+    }
   }
   return output;
 }
@@ -351,6 +485,84 @@ function parseEmptyObjectRequest(body, label) {
     throw createHttpError("validation_failed", 400, `${label} must be an empty JSON object`);
   }
   return {};
+}
+
+function parseServerAdminEnrollmentDirectoryRequest(body) {
+  const input = requirePlainObject(body, "admin enrollment directory request");
+  if (Object.keys(input).sort().join(",") !== "path") {
+    throw createHttpError("validation_failed", 400, "Directory request must contain only path");
+  }
+  if (typeof input.path !== "string" || input.path.trim().length === 0 || input.path.length > 4096) {
+    throw createHttpError("validation_failed", 400, "path must be a non-empty directory path");
+  }
+  return { path: input.path.trim() };
+}
+
+function parseServerAdminEnrollmentIssueRequest(body) {
+  const input = requirePlainObject(body, "admin enrollment issue request");
+  const fields = Object.keys(input);
+  if (fields.length === 1 && fields[0] === "rootId") {
+    if (typeof input.rootId !== "string" || !/^root_[A-Za-z0-9_-]{16,128}$/.test(input.rootId)) {
+      throw createHttpError("validation_failed", 400, "rootId is invalid");
+    }
+    return { rootId: input.rootId };
+  }
+  if (fields.length === 1 && fields[0] === "rootIds") {
+    if (!Array.isArray(input.rootIds) || input.rootIds.length === 0
+      || input.rootIds.some(rootId => typeof rootId !== "string" || !/^root_[A-Za-z0-9_-]{16,128}$/.test(rootId))
+      || new Set(input.rootIds).size !== input.rootIds.length) {
+      throw createHttpError("validation_failed", 400, "rootIds must be a non-empty array of unique valid root IDs");
+    }
+    return { rootIds: [...input.rootIds] };
+  }
+  throw createHttpError("validation_failed", 400, "Enrollment issue request must contain only rootId or rootIds");
+}
+
+function parseServerAdminEnrollmentReconfigureRequest(body) {
+  const input = requirePlainObject(body, "admin enrollment reconfigure request");
+  const allowed = new Set(["operationId", "publicHost", "publicPort"]);
+  if (Object.keys(input).some(key => !allowed.has(key))
+    || typeof input.operationId !== "string"
+    || !/^op_[A-Za-z0-9_-]{16,128}$/.test(input.operationId)) {
+    throw createHttpError("enrollment_reconfigure_invalid", 400, "Reconfiguration operation ID or fields are invalid");
+  }
+  const output = { operationId: input.operationId };
+  if (Object.hasOwn(input, "publicHost")) {
+    if (typeof input.publicHost !== "string" || input.publicHost.trim().length === 0 || input.publicHost.trim().length > 253) {
+      throw createHttpError("enrollment_reconfigure_invalid", 400, "Public host is invalid");
+    }
+    output.publicHost = input.publicHost.trim();
+  }
+  if (Object.hasOwn(input, "publicPort")) {
+    if (!Number.isInteger(input.publicPort) || input.publicPort < 1 || input.publicPort > 65535) {
+      throw createHttpError("enrollment_reconfigure_invalid", 400, "Public port is invalid");
+    }
+    output.publicPort = input.publicPort;
+  }
+  return output;
+}
+
+function parseServerAdminEnrollmentRevokeRequest(body) {
+  const input = requirePlainObject(body, "admin enrollment revoke request");
+  if (Object.keys(input).sort().join(",") !== "operationId,target"
+    || typeof input.operationId !== "string"
+    || !/^revop_[A-Za-z0-9_-]{16,96}$/.test(input.operationId)) {
+    throw createHttpError("enrollment_revocation_invalid", 400, "Revocation operation ID or fields are invalid");
+  }
+  const target = requirePlainObject(input.target, "admin enrollment revocation target");
+  if (target.kind === "relation"
+    && Object.keys(target).sort().join(",") === "kind,relationId"
+    && typeof target.relationId === "string"
+    && /^rel_[A-Za-z0-9_-]{16,128}$/.test(target.relationId)) {
+    return { operationId: input.operationId, target: { kind: "relation", relationId: target.relationId } };
+  }
+  if (target.kind === "device"
+    && Object.keys(target).sort().join(",") === "deviceId,kind"
+    && typeof target.deviceId === "string"
+    && /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/.test(target.deviceId)) {
+    return { operationId: input.operationId, target: { kind: "device", deviceId: target.deviceId } };
+  }
+  throw createHttpError("enrollment_revocation_invalid", 400, "Revocation target is invalid");
 }
 
 function parseServerAdminStorageBucketToggleRequest(body, label) {

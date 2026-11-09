@@ -10,11 +10,9 @@ Restart=always
 RestartSec=5
 TimeoutStartSec=120
 TimeoutStopSec=45
-ExecStartPre=-/usr/bin/docker rm -f sfsc-appliance
-ExecStart=/usr/bin/docker run --name sfsc-appliance --network host --env-file /opt/sfsc-test/server/.env -e HOST=0.0.0.0 -e PORT=5177 -e SERVER_DATA_ROOT=/data/app -e SINGBOX_CONFIG_PATH=/data/sing-box/config.json -e SINGBOX_CONTROL_DIR=/data/control -e SINGBOX_LISTEN_PORT=45679 -e VLESS_PORT=45679 -e RCLONE_BIN=/usr/local/bin/rclone -e S3_ENDPOINT=http://127.0.0.1:9000 -v /opt/sfsc-test/server/data/app:/data/app -v /opt/sfsc-test/server/data/control:/data/control -v /opt/sfsc-test/server/sing-box:/data/sing-box sfsc-appliance:local
-ExecStop=/usr/bin/docker stop --time 30 sfsc-appliance
-ExecStopPost=-/usr/bin/docker rm -f sfsc-appliance
+KillMode=mixed
+KillSignal=SIGTERM
+ExecStart=/usr/bin/python3 /opt/sfsc-test/server/runtime/sfsc-runtime-launcher --ledger-root /var/lib/sfsc-runtime --state-path /opt/sfsc-test/server/data/app/relation-services.json --image sfsc-appliance:local --deployment-id sfsc-appliance --env-file /opt/sfsc-test/server/.env --env HOST=0.0.0.0 --env PORT=5177 --env SERVER_DATA_ROOT=/data/app --env SINGBOX_CONFIG_PATH=/data/sing-box/config.json --env SINGBOX_CONTROL_DIR=/data/control --env SINGBOX_LISTEN_PORT=45679 --env VLESS_PORT=45679 --env RCLONE_BIN=/usr/local/bin/rclone --env S3_ENDPOINT=http://127.0.0.1:9000 --volume type=bind,src=/opt/sfsc-test/server/data/app,dst=/data/app --volume type=bind,src=/opt/sfsc-test/server/data/control,dst=/data/control --volume type=bind,src=/opt/sfsc-test/server/sing-box,dst=/data/sing-box
 
 [Install]
 WantedBy=multi-user.target
-

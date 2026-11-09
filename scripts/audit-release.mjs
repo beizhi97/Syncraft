@@ -1,18 +1,66 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile as readFileRaw, stat } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
 import { auditComposeConfig } from "./lib/composeAudit.mjs";
 import { verifyReleaseSignature } from "./lib/releaseSignature.mjs";
+import { readZipEntryUnixMetadata } from "./lib/release-zip.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+const clientPackageRoot = resolve(root, process.env.SFSC_CLIENT_PACKAGE_ROOT || "dist");
+const releaseBundleRoot = resolve(root, process.env.SFSC_RELEASE_BUNDLE_ROOT || "dist/release-bundles");
 const issues = [];
 // Non-blocking findings: reported but they do not fail the audit. Used where the
 // check depends on release-only inputs (for example a signing key) that a local
 // developer run legitimately does not have.
 const warnings = [];
 const nonProductLanguagePattern = /\bMVP\b|\bdemo\b|\bprototype\b|proof of concept|\bPOC\b|演示版|样例版|试用版/i;
+
+function hasNonProductLanguage(text, fileRel) {
+  const pattern = new RegExp(nonProductLanguagePattern.source, `${nonProductLanguagePattern.flags}g`);
+  for (const match of text.matchAll(pattern)) {
+    if (match[0].toLowerCase() === "prototype" && /\.(?:[cm]?js)$/.test(fileRel)) {
+      if (!isJavaScriptCodePosition(text, match.index)) {
+        return true;
+      }
+      const before = text.slice(0, match.index);
+      const after = text.slice(match.index + match[0].length);
+      if (before.endsWith(".") || /\b(?:const|let|var)\s+$/.test(before)) {
+        continue;
+      }
+      if (/^\s*(?:===|!==|==|!=|=)(?=\s|$)/.test(after)) {
+        continue;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+function isJavaScriptCodePosition(line, position) {
+  if (/^\s*\*/.test(line)) return false;
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < position; index += 1) {
+    const character = line[index];
+    const next = line[index + 1];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = "";
+      continue;
+    }
+    if ((character === "'" || character === '"' || character === "`") && !escaped) {
+      quote = character;
+      continue;
+    }
+    if (character === "/" && (next === "/" || next === "*")) {
+      return false;
+    }
+  }
+  return !quote;
+}
 
 async function readFile(path, options) {
   const value = await readFileRaw(path, options);
@@ -196,7 +244,7 @@ async function auditClientPackageChecksum() {
 }
 
 async function auditReleaseBundleChecksum() {
-  const bundleDir = join(root, "dist", "release-bundles");
+  const bundleDir = releaseBundleRoot;
   if (!await exists(bundleDir)) {
     return;
   }
@@ -282,12 +330,12 @@ async function readTrustedReleasePublicKey() {
 async function listReleaseArtifacts() {
   const artifacts = [];
   for (const name of ["SyncraftDesktop.zip", "SyncraftClient.zip"]) {
-    const path = join(root, "dist", name);
+    const path = join(clientPackageRoot, name);
     if (await exists(path)) {
       artifacts.push(path);
     }
   }
-  const bundleDir = join(root, "dist", "release-bundles");
+  const bundleDir = releaseBundleRoot;
   if (await exists(bundleDir)) {
     let entries = [];
     try {
@@ -305,10 +353,10 @@ async function listReleaseArtifacts() {
 }
 
 async function auditReleaseBundleZip(bundleName) {
-  const zipPath = join(root, "dist", "release-bundles", `${bundleName}.zip`);
-  const checksumPath = join(root, "dist", "release-bundles", `${bundleName}.zip.sha256`);
-  const relZip = `dist/release-bundles/${bundleName}.zip`;
-  const relChecksum = `dist/release-bundles/${bundleName}.zip.sha256`;
+  const zipPath = join(releaseBundleRoot, `${bundleName}.zip`);
+  const checksumPath = join(releaseBundleRoot, `${bundleName}.zip.sha256`);
+  const relZip = normalizePath(relative(root, zipPath));
+  const relChecksum = normalizePath(relative(root, checksumPath));
   if (!await exists(checksumPath)) {
     issues.push(`${relZip} is missing ${relChecksum}`);
     return;
@@ -332,10 +380,10 @@ async function auditReleaseBundleZip(bundleName) {
     issues.push(`${relZip} could not be inspected: ${error.message}`);
     return;
   }
-  auditReleaseBundleZipEntries(bundleName, relZip, zipEntries);
+  auditReleaseBundleZipEntries(bundleName, relZip, zipEntries, zipData);
 }
 
-function auditReleaseBundleZipEntries(bundleName, relZip, zipEntries) {
+function auditReleaseBundleZipEntries(bundleName, relZip, zipEntries, zipData) {
   const requiredEntries = [
     "release-bundle-manifest.json",
     "scripts/lib/build-fingerprint.ps1",
@@ -357,12 +405,38 @@ function auditReleaseBundleZipEntries(bundleName, relZip, zipEntries) {
     "docs/PILOT_ACCEPTANCE_CRITERIA.md",
     "docs/PILOT_SUPPORT_GUIDE.md",
     "docs/INTERFACE_CONTRACT.md",
-    "docs/API_MATRIX.md"
+    "docs/API_MATRIX.md",
+    "server/DEPLOYMENT.md",
+    "server/appliance.Dockerfile",
+    "server/.env.directory.example",
+    "server/install-n1-appliance.sh",
+    "server/install-n1-directory-appliance.sh",
+    "server/systemd/sfsc-appliance-directory.service",
+    "server/systemd/sfsc-appliance.service",
+    "server/systemd/sfsc-minio.service",
+    "server/systemd/sfsc-directory.env.example",
+    "native/sfsc-sftp-service/go.mod",
+    "native/sfsc-relation-supervisor/main_linux.go",
+    "native/sfsc-root-guard/main_linux.go",
+    "server/runtime/sfsc-runtime-launcher",
+    "server/runtime/native/linux-arm64/manifest.json",
+    "server/runtime/native/linux-arm64/relation/manifest.json",
+    "server/runtime/native/linux-arm64/relation/sfsc-root-guard",
+    "server/rootfs/etc/s6-overlay/s6-rc.d/sfsc-node/run",
+    "server/rootfs/etc/s6-overlay/s6-rc.d/sfsc-node/finish"
   ];
   for (const entry of requiredEntries) {
     if (!zipEntries.has(`${bundleName}/${entry}`)) {
       issues.push(`${relZip} is missing release bundle entry ${bundleName}/${entry}`);
     }
+  }
+  try {
+    const launcherMode = readZipEntryUnixMetadata(zipData, `${bundleName}/server/runtime/sfsc-runtime-launcher`);
+    if (!launcherMode || launcherMode.creatorPlatform !== 3 || launcherMode.fileType !== 0o100000 || launcherMode.permissions !== 0o755) {
+      issues.push(`${relZip} server/runtime/sfsc-runtime-launcher must be a Unix regular file with mode 0755`);
+    }
+  } catch (error) {
+    issues.push(`${relZip} server/runtime/sfsc-runtime-launcher mode could not be read: ${error.message}`);
   }
   auditPilotDocZipContent(zipEntries, relZip, `${bundleName}/docs`);
   for (const blocked of [
@@ -399,6 +473,16 @@ function auditReleaseBundleZipEntries(bundleName, relZip, zipEntries) {
   }
   if (manifest.buildId !== `sfsc-${String(manifest.sourceTreeHash || "").slice(0, 12)}`) {
     issues.push(`${relZip} release-bundle-manifest.json buildId must match sourceTreeHash`);
+  }
+  if (!Array.isArray(manifest.sourceFingerprint?.inputs)) {
+    issues.push(`${relZip} release-bundle-manifest.json sourceFingerprint.inputs must be an array`);
+  } else {
+    for (const input of manifest.sourceFingerprint.inputs) {
+      const sourcePath = typeof input?.path === "string" ? input.path.replaceAll("\\", "/") : "";
+      if (!sourcePath || !zipEntries.has(`${bundleName}/${sourcePath}`)) {
+        issues.push(`${relZip} is missing fingerprinted source entry ${bundleName}/${sourcePath || "<invalid>"}`);
+      }
+    }
   }
   if (!manifest.clientPackages?.desktop || !manifest.clientPackages?.portable) {
     issues.push(`${relZip} release-bundle-manifest.json must include clientPackages desktop and portable summaries`);
@@ -453,10 +537,10 @@ function auditReleaseBundleZipEntries(bundleName, relZip, zipEntries) {
 }
 
 async function auditZipChecksum(packageName) {
-  const zipPath = join(root, "dist", `${packageName}.zip`);
-  const checksumPath = join(root, "dist", `${packageName}.zip.sha256`);
-  const relZip = `dist/${packageName}.zip`;
-  const relChecksum = `dist/${packageName}.zip.sha256`;
+  const zipPath = join(clientPackageRoot, `${packageName}.zip`);
+  const checksumPath = join(clientPackageRoot, `${packageName}.zip.sha256`);
+  const relZip = normalizePath(relative(root, zipPath));
+  const relChecksum = normalizePath(relative(root, checksumPath));
   const zipExists = await exists(zipPath);
   const checksumExists = await exists(checksumPath);
   if (!zipExists && !checksumExists) {
@@ -503,6 +587,14 @@ function auditClientPackageZipEntries(packageName, relZip, zipData) {
     `${packageName}/app/client/src/clientServer.js`,
     `${packageName}/app/client/src/paths.js`,
     `${packageName}/app/client/src/store.js`,
+    `${packageName}/app/client/src/enrollmentSession.js`,
+    `${packageName}/app/client/src/enrollmentDiagnostics.js`,
+    `${packageName}/app/client/src/sftpAccessMarker.js`,
+    `${packageName}/app/client/src/connectionRepair.js`,
+    `${packageName}/app/client/src/firstBisyncConflict.js`,
+    `${packageName}/app/client/src/syncRecovery.js`,
+    `${packageName}/app/src/core/dataAuthorization.js`,
+    `${packageName}/app/client/src/bootstrapTransport.js`,
     `${packageName}/app/client/src/diagnosticBundle.js`,
     `${packageName}/app/client/src/processRunner.js`,
     `${packageName}/app/client/src/rcloneStats.js`,
@@ -513,6 +605,7 @@ function auditClientPackageZipEntries(packageName, relZip, zipData) {
     `${packageName}/app/client/public/app.js`,
     `${packageName}/app/client/public/styles.css`,
     `${packageName}/app/src/core/index.js`,
+    `${packageName}/app/src/core/channelImportCode.js`,
     `${packageName}/runtime/node.exe`,
     `${packageName}/resources/app/docs/INTERFACE_CONTRACT.md`,
     `${packageName}/resources/app/docs/API_MATRIX.md`,
@@ -533,6 +626,14 @@ function auditClientPackageZipEntries(packageName, relZip, zipData) {
     `${packageName}/resources/app/client/src/clientServer.js`,
     `${packageName}/resources/app/client/src/paths.js`,
     `${packageName}/resources/app/client/src/store.js`,
+    `${packageName}/resources/app/client/src/enrollmentSession.js`,
+    `${packageName}/resources/app/client/src/enrollmentDiagnostics.js`,
+    `${packageName}/resources/app/client/src/sftpAccessMarker.js`,
+    `${packageName}/resources/app/client/src/connectionRepair.js`,
+    `${packageName}/resources/app/client/src/firstBisyncConflict.js`,
+    `${packageName}/resources/app/client/src/syncRecovery.js`,
+    `${packageName}/resources/app/src/core/dataAuthorization.js`,
+    `${packageName}/resources/app/client/src/bootstrapTransport.js`,
     `${packageName}/resources/app/client/src/diagnosticBundle.js`,
     `${packageName}/resources/app/client/src/processRunner.js`,
     `${packageName}/resources/app/client/src/rcloneStats.js`,
@@ -543,6 +644,7 @@ function auditClientPackageZipEntries(packageName, relZip, zipData) {
     `${packageName}/resources/app/client/public/app.js`,
     `${packageName}/resources/app/client/public/styles.css`,
     `${packageName}/resources/app/src/core/index.js`,
+    `${packageName}/resources/app/src/core/channelImportCode.js`,
     `${packageName}/resources/app/docs/INTERFACE_CONTRACT.md`,
     `${packageName}/resources/app/docs/API_MATRIX.md`,
     `${packageName}/resources/app/docs/DEPLOYMENT_AND_MIGRATION_GUIDE.md`,
@@ -917,7 +1019,7 @@ async function auditProductizedLanguage() {
       if (shouldSkip(fileRel)) continue;
       const text = await readFile(file, "utf8").catch(() => "");
       text.split(/\r?\n/).forEach((line, index) => {
-        if (nonProductLanguagePattern.test(line)) {
+        if (hasNonProductLanguage(line, fileRel)) {
           issues.push(`${fileRel}:${index + 1} must use productized wording instead of MVP/demo language`);
         }
       });
@@ -1349,6 +1451,17 @@ async function auditSmokeContractDocs() {
   requireText(n1PostDeploy, "scripts/post-deploy-n1.ps1", "n1BuildMatches");
   requireText(preflight, "scripts/preflight-release.ps1", "Write-SafeJsonReport");
   requireText(preflight, "scripts/preflight-release.ps1", "Assert-ReportFileSafe $path");
+  requireText(preflight, "scripts/preflight-release.ps1", "[string]$ClientPackageRoot = \"\"");
+  requireText(preflight, "scripts/preflight-release.ps1", "[string]$ReleaseBundleRoot = \"\"");
+  requireText(preflight, "scripts/preflight-release.ps1", "Path = Join-Path $resolvedClientPackageRoot \"SyncraftDesktop\"");
+  requireText(preflight, "scripts/preflight-release.ps1", "Path = Join-Path $resolvedClientPackageRoot \"SyncraftClient\"");
+  requireText(preflight, "scripts/preflight-release.ps1", "$env:SFSC_CLIENT_PACKAGE_ROOT = $resolvedClientPackageRoot");
+  requireText(preflight, "scripts/preflight-release.ps1", "$env:SFSC_RELEASE_BUNDLE_ROOT = $resolvedReleaseBundleRoot");
+  requireText(preflight, "scripts/preflight-release.ps1", "-ArchiveRoot $preflightN1ArchiveRoot");
+  requireText(n1Deploy, "scripts/deploy-n1.ps1", "[string]$ArchiveRoot = \"\"");
+  requireText(n1Deploy, "scripts/deploy-n1.ps1", "Refusing to write N1 source archive outside project root");
+  requireText(releaseBundle, "scripts/build-release-bundle.ps1", "$preflightRunId");
+  requireText(releaseBundle, "scripts/build-release-bundle.ps1", "-ClientPackageRoot $resolvedClientPackageRoot -ReleaseBundleRoot $resolvedOutputDir");
   requireText(releaseBundle, "scripts/build-release-bundle.ps1", "Assert-StagedReportsSafe");
   requireText(releaseBundle, "scripts/build-release-bundle.ps1", "Write-SafeJsonReport $bundleManifestPath");
 
@@ -1720,6 +1833,9 @@ async function auditStableErrorCodeContract() {
 }
 
 async function auditStableErrorCodeUiMessages() {
+  const clientLocalOnlyCodes = new Set([
+    "sync_relation_migration_required"
+  ]);
   const [
     errorsSource,
     serverUiSource,
@@ -1761,7 +1877,10 @@ async function auditStableErrorCodeUiMessages() {
       issues.push(`${label} formatError copy could not be parsed`);
       continue;
     }
-    for (const code of codes) {
+    const requiredCodes = label === "public/app.js"
+      ? codes.filter((code) => !clientLocalOnlyCodes.has(code))
+      : codes;
+    for (const code of requiredCodes) {
       if (!uiCodes.includes(code)) {
         issues.push(`${label} formatError must map stable errorCode ${code}`);
       }
@@ -3078,7 +3197,7 @@ async function auditSyncRunTriggerContract() {
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "`processes.sync.running` 只能辅助判断同步中，不能覆盖 `stopping` 或 `error`");
   requireText(syncRunSource, "src/core/syncRun.js", "trigger: normalizeSyncRunTrigger(input.trigger)");
   requireText(syncRunSource, "src/core/syncRun.js", "function normalizeSyncRunTrigger(input)");
-  requireText(clientServerSource, "client/src/clientServer.js", "runSync(body.job || {}, { trigger: \"manual\" })");
+  requireText(clientServerSource, "client/src/clientServer.js", "runSync(body.job || {}, { trigger: \"manual\", safetyPlanId: body.safetyPlanId })");
   requireText(clientServerSource, "client/src/clientServer.js", "runSync(due.job, { trigger: \"scheduler\" })");
   requireText(clientServerSource, "client/src/clientServer.js", "createSyncRunStart(normalizedJob, options)");
   requireText(clientServerSource, "client/src/clientServer.js", "trigger: normalizeSyncRunTrigger(options.trigger)");
@@ -3340,12 +3459,25 @@ async function auditCompatibilityWarningContract() {
   requireText(protocolSchemasSource, "src/core/protocolSchemas.js", "copyOptionalStringFields(input, output, CLIENT_JOB_STRING_FIELDS)");
   requireText(protocolSchemasSource, "src/core/protocolSchemas.js", "copyOptionalJsonFields(input, output, CLIENT_JOB_JSON_FIELDS)");
   requireText(clientServerSource, "client/src/clientServer.js", "const payload = await withClientStateLock(paths, async () => {");
-  requireTextOrder(clientServerSource, "client/src/clientServer.js", [
+  const clientJobSaveRoute = sourceWindow(
+    clientServerSource,
+    "if (req.method === \"POST\" && url.pathname === \"/api/jobs/save\") {",
+    "if (req.method === \"POST\" && url.pathname === \"/api/singbox/start\") {"
+  );
+  requireTextOrder(clientJobSaveRoute, "client/src/clientServer.js /api/jobs/save", [
+    "if (req.method === \"POST\" && url.pathname === \"/api/jobs/save\") {",
+    "const body = parseProtocolRequest(PROTOCOL_REQUESTS.CLIENT_JOB_SAVE, await readJson(req));",
+    "requireSyncCompatibilityConfirmation(body);",
+    "requireDestructiveSyncConfirmation(body);",
     "const payload = await withClientStateLock(paths, async () => {",
-    "const job = await saveJob(await normalizeJob(body.job || {}), paths);",
+    "await ensureLocalStateWritable();",
+    "await ensureSecretVaultReady();",
+    "const normalizedJob = await normalizeJob(body.job || {});",
+    "await requireManualScheduleForRiskySync(normalizedJob);",
+    "const job = await saveJob(normalizedJob, paths);",
     "await refreshScheduler();",
-    "return json(res, payload);"
-  ], "Client job save must normalize profile-derived fields and persist under one state lock");
+    "return { job: summarizeClientJob(job), scheduler: buildSchedulerStatus() };"
+  ], "Client job save must validate its request and confirmations before locking, then guard local state and vault before normalization, saving, and refreshing the scheduler");
   requireText(clientUiSource, "client/public/app.js", "function currentSyncCompatibility()");
   requireText(clientUiSource, "client/public/app.js", "function currentSuccessfulHeartbeat(status = latestStatus)");
   requireText(clientUiSource, "client/public/app.js", "const successfulHeartbeat = currentSuccessfulHeartbeat(status);");
@@ -3547,7 +3679,7 @@ async function auditLocalStateCorruptionContract() {
   requireText(processRunnerSource, "client/src/processRunner.js", "async stopAndWait");
   requireText(processRunnerSource, "client/src/processRunner.js", "waitForExit");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "sing-box check -c <config>");
-  requireText(contract, "docs/INTERFACE_CONTRACT.md", "必须等待本地 loopback 代理端口监听成功");
+  requireText(contract, "docs/INTERFACE_CONTRACT.md", "必须等待由本次客户端进程启动的 loopback listener 就绪");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "发送停止信号并短暂等待退出");
   requireText(clientHttpTest, "tests/client-http.test.js", "singbox-check");
   requireText(clientHttpTest, "tests/client-http.test.js", "SFSC_FAKE_SINGBOX_CHECK_EXIT_CODE");
@@ -3581,30 +3713,48 @@ async function auditLocalStateCorruptionContract() {
     "await ensureLocalStateWritable();"
   ], "/api/jobs/save must validate the shared protocol schema and confirmations before writing local state");
   requireText(clientServerSource, "client/src/clientServer.js", "let syncRunInFlight = null;");
-  requireText(clientServerSource, "client/src/clientServer.js", "let syncRunInFlightJobFingerprint = \"\";");
-  requireText(clientServerSource, "client/src/clientServer.js", "let activeSyncJobFingerprint = \"\";");
+  requireText(clientServerSource, "client/src/clientServer.js", "let syncRunPreparationPromise = null;");
+  requireText(clientServerSource, "client/src/clientServer.js", "let syncRunPreparationFingerprint = \"\";");
+  requireText(clientServerSource, "client/src/clientServer.js", "let activeSyncRequestFingerprint = \"\";");
+  requireText(clientServerSource, "client/src/clientServer.js", "function equivalentSyncRunRequests(left = {}, right = {})");
   requireText(clientServerSource, "client/src/clientServer.js", "const STOPPING_SYNC_REPLAY_MS = 2000;");
   requireText(clientServerSource, "client/src/clientServer.js", "let stoppingSyncReplay = null;");
   requireText(clientServerSource, "client/src/clientServer.js", "const runPlan = await buildSyncRunPlan(job);");
   requireText(clientServerSource, "client/src/clientServer.js", "const jobFingerprint = syncJobFingerprint(runPlan.normalizedJob);");
   requireText(clientServerSource, "client/src/clientServer.js", "async function buildSyncRunPlan(job = {})");
   requireText(clientServerSource, "client/src/clientServer.js", "const tunnelUri = getTunnelUri(profile);");
-  requireText(clientServerSource, "client/src/clientServer.js", "const normalizedJob = buildJobFromProfile(profile, job);");
-  requireText(clientServerSource, "client/src/clientServer.js", "normalizedJob.localPath = await validateSyncLocalPath(normalizedJob.localPath);");
+  requireText(clientServerSource, "client/src/clientServer.js", "const normalizedJob = await normalizeJobWithProfile(profile, job, {");
+  requireText(clientServerSource, "client/src/clientServer.js", "normalized.localPath = await validateSyncLocalPath(normalized.localPath);");
   requireText(clientServerSource, "client/src/clientServer.js", "tunnelUri");
   requireText(clientServerSource, "client/src/clientServer.js", "return buildSyncPreviewFromNormalizedJob(normalized);");
   requireText(clientServerSource, "client/src/clientServer.js", "async function buildSyncPreviewFromNormalizedJob(normalized, options = {})");
-  requireText(clientServerSource, "client/src/clientServer.js", "if (syncRunInFlightJobFingerprint !== jobFingerprint) {\n      throw syncAlreadyRunningError();\n    }");
+  const runSyncSource = sourceWindow(
+    clientServerSource,
+    "async function runSync(job, options = {})",
+    "const CONNECTION_REPAIR_JOURNAL_FILE"
+  );
+  if (!/if \(syncRunPreparationPromise\) \{\s*if \(syncRunPreparationFingerprint === requestFingerprint\s*\|\| equivalentSyncRunRequests\(syncRunPreparationJob, job\)\) return await syncRunPreparationPromise;\s*throw syncAlreadyRunningError\(\);\s*\}/.test(runSyncSource)) {
+    issues.push("client/src/clientServer.js runSync must share in-flight preparation for an equivalent job and reject a different job");
+  }
+  if (!/if \(syncProcess\.isRunning\(\) \|\| syncRunInFlight\) \{\s*if \(activeSyncRequestFingerprint === requestFingerprint \|\| equivalentSyncRunRequests\(activeSyncRequestJob, job\)\) \{\s*return syncRunInFlight \|\| syncProcess\.status\(\);\s*\}\s*throw syncAlreadyRunningError\(\);\s*\}/.test(runSyncSource)) {
+    issues.push("client/src/clientServer.js runSync must share an active run for the equivalent job and reject a different job");
+  }
   requireText(clientServerSource, "client/src/clientServer.js", "const stoppingReplay = currentStoppingSyncReplay();");
-  requireText(clientServerSource, "client/src/clientServer.js", "if (stoppingReplay.jobFingerprint === jobFingerprint)");
+  if (!/if \(stoppingReplay\) \{\s*if \(stoppingReplay\.jobFingerprint === jobFingerprint\) return stoppingReplay\.status;\s*throw syncAlreadyRunningError\(\);\s*\}/.test(runSyncSource)) {
+    issues.push("client/src/clientServer.js runSync must replay the stopping result for the same job fingerprint and reject a different job");
+  }
   requireText(clientServerSource, "client/src/clientServer.js", "async function stopSync()");
   requireText(clientServerSource, "client/src/clientServer.js", "function currentStoppingSyncReplay");
   requireText(clientServerSource, "client/src/clientServer.js", "function currentSyncProcessStatus()");
   requireText(clientServerSource, "client/src/clientServer.js", "syncRunInFlight = runSyncExclusive(runPlan, options);");
-  requireText(clientServerSource, "client/src/clientServer.js", "syncRunInFlight = null;\n    syncRunInFlightJobFingerprint = \"\";");
+  if (!/finally \{\s*syncRunInFlight = null;\s*syncRunInFlightJobFingerprint = "";\s*\}/.test(runSyncSource)) {
+    issues.push("client/src/clientServer.js runSync must clear the active promise and job fingerprint when the run settles");
+  }
   requireText(clientServerSource, "client/src/clientServer.js", "function syncAlreadyRunningError()");
   requireText(clientServerSource, "client/src/clientServer.js", "function syncJobFingerprint(job = {})");
-  requireText(clientServerSource, "client/src/clientServer.js", "async function runSyncExclusive(runPlan, options = {}) {\n  const { normalizedJob, tunnelUri } = runPlan;");
+  if (!/async function runSyncExclusive\(runPlan, options = \{\}\) \{\s*const \{\s*normalizedJob,\s*tunnelUri,\s*dataTunnel\s*=\s*false\s*\} = runPlan;/.test(clientServerSource)) {
+    issues.push("client/src/clientServer.js runSyncExclusive must consume the normalized run plan and its selected tunnel type");
+  }
   if (clientServerSource.includes("runSync(await normalizeJob(body.job || {}), { trigger: \"manual\" })")) {
     issues.push("client/src/clientServer.js must pass the raw manual sync job into runSync so runSync owns the single normalized snapshot");
   }
@@ -3627,16 +3777,21 @@ async function auditLocalStateCorruptionContract() {
   requireText(clientServerSource, "client/src/clientServer.js", "function redactRcloneConfigFailureDetail");
   requireText(clientServerSource, "client/src/clientServer.js", "function collectRcloneConfigSecrets");
   requireText(clientServerSource, "client/src/clientServer.js", "function redactKnownSecretValues");
-  requireTextOrder(clientServerSource, "client/src/clientServer.js", [
-    "async function runSyncExclusive(runPlan, options = {}) {\n  const { normalizedJob, tunnelUri } = runPlan;",
+  requireTextOrder(runSyncExclusiveSource, "client/src/clientServer.js runSyncExclusive", [
+    "await ensureLocalStateWritable();",
     "await ensureSecretVaultReady();",
     "await ensureSyncRunBinaries();",
-    "const recovery = getSyncRecoveryPaths(normalizedJob);",
-    "const preview = (await buildSyncPreviewFromNormalizedJob(normalizedJob, {",
+    "const recoveryPaths = normalizedJob.direction === \"bidirectional\"",
+    "const singleDirectionRecovery = getSyncRecoveryPaths(normalizedJob);",
+    "let preview = (await buildSyncPreviewFromNormalizedJob(normalizedJob, {",
     "const remoteConfig = await runBuffered(paths.rcloneExe, preview.remoteConfig.args,",
     "if (!remoteConfig.ok) {",
-    "if (!singboxProcess.isRunning())",
-    "await startSingbox({\n      uri: tunnelUri,\n      localProxyPort: normalizedJob.localProxyPort || 18081\n    });",
+    "await protectRcloneConfigFile();",
+    "if (dataTunnel) {",
+    "await startDataSingbox(tunnelUri, normalizedJob.localProxyPort || SFTP_DATA_SOCKS_PORT);",
+    "await verifySftpAccessMarkers(preview, normalizedJob, { createMissing: false });",
+    "} else if (!singboxProcess.isRunning()) {",
+    "await startSingbox({",
     "return await syncProcess.start(paths.rcloneExe, preview.args,"
   ], "sync startup must validate state and binaries, normalize the job, write rclone config, then start sing-box before rclone sync");
   requireText(clientServerSource, "client/src/clientServer.js", "const detail = redactRcloneConfigFailureDetail(remoteConfig, normalizedJob, preview);");
@@ -3649,12 +3804,12 @@ async function auditLocalStateCorruptionContract() {
   if (clientServerSource.includes("job.localProxyPort || 18081")) {
     issues.push("client/src/clientServer.js must not start sing-box from raw job.localProxyPort || 18081 during sync runs");
   }
-  requireText(clientServerSource, "client/src/clientServer.js", "pruneSyncRecovery(preview, recovery, normalizedJob.safety.recoveryRetentionDays)");
+  requireText(clientServerSource, "client/src/clientServer.js", "pruneSyncRecovery(preview, singleDirectionRecovery, normalizedJob.safety.recoveryRetentionDays)");
   requireText(clientServerSource, "client/src/clientServer.js", "throw createHttpError(\"rclone_sync_failed\", 500, `Failed to start rclone sync: ${error.message}`);");
   requireText(clientServerSource, "client/src/clientServer.js", "claimRecovery: claimRecoveryFile");
   requireText(clientServerSource, "client/src/clientServer.js", "lastSuccessfulHeartbeat: heartbeatSnapshotFile");
-  requireText(runtimeContracts, "scripts/lib/runtimeContracts.mjs", "[\"claimRecovery\", \"jobs\", \"lastSuccessfulHeartbeat\", \"profile\", \"secrets\", \"syncHistory\"]");
-  requireText(runtimeContracts, "scripts/lib/runtimeContracts.mjs", "[\"profile\", \"jobs\", \"secrets\", \"syncHistory\", \"claimRecovery\", \"lastSuccessfulHeartbeat\"]");
+  requireText(runtimeContracts, "scripts/lib/runtimeContracts.mjs", "[\"claimRecovery\", \"jobs\", \"lastSuccessfulHeartbeat\", \"profile\", \"secrets\", \"syncHistory\", \"syncRecovery\"]");
+  requireText(runtimeContracts, "scripts/lib/runtimeContracts.mjs", "[\"profile\", \"jobs\", \"secrets\", \"syncHistory\", \"syncRecovery\", \"claimRecovery\", \"lastSuccessfulHeartbeat\"]");
   requireText(clientHttpTest, "tests/client-http.test.js", "const missingVaultSave = await fetch(`${baseUrl}/api/jobs/save`");
   requireText(clientHttpTest, "tests/client-http.test.js", "assertHttpErrorResponseContract(await missingVaultSave.json(), \"missingVaultSave\"");
   requireText(clientHttpTest, "tests/client-http.test.js", "const missingVaultRun = await fetch(`${baseUrl}/api/sync/run`");
@@ -3680,17 +3835,19 @@ async function auditLocalStateCorruptionContract() {
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "同一 job 的重复 `/api/sync/run` 返回 `200`");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "不同 job 返回 `409 sync_already_running`");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "若等待超时，响应必须保留运行状态并通过 `stopTimedOut: true` 暴露诊断");
-  requireText(contract, "docs/INTERFACE_CONTRACT.md", "同一次 `/api/sync/run` 必须只生成一个 normalized job 快照");
-  requireText(contract, "docs/INTERFACE_CONTRACT.md", "rclone config 写入成功后，若 sing-box 尚未运行，才自动启动本地 sing-box");
-  requireText(contract, "docs/INTERFACE_CONTRACT.md", "同一次 `/api/sync/run` 必须以归一化后的 job `localProxyPort` 为单一来源");
-  requireText(contract, "docs/INTERFACE_CONTRACT.md", "rclone `ALL_PROXY` 端口必须等于 sing-box client config `inbounds[0].listen_port`");
-  requireText(contract, "docs/INTERFACE_CONTRACT.md", "旧 `jobs.json` 缺少 `localProxyPort` 时也必须从 profile defaults 兜底");
+  requireText(contract, "docs/INTERFACE_CONTRACT.md", "准备中的同任务请求共享 promise");
+  requireText(contract, "docs/INTERFACE_CONTRACT.md", "不同任务返回 `409 sync_already_running`");
+  requireText(contract, "docs/INTERFACE_CONTRACT.md", "危险任务还要校验有效安全计划");
+  requireText(contract, "docs/INTERFACE_CONTRACT.md", "rclone config 写入成功后，启动本次 runPlan 对应的 sing-box/data tunnel 和 rclone");
+  requireText(contract, "docs/INTERFACE_CONTRACT.md", "`runPlan` 用于本次同步执行");
+  requireText(contract, "docs/INTERFACE_CONTRACT.md", "SFTP 的 `ALL_PROXY` 必须指向 data sing-box 的 SOCKS listen port");
+  requireText(contract, "docs/INTERFACE_CONTRACT.md", "缺失字段才使用 profile defaults");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "不得启动 rclone sync，若 sing-box 原本未运行也不得留下新启动的 sing-box 进程");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "`processes.sync.metrics.syncState` 必须保持 `idle`");
   requireText(matrix, "docs/API_MATRIX.md", "rclone config 失败不写同步历史、不启动 rclone sync");
   requireText(matrix, "docs/API_MATRIX.md", "不同 job 冲突返回 `409 sync_already_running`");
-  requireText(matrix, "docs/API_MATRIX.md", "同一次运行只生成一个 normalized job 快照");
-  requireText(matrix, "docs/API_MATRIX.md", "同一次运行中 rclone `ALL_PROXY` 端口必须等于 sing-box `inbounds[0].listen_port`");
+  requireText(matrix, "docs/API_MATRIX.md", "计划 helper 独立重建/规范化 job 和授权");
+  requireText(matrix, "docs/API_MATRIX.md", "SFTP 的 `ALL_PROXY`、`--sftp-socks-proxy` 和 data sing-box inbound listen port 相等");
   requireText(clientDesign, "docs/client-design.md", "Sync run writes the app-scoped rclone config before starting a new sing-box process");
   requireText(clientDesign, "docs/client-design.md", "does not leave a newly-started tunnel process behind");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "只返回该合同登记的展示安全字段");
@@ -4000,13 +4157,16 @@ async function auditClaimRedeemRecoveryContract() {
   requireText(clientServerSource, "client/src/clientServer.js", "return prepareClaimRecovery(claim, paths);");
   requireTextOrder(clientServerSource, "client/src/clientServer.js", [
     "const stateSnapshot = await snapshotProfileImportState(paths);",
-    "const profile = await saveProfile(await resolveProfileImport(body, {",
-    "await refreshJobsForProfile(profile);",
+    "const previousProfile = await readStoredProfile(paths);",
+    "const resolvedProfile = await resolveProfileImport(body, {",
+    "const profile = await saveProfile(resolvedProfile, paths);",
+    "await refreshJobsForProfile(profile, previousProfile);",
     "await refreshScheduler();",
-    "await clearClaimRecovery(claimRecovery, paths);"
+    "await clearClaimRecovery(claimRecovery, paths);",
+    "await resetHeartbeatState();"
   ], "SyncKey import must keep claim-recovery.json until profile, jobs, and scheduler are persisted");
   const importSuccessRecoveryClearBlock = [
-    "      await refreshJobsForProfile(profile);",
+    "      await refreshJobsForProfile(profile, previousProfile);",
     "      await refreshScheduler();",
     "      await clearClaimRecovery(claimRecovery, paths);",
     "      await resetHeartbeatState();"
@@ -4207,7 +4367,13 @@ async function auditInterfaceRouteContract() {
     return;
   }
 
-  requireText(contract, "docs/INTERFACE_CONTRACT.md", "当前机器可读入口（32 个）位于 `src/core/protocolSchemas.js`");
+  const protocolSchemas = await readFile(join(root, "src", "core", "protocolSchemas.js"), "utf8").catch(() => "");
+  const protocolRequestCount = extractProtocolRequestKeys(protocolSchemas).length;
+  if (!protocolRequestCount) {
+    issues.push("src/core/protocolSchemas.js PROTOCOL_REQUESTS could not be counted");
+  } else {
+    requireText(contract, "docs/INTERFACE_CONTRACT.md", `当前机器可读入口（${protocolRequestCount} 个）位于 \`src/core/protocolSchemas.js\``);
+  }
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "服务端 `/api/admin/tunnel/generate`、`/api/admin/tunnel/autofill`、`/api/admin/singbox/write`、`/api/admin/singbox/apply`、`/api/admin/singbox/mark-applied`");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "`/api/admin/storage/save`、`/api/admin/storage/buckets/refresh`、`/api/admin/storage/buckets/create`、`/api/admin/storage/buckets/enable`、`/api/admin/storage/buckets/disable`、`/api/admin/storage/buckets/clear`、`/api/admin/storage/buckets/delete-empty`");
   requireText(contract, "docs/INTERFACE_CONTRACT.md", "`/api/admin/users/create`、`/api/admin/users/enable`、`/api/admin/users/disable`、`/api/admin/users/delete`");
@@ -4245,11 +4411,9 @@ async function auditApiMatrixContract() {
   requireText(matrix, "docs/API_MATRIX.md", "消费者分类采用固定词汇");
   requireText(matrix, "docs/API_MATRIX.md", "`smoke` 表示验收脚本会直接调用");
   requireText(matrix, "docs/API_MATRIX.md", "smoke 脚本新增直接调用时，对应 API 行的“当前消费者”必须包含 `smoke`");
-  requireText(
-    matrix,
-    "docs/API_MATRIX.md",
-    "修改 `/api/admin/tunnel/generate`、`/api/admin/tunnel/autofill`、`/api/admin/singbox/write`、`/api/admin/singbox/apply`、`/api/admin/singbox/mark-applied`、`/api/admin/storage/save`、`/api/admin/storage/buckets/refresh`、`/api/admin/storage/buckets/create`、`/api/admin/storage/buckets/enable`、`/api/admin/storage/buckets/disable`、`/api/admin/storage/buckets/clear`、`/api/admin/storage/buckets/delete-empty`、`/api/admin/users/create`、`/api/admin/users/enable`、`/api/admin/users/disable`、`/api/admin/users/delete`、`/api/claims/create`、`/api/claims/redeem`、`/api/devices/heartbeat`、`/api/binaries/check`、`/api/client/shutdown`、`/api/profile/import`、`/api/jobs/save`、`/api/singbox/start`、`/api/singbox/stop`、`/api/sync/preview`、`/api/sync/run`、`/api/sync/stop`、`/api/profile/encode`、`/api/vless/parse`、`/api/singbox/client-config` 或 `/api/jobs/preview` 的请求字段时，必须同步更新 `src/core/protocolSchemas.js` 和 `tests/core.test.js` 的 schema 回归。"
-  );
+  if (!/修改 [^\n]+ 的请求字段时，必须同步更新 `src\/core\/protocolSchemas\.js` 和 `tests\/core\.test\.js` 的 schema 回归。/.test(matrix)) {
+    issues.push("docs/API_MATRIX.md must explain that changes to the documented request fields require shared schema and regression updates");
+  }
   // Decision #5 (2026-07-31): the console now has an explicit device entry point.
   // Before this, the only way to create a device was issuing a SyncKey from a
   // free-text name field, so a typo silently fabricated a device and the sync-space
@@ -4859,6 +5023,13 @@ async function readRouteSources(label) {
     return null;
   }
   return sources;
+}
+
+function extractProtocolRequestKeys(source) {
+  const object = source.match(/export const PROTOCOL_REQUESTS = Object\.freeze\(\{([\s\S]*?)\n\}\);/);
+  if (!object) return [];
+  return [...object[1].matchAll(/^\s{2}([A-Z][A-Z0-9_]*):\s*"[a-z][A-Za-z0-9.]*",?\s*$/gm)]
+    .map((match) => match[1]);
 }
 
 function extractDefaultStatusCodes(source) {

@@ -55,6 +55,7 @@ test("server S3 requests never leave internalEndpoint after it fails", async (t)
       PUBLIC_SERVER_URL: baseUrl,
       SERVER_DATA_ROOT: join(tempRoot, "data"),
       SINGBOX_CONFIG_PATH: join(tempRoot, "sing-box", "config.json"),
+      SFSC_ENROLLMENT_BOOTSTRAP_PORT: "0",
       S3_ENDPOINT: internalEndpoint,
       S3_CLIENT_ENDPOINT: clientEndpoint,
       SFSC_FETCH_AUDIT_PATH: fetchAuditPath,

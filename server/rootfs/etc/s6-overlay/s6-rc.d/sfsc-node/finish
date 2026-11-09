@@ -1,0 +1,13 @@
+#!/command/with-contenv sh
+set -eu
+
+status="${1:-unknown}"
+signal="${2:-unknown}"
+observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"schemaVersion":"1","service":"sfsc-node","status":"%s","signal":"%s","observedAt":"%s"}\n' \
+  "$status" "$signal" "$observed_at" > /run/sfsc-node-exit.json
+chmod 0600 /run/sfsc-node-exit.json
+
+# A node exit is terminal for this runtime epoch. Stop the supervision tree so
+# s6 cannot silently restart Node while the host still considers the epoch live.
+exec /run/s6/basedir/bin/halt

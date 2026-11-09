@@ -10,6 +10,7 @@ services:
       SERVER_DATA_ROOT: /app-data
       SINGBOX_CONFIG_PATH: /server-singbox/config.json
       SINGBOX_CONTROL_DIR: /singbox-control
+      SINGBOX_PROBE_HOST: host.docker.internal
       SFSC_REQUIRE_ADMIN_TOKEN: "1"
       SFSC_ADMIN_TOKEN: ${SFSC_ADMIN_TOKEN:?set SFSC_ADMIN_TOKEN before starting the server}
       SFSC_BUILD_ID: ${SFSC_BUILD_ID:-}
@@ -20,6 +21,7 @@ services:
       VLESS_PUBLIC_HOST: ${VLESS_PUBLIC_HOST:-pass.971223.xyz}
       VLESS_PUBLIC_PORT: ${VLESS_PUBLIC_PORT:-}
       VLESS_PORT: ${VLESS_PORT:-45679}
+      VLESS_LISTEN_PORT: ${VLESS_PORT:-45679}
       S3_ENDPOINT: http://minio:9000
       S3_CLIENT_ENDPOINT: http://n1-minio.sfsc:9000
       S3_BUCKET: ${S3_BUCKET:-home-sync}
@@ -27,6 +29,8 @@ services:
       S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD before starting the server}
     ports:
       - "${SYNC_SERVER_PORT:-5177}:5177"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data/app:/app-data
       - ./sing-box:/server-singbox
