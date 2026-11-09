@@ -33,7 +33,57 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        shell: pwsh
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: ${{ inputs.run_strict_preflight == 'true' && '' || '1' }}
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            pnpm install --frozen-lockfile
+            if ($LASTEXITCODE -eq 0) {
+              break
+            }
+            if ($attempt -eq 3) {
+              throw "pnpm install --frozen-lockfile failed after 3 attempts."
+            }
+            Write-Warning "pnpm install attempt $attempt failed; retrying in 5 seconds..."
+            Start-Sleep -Seconds 5
+          }
+
+      - name: Prepare Windows CI runtime environment
+        shell: pwsh
+        run: |
+          $ciTempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+          $resolvedRoot = (Get-Item -LiteralPath $ciTempRoot).FullName
+          $ciTemp = Join-Path $resolvedRoot "sfsc_tmp"
+          New-Item -ItemType Directory -Force -Path $ciTemp | Out-Null
+          $account = if ($env:USERDOMAIN) { "$($env:USERDOMAIN)\$($env:USERNAME)" } else { $env:USERNAME }
+          icacls.exe $ciTemp /inheritance:r /grant:r "$($account):(OI)(CI)F" | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to configure owner-only inheritable ACL on CI temp directory: $ciTemp"
+          }
+          "TEMP=$ciTemp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$ciTemp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            pnpm run client:download-binaries
+            if ($LASTEXITCODE -eq 0) {
+              break
+            }
+            if ($attempt -eq 3) {
+              throw "pnpm run client:download-binaries failed after 3 attempts."
+            }
+            Write-Warning "client:download-binaries attempt $attempt failed; retrying in 5 seconds..."
+            Start-Sleep -Seconds 5
+          }
+
+          $nativeV2Root = "server/runtime/native/linux-arm64/relation-v2"
+          $candidateR2Dir = ".tmp/development-2026-10-21/p2-owner-admission/sftp-service-v2-candidate-r2"
+          $serviceCandidateDir = ".tmp/r75-sftp-service"
+          New-Item -ItemType Directory -Force -Path $candidateR2Dir | Out-Null
+          New-Item -ItemType Directory -Force -Path $serviceCandidateDir | Out-Null
+          Copy-Item -LiteralPath "$nativeV2Root/sfsc-relation-supervisor" -Destination "$candidateR2Dir/relation-supervisor-linux-arm64" -Force
+          Copy-Item -LiteralPath "$nativeV2Root/sfsc-root-guard" -Destination "$candidateR2Dir/root-guard-linux-arm64" -Force
+          Copy-Item -LiteralPath "$nativeV2Root/sfsc-sftp-service" -Destination "$serviceCandidateDir/sfsc-sftp-service-linux-arm64" -Force
 
       - name: Verify contracts and tests
         shell: pwsh

@@ -9,3 +9,4 @@
 *.png binary
 *.woff2 binary
 *.zip binary
+tests/fixtures/release-bundle-mode/** binary
